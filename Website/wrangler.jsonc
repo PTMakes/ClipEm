@@ -1,0 +1,18 @@
+// Cloudflare Workers deploy config. The site is a static export
+// (next.config.mjs: output "export"), so it deploys as static assets only -
+// no Worker script and no OpenNext server build.
+//
+// Cloudflare build settings:
+//   Build command:  npm run build
+//   Deploy command: npx wrangler deploy
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  // Must match the Worker's name in the Cloudflare dashboard.
+  "name": "clipem",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./out",
+    // Next's export writes 404.html for unknown routes.
+    "not_found_handling": "404-page"
+  }
+}

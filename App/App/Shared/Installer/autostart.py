@@ -1,0 +1,389 @@
+"""
+OS integration: the boot/login autostart entry and the desktop shortcut
+Setup creates. The only places this otherwise portable app writes outside
+its own folder (autostart) or runs another interpreter's scripting host
+(PowerShell/AppleScript), so every path interpolated into those is quoted
+for the target language here rather than pasted in raw - a folder named
+e.g. "O'Brien" or containing spaces must not break (or inject into) them.
+"""
+
+import base64
+import os
+import platform
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+from xml.sax.saxutils import escape as xml_escape
+
+from clipem_common import APP_DIR, INSTALLER_DIR, ROOT_DIR, SHARED_DIR
+
+RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
+MACOS_LAUNCH_AGENT_LABEL = "com.ptmakes.clipem"
+
+
+# ---------------------------------------------------------------------------
+# Quoting helpers
+# ---------------------------------------------------------------------------
+
+def ps_quote(value):
+    """A PowerShell single-quoted string literal. Inside one, the only
+    special characters are the single quotes themselves - including the
+    typographic ones PowerShell also accepts - which are escaped by doubling."""
+    return "'" + re.sub("(['‘’‚‛])", r"\1\1", str(value)) + "'"
+
+
+def run_powershell(script, **kwargs):
+    """Runs `script` via -EncodedCommand, so nothing in it goes through
+    Windows command-line argument parsing (which mangles embedded quotes)."""
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    return subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], **kwargs
+    )
+
+
+def desktop_exec_arg(value):
+    """One argument of a .desktop file's Exec= key, per the Desktop Entry
+    spec: double-quoted with ", `, $ and \\ backslash-escaped, then the
+    string-level escape applied on top (so a literal backslash becomes four),
+    and % doubled since it introduces field codes."""
+    quoted = re.sub(r'(["`$\\])', r"\\\1", str(value))
+    return '"' + quoted.replace("\\", "\\\\").replace("%", "%%") + '"'
+
+
+def applescript_quote(value):
+    return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def windows_shortcut_script(shortcut_path, target, arguments, working_dir, icon=None):
+    lines = [
+        "$WshShell = New-Object -ComObject WScript.Shell",
+        f"$Shortcut = $WshShell.CreateShortcut({ps_quote(shortcut_path)})",
+        f"$Shortcut.TargetPath = {ps_quote(target)}",
+        f"$Shortcut.Arguments = {ps_quote(arguments)}",
+        f"$Shortcut.WorkingDirectory = {ps_quote(working_dir)}",
+    ]
+    if icon:
+        lines.append(f"$Shortcut.IconLocation = {ps_quote(icon)}")
+    lines.append("$Shortcut.Save()")
+    return "\n".join(lines)
+
+
+def windows_command_line_arg(value):
+    """Quotes one argument for a Windows command line (a shortcut's
+    Arguments field) - subprocess.list2cmdline implements the MSVCRT rules
+    python.exe itself parses with."""
+    return subprocess.list2cmdline([str(value)])
+
+
+# ---------------------------------------------------------------------------
+# Interpreters
+# ---------------------------------------------------------------------------
+
+def find_linux_python_bin():
+    """Login/autostart sessions often have a bare-bones PATH, so resolve an
+    absolute interpreter path once at setup time instead of trusting PATH
+    at boot - prefer the bundled portable Python if present."""
+    bundled = os.path.join(APP_DIR, "Linux", "python", "bin", "python3")
+    if os.path.exists(bundled):
+        return bundled
+    return sys.executable or shutil.which("python3")
+
+
+def find_windows_python_root():
+    """The embeddable zip's own internal layout has varied (flat vs. a
+    nested python-X.Y.Z-embed-amd64/ folder depending on how it was
+    extracted), so locate python.exe instead of assuming a fixed path."""
+    windows_python_dir = os.path.join(APP_DIR, "Windows", "Python")
+    if not os.path.isdir(windows_python_dir):
+        return None
+    for dirpath, _dirnames, filenames in os.walk(windows_python_dir):
+        if "python.exe" in filenames:
+            return dirpath
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Boot autostart
+# ---------------------------------------------------------------------------
+
+def autostart_entry_path():
+    """Where the OS looks for boot/login-autostart entries. None if this
+    platform isn't handled."""
+    system = platform.system()
+    if system == "Windows":
+        appdata = os.environ.get("APPDATA")
+        if not appdata:
+            return None
+        return os.path.join(
+            appdata, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "ClipEm.lnk",
+        )
+    if system == "Darwin":
+        return os.path.expanduser(f"~/Library/LaunchAgents/{MACOS_LAUNCH_AGENT_LABEL}.plist")
+    if system == "Linux":
+        return os.path.expanduser("~/.config/autostart/clipem.desktop")
+    return None
+
+
+# Launchers older ClipEm versions' autostart entries ran instead of run.py.
+LEGACY_LAUNCHER_NAMES = ("RunLinux.sh", "RunWindows.bat", "RunMac.command")
+
+
+def _autostart_dir():
+    path = autostart_entry_path()
+    return os.path.dirname(path) if path else None
+
+
+def _points_at_clipem(name, command):
+    """Whether an autostart entry (file name + what it runs) is a ClipEm
+    one: named after ClipEm, or running a ClipEm run.py / old launcher."""
+    text = f"{name}\n{command}".lower()
+    if "clipem" in text:
+        return True
+    if "run.py" in text and "installer" in text:
+        return True
+    return any(launcher.lower() in text for launcher in LEGACY_LAUNCHER_NAMES)
+
+
+def _points_at_this_install(command):
+    """Whether the entry's command runs this install's run.py - as written
+    in a .lnk/plist/.desktop file, i.e. possibly XML- or Exec=-escaped."""
+    forms = {RUN_PY, xml_escape(RUN_PY), desktop_exec_arg(RUN_PY)[1:-1]}
+    command = os.path.normcase(command)
+    return any(os.path.normcase(form) in command for form in forms)
+
+
+def _windows_startup_shortcuts(folder):
+    """[(path, "target arguments")] for every .lnk in folder, read through
+    WScript.Shell (a .lnk is binary). Empty if PowerShell isn't usable."""
+    script = (
+        "$sh = New-Object -ComObject WScript.Shell\n"
+        f"Get-ChildItem -LiteralPath {ps_quote(folder)} -Filter *.lnk | ForEach-Object {{\n"
+        "  $s = $sh.CreateShortcut($_.FullName)\n"
+        "  [pscustomobject]@{ path = $_.FullName; command = ($s.TargetPath + ' ' + $s.Arguments) }\n"
+        "} | ConvertTo-Json -Compress"
+    )
+    try:
+        result = run_powershell(script, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    import json
+
+    try:
+        data = json.loads(result.stdout or "[]")
+    except ValueError:
+        return []
+    if isinstance(data, dict):  # a single shortcut isn't wrapped in a list
+        data = [data]
+    return [(item.get("path", ""), item.get("command", "")) for item in data]
+
+
+def find_autostart_entries():
+    """Every ClipEm boot/login autostart entry for this user, from this or
+    any other ClipEm folder (and from older versions' launchers), as dicts:
+    {"path", "command", "this_install"}. Only looks in the OS's own per-user
+    autostart location."""
+    folder = _autostart_dir()
+    if not folder or not os.path.isdir(folder):
+        return []
+    system = platform.system()
+    if system == "Windows":
+        candidates = _windows_startup_shortcuts(folder)
+    else:
+        suffix = ".plist" if system == "Darwin" else ".desktop"
+        candidates = []
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            if not name.endswith(suffix) or not os.path.isfile(path):
+                continue
+            try:
+                with open(path, "r", encoding="utf-8", errors="replace") as f:
+                    candidates.append((path, f.read()))
+            except OSError:
+                continue
+    return [
+        {"path": path, "command": command, "this_install": _points_at_this_install(command)}
+        for path, command in candidates
+        if _points_at_clipem(os.path.basename(path), command)
+    ]
+
+
+def find_other_autostart_entries():
+    """ClipEm autostart entries that don't start this install - left behind
+    by an older version, or by a copy of ClipEm in another folder."""
+    return [entry for entry in find_autostart_entries() if not entry["this_install"]]
+
+
+def describe_autostart_entry(entry):
+    """e.g. "clipem.desktop (starts /home/pt/ClipEm-old)" - which ClipEm
+    folder an entry starts, as far as its command shows."""
+    name = os.path.basename(entry["path"])
+    launchers = "|".join(re.escape(n) for n in LEGACY_LAUNCHER_NAMES)
+    # An absolute path ("/..." or "C:\\..."), up to the folder holding
+    # App/Shared/Installer/run.py or an old launcher.
+    match = re.search(
+        rf"((?:[A-Za-z]:)?[\\/][^\"'\n<>=]*?)[\\/](?:App[\\/]Shared[\\/]Installer[\\/]run\.py|{launchers})",
+        entry["command"],
+    )
+    if match and match.group(1).strip():
+        return f"{name} (starts {match.group(1).strip()})"
+    return name
+
+
+def remove_autostart_entries(entries):
+    """Deletes the given entries (from find_autostart_entries). Returns how
+    many were removed."""
+    removed = 0
+    for entry in entries:
+        try:
+            os.remove(entry["path"])
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            print(f"Could not remove the autostart entry {entry['path']}: {exc}", file=sys.stderr)
+            continue
+        removed += 1
+        print(f"Removed the autostart entry {entry['path']}")
+    return removed
+
+
+def macos_launch_agent_plist(python_exe):
+    args = "".join(
+        f"    <string>{xml_escape(arg)}</string>\n" for arg in (python_exe, RUN_PY, "--boot")
+    )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+        '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
+        '<plist version="1.0"><dict>\n'
+        f"  <key>Label</key><string>{MACOS_LAUNCH_AGENT_LABEL}</string>\n"
+        "  <key>ProgramArguments</key><array>\n"
+        f"{args}"
+        "  </array>\n"
+        "  <key>RunAtLoad</key><true/>\n"
+        "</dict></plist>\n"
+    )
+
+
+def linux_desktop_entry(python_exe, extra_args=(), icon=None, autostart=False):
+    exec_line = " ".join(desktop_exec_arg(a) for a in (python_exe, RUN_PY, *extra_args))
+    lines = ["[Desktop Entry]", "Type=Application", "Name=ClipEm", f"Exec={exec_line}"]
+    if icon:
+        lines.append(f"Icon={icon}")
+    if autostart:
+        lines.append("X-GNOME-Autostart-enabled=true")
+    lines.append("Terminal=false")
+    return "\n".join(lines) + "\n"
+
+
+def apply_boot_autostart(enabled):
+    """Registers (or removes) a real OS-level boot/login autostart entry
+    that runs `run.py --boot`. "Start when the PC boots" is only possible if
+    the OS itself knows to launch something at login, and there's no
+    portable equivalent. Idempotent either way, and entirely reversible by
+    disabling the option again (or deleting autostart_entry_path())."""
+    path = autostart_entry_path()
+    if not path:
+        print(f"Boot autostart isn't supported on {platform.system()}.", file=sys.stderr)
+        return
+
+    if not enabled:
+        # Only this install's own entry - one from another ClipEm folder at
+        # the same path belongs to that install (find_other_autostart_entries
+        # / remove_autostart_entries clear those when the user asks).
+        own = [e for e in find_autostart_entries() if e["this_install"] and e["path"] == path]
+        remove_autostart_entries(own)
+        return
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    system = platform.system()
+    try:
+        if system == "Windows":
+            python_root = find_windows_python_root()
+            pythonw = os.path.join(python_root, "pythonw.exe") if python_root else sys.executable
+            script = windows_shortcut_script(
+                path, pythonw, f"{windows_command_line_arg(RUN_PY)} --boot", ROOT_DIR,
+            )
+            run_powershell(script, check=True)
+        elif system == "Darwin":
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(macos_launch_agent_plist(sys.executable))
+        elif system == "Linux":
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(linux_desktop_entry(find_linux_python_bin(), ["--boot"], autostart=True))
+            os.chmod(path, 0o755)
+    except Exception as exc:
+        print(f"Could not create the boot autostart entry ({exc}) - skipping it.", file=sys.stderr)
+        return
+
+    print(f"Boot autostart enabled: {path}")
+
+
+# ---------------------------------------------------------------------------
+# Desktop shortcut
+# ---------------------------------------------------------------------------
+
+def create_shortcut_windows():
+    # pythonw.exe, not python.exe: run.py only launches OBS and the tray
+    # widget, and python.exe left a console window open that killed the tray
+    # widget when closed. Always (re)written so shortcuts from older setups
+    # that pointed at python.exe get fixed by re-running Setup.
+    shortcut_path = os.path.join(ROOT_DIR, "ClipEm.lnk")
+    pythonw = os.path.join(find_windows_python_root() or os.path.join(APP_DIR, "Windows", "Python"), "pythonw.exe")
+    icon = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.ico")
+    script = windows_shortcut_script(
+        shortcut_path, pythonw, windows_command_line_arg(RUN_PY), ROOT_DIR, icon,
+    )
+    run_powershell(script, check=True)
+    print(f"Created shortcut: {shortcut_path}")
+
+
+def create_shortcut_macos():
+    alias_path = os.path.join(ROOT_DIR, "ClipEm")
+    if os.path.exists(alias_path):
+        return
+
+    # Finder aliases can't carry arguments, so point one at a tiny launcher -
+    # pinned to this interpreter rather than whatever "python3" is on PATH.
+    launcher_path = os.path.join(INSTALLER_DIR, "launch_obs.command")
+    with open(launcher_path, "w", encoding="utf-8") as f:
+        f.write(f'#!/bin/bash\nexec {shlex.quote(sys.executable)} "$(dirname "$0")/run.py"\n')
+    os.chmod(launcher_path, 0o755)
+
+    script = (
+        'tell application "Finder"\n'
+        f"set theAlias to make alias file to POSIX file {applescript_quote(launcher_path)} "
+        f"at POSIX file {applescript_quote(ROOT_DIR)}\n"
+        'set name of theAlias to "ClipEm"\n'
+        "end tell"
+    )
+    subprocess.run(["osascript", "-e", script], check=True)
+    print(f"Created alias: {alias_path}")
+
+
+def create_shortcut_linux():
+    desktop_path = os.path.join(ROOT_DIR, "ClipEm.desktop")
+    if os.path.exists(desktop_path):
+        return
+    icon = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.png")
+    content = linux_desktop_entry(
+        find_linux_python_bin(), icon=icon if os.path.exists(icon) else None,
+    )
+    with open(desktop_path, "w", encoding="utf-8") as f:
+        f.write(content)
+    os.chmod(desktop_path, 0o755)
+    print(
+        f"Created launcher: {desktop_path} "
+        "(GNOME/KDE may ask you to right-click -> Allow Launching, once)"
+    )
+
+
+def create_shortcut():
+    system = platform.system()
+    if system == "Windows":
+        create_shortcut_windows()
+    elif system == "Darwin":
+        create_shortcut_macos()
+    elif system == "Linux":
+        create_shortcut_linux()

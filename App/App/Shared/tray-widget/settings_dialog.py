@@ -1,0 +1,720 @@
+"""Small settings dialog for the ClipEm tray widget.
+
+Launched as a separate process (see tray_widget.py's "Settings..." menu item)
+rather than run in-process, since mixing tkinter's own event loop with
+pystray's would be fragile. Edits the same on-disk config files setup.py's
+wizard does.
+
+OBS reads the websocket, hotkey and clip sound settings only at startup
+(the clip sound's .wav file itself is read on every clip), so while
+OBS is running those are queued (obs_config.queue_obs_settings) rather than written, and the
+dialog offers to restart OBS to apply them; otherwise run.py applies them
+before it next starts OBS.
+"""
+
+import os
+import queue
+import sys
+import threading
+import tkinter as tk
+from tkinter import filedialog, messagebox, simpledialog, ttk
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SHARED_DIR = os.path.dirname(SCRIPT_DIR)
+INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
+
+# Shared with setup.py/run.py rather than re-implemented here: config-file
+# paths and atomic writes (clipem_common/obs_config) and the per-OS boot
+# autostart entry (autostart.apply_boot_autostart).
+sys.path.insert(0, INSTALLER_DIR)
+import obs_config  # noqa: E402
+import obs_process  # noqa: E402
+from app_window import style_app_window, use_windows_app_id  # noqa: E402
+from autostart import apply_boot_autostart  # noqa: E402
+from clipem_common import (  # noqa: E402
+    acquire_instance_lock,
+    exit_with_parent,
+    load_run_config,
+    outlive_parent,
+    save_run_config,
+    setup_logging,
+    start_clipem,
+    stop_tray_widget,
+)
+from ui_scale import UiScale, enable_dpi_awareness  # noqa: E402
+
+log = setup_logging("settings")
+RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
+LOCK_PATH = os.path.join(SCRIPT_DIR, ".settings.lock")
+
+try:
+    import updater
+except ImportError:
+    updater = None
+
+
+def start_run_py():
+    """Starts ClipEm again (run.py, detached) - see clipem_common.start_clipem."""
+    start_clipem()
+
+
+def restart_obs_with_queued_settings():
+    """Closes OBS (stopping its outputs first, so it doesn't stop to ask
+    "are you sure?"), applies the queued settings and starts it again via
+    run.py. Returns None on success, or an error message."""
+    # Queued settings aren't applied yet, so the websocket settings on disk
+    # are still the running OBS's - close_obs_stopping_outputs connects with those.
+    if not obs_process.close_obs_stopping_outputs(log):
+        return (
+            "OBS didn't close (it may be showing a dialog). Your settings are saved "
+            "and will apply the next time ClipEm starts OBS."
+        )
+    applied = obs_config.apply_pending_obs_settings()
+    log.info(f"Restart OBS: applied {sorted(applied)}")
+    start_run_py()
+    return None
+
+
+def save_obs_settings(obs_settings, initial_obs_settings):
+    """Saves whichever OBS settings differ from what the dialog opened with.
+    They're queued first either way, so nothing is lost if applying fails
+    halfway; then applied straight away unless OBS is running. Returns
+    "unchanged", "applied", or "queued" (OBS is running - offer a restart)."""
+    changed = {k: v for k, v in obs_settings.items() if v != initial_obs_settings.get(k)}
+    if not changed:
+        return "unchanged"
+    obs_config.queue_obs_settings(changed)
+    if obs_process.obs_running():
+        return "queued"
+    obs_config.apply_pending_obs_settings()
+    return "applied"
+
+
+def restart_clipem():
+    """To install a chosen update: closes OBS and the tray widget, then
+    starts everything again via run.py, which installs the update before
+    starting them. Returns None on success, or an error message."""
+    if not obs_process.close_obs_stopping_outputs(log):
+        return ("OBS didn't close (it may be showing a dialog). The update will be installed the next "
+                "time ClipEm starts.")
+    if obs_config.load_pending_obs_settings():
+        obs_config.apply_pending_obs_settings()
+    # This dialog closes with the tray widget (exit_with_parent) - opt out
+    # first, or stopping it would take this process down before run.py starts.
+    outlive_parent()
+    stop_tray_widget(log)
+    start_run_py()
+    return None
+
+
+def run_in_background(root, work, on_done):
+    """Runs work() on a worker thread and on_done(result, error) back on the
+    Tk thread - network calls must not freeze the dialog."""
+    results = queue.Queue()
+
+    def worker():
+        try:
+            results.put((work(), None))
+        except Exception as exc:
+            results.put((None, exc))
+
+    def poll():
+        try:
+            result, error = results.get_nowait()
+        except queue.Empty:
+            root.after(100, poll)
+            return
+        on_done(result, error)
+
+    threading.Thread(target=worker, daemon=True).start()
+    root.after(100, poll)
+
+
+def parent_pid_from_args(argv):
+    """The tray widget passes --parent-pid <its pid> when it opens this."""
+    if "--parent-pid" in argv:
+        index = argv.index("--parent-pid")
+        if index + 1 < len(argv) and argv[index + 1].isdigit():
+            return int(argv[index + 1])
+    return None
+
+
+def main():
+    # Close along with the tray widget that opened this, however it ends.
+    exit_with_parent(parent_pid_from_args(sys.argv[1:]))
+    if not acquire_instance_lock(LOCK_PATH):
+        log.info("Settings dialog already open; not opening another.")
+        return
+    ws_load_error = None
+    try:
+        ws_settings = obs_config.load_obs_websocket_settings()
+        port, password = ws_settings["port"], ws_settings["password"]
+    except Exception as exc:
+        port, password = 4455, ""
+        ws_load_error = str(exc)
+
+    # Show queued (not yet applied) values where there are any, so reopening
+    # Settings before OBS restarts doesn't show - and re-save - the old ones.
+    pending = obs_config.load_pending_obs_settings()
+    if "websocket" in pending:
+        port, password = pending["websocket"]["port"], pending["websocket"]["password"]
+    try:
+        stuck_enabled = obs_config.load_stuck_check_enabled()
+    except Exception:
+        stuck_enabled = True
+    try:
+        black_enabled = obs_config.load_black_check_enabled()
+    except Exception:
+        black_enabled = True
+    try:
+        disk_warnings_enabled = obs_config.load_disk_space_warnings_enabled()
+    except Exception:
+        disk_warnings_enabled = True
+    try:
+        hotkey = tuple(pending.get("clip_hotkey") or obs_config.load_clip_hotkey())
+    except Exception:
+        hotkey = obs_config.DEFAULT_CLIP_HOTKEY
+    try:
+        clip_sound = pending.get("clip_sound") or obs_config.load_clip_sound()
+    except Exception:
+        clip_sound = dict(obs_config.DEFAULT_CLIP_SOUND)
+    initial_obs_settings = {
+        "websocket": {"port": port, "password": password},
+        "clip_hotkey": list(hotkey),
+        "clip_sound": {"enabled": bool(clip_sound["enabled"]), "volume": round(float(clip_sound["volume"]), 2)},
+    }
+
+    run_config = load_run_config()
+
+    enable_dpi_awareness()
+    use_windows_app_id("PTMakes.ClipEm.Settings")
+    # className: what Linux desktops match the window to (WM_CLASS).
+    root = tk.Tk(className="ClipEm")
+    # ClipEm logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
+    style_app_window(root, log=log.warning)
+    # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
+    px = UiScale(root).px
+    root.title("ClipEm Settings")
+    root.resizable(False, False)
+    # Opened from the tray menu - make sure it isn't hidden behind whatever
+    # window had focus.
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(500, lambda: root.attributes("-topmost", False))
+
+    frame = tk.Frame(root, padx=px(16), pady=px(12))
+    frame.pack()
+    # Rows spanning both columns (checkboxes, update text) are wider than
+    # Port/Password; give that extra width to the field column so the labels
+    # and fields stay flush left instead of being spread apart.
+    frame.columnconfigure(1, weight=1)
+
+    # Clip Hotkey is now the first section - no gap above it.
+    tk.Label(frame, text="Clip Hotkey", font=("", 10, "bold")).grid(
+        row=0, column=0, columnspan=2, sticky="w"
+    )
+    hotkey_ctrl_var = tk.BooleanVar(value=hotkey[0])
+    hotkey_alt_var = tk.BooleanVar(value=hotkey[1])
+    hotkey_shift_var = tk.BooleanVar(value=hotkey[2])
+    hotkey_key_var = tk.StringVar(value=hotkey[3])
+    hotkey_row = tk.Frame(frame)
+    hotkey_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=px(4))
+    for text, var in (("Ctrl", hotkey_ctrl_var), ("Alt", hotkey_alt_var), ("Shift", hotkey_shift_var)):
+        tk.Checkbutton(hotkey_row, text=text, variable=var).pack(side="left")
+    tk.Label(hotkey_row, text="+ Key:").pack(side="left", padx=(px(6), 0))
+    ttk.Combobox(
+        hotkey_row, textvariable=hotkey_key_var, values=obs_config.HOTKEY_KEY_CHOICES,
+        state="readonly", width=5,
+    ).pack(side="left", padx=(px(4), 0))
+
+    # --- Clip sound: on/off, volume and which .wav plays on each saved clip.
+    next_row = 2
+    tk.Label(frame, text="Clip Sound", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    sound_enabled_var = tk.BooleanVar(value=initial_obs_settings["clip_sound"]["enabled"])
+    tk.Checkbutton(
+        frame, text="Play a sound when a clip is saved", variable=sound_enabled_var,
+        command=lambda: on_sound_toggle(),
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+
+    tk.Label(frame, text="Volume:").grid(row=next_row, column=0, sticky="w")
+    volume_row = tk.Frame(frame)
+    volume_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0))
+    sound_volume_var = tk.IntVar(value=round(initial_obs_settings["clip_sound"]["volume"] * 100))
+    volume_scale = tk.Scale(
+        volume_row, from_=0, to=100, orient="horizontal", variable=sound_volume_var,
+        showvalue=False, length=px(150),
+    )
+    volume_scale.pack(side="left")
+    volume_label = tk.Label(volume_row, width=5, anchor="w")
+    volume_label.pack(side="left", padx=(px(4), 0))
+    sound_volume_var.trace_add("write", lambda *_: volume_label.config(text=f"{sound_volume_var.get()}%"))
+    volume_label.config(text=f"{sound_volume_var.get()}%")
+    next_row += 1
+
+    tk.Label(frame, text="Sound:").grid(row=next_row, column=0, sticky="w")
+    sound_row = tk.Frame(frame)
+    sound_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    chosen_sound = {"path": None}  # a new .wav, copied into place on Save
+    sound_name_var = tk.StringVar(value="Current sound")
+    tk.Label(sound_row, textvariable=sound_name_var, width=16, anchor="w").pack(side="left")
+
+    def on_choose_sound():
+        path = filedialog.askopenfilename(
+            parent=root, title="Choose the clip sound", filetypes=[("WAV files", "*.wav"), ("All files", "*")],
+        )
+        if path:
+            chosen_sound["path"] = path
+            name = os.path.basename(path)
+            sound_name_var.set(name if len(name) <= 16 else name[:15] + "\u2026")
+
+    def on_play_sound():
+        try:
+            obs_config.play_clip_sound(sound_volume_var.get() / 100, chosen_sound["path"])
+        except Exception as exc:
+            messagebox.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=root)
+
+    choose_button = tk.Button(sound_row, text="Choose...", command=on_choose_sound)
+    choose_button.pack(side="left", padx=(px(4), 0))
+    play_button = tk.Button(sound_row, text="Play", command=on_play_sound)
+    play_button.pack(side="left", padx=(px(4), 0))
+    next_row += 1
+    if sys.platform == "win32":
+        tk.Label(frame, text="(Windows plays it at your system volume.)", fg="gray40").grid(
+            row=next_row, column=0, columnspan=2, sticky="w"
+        )
+        next_row += 1
+
+    def on_sound_toggle():
+        state = "normal" if sound_enabled_var.get() else "disabled"
+        for widget in (volume_scale, choose_button, play_button):
+            widget.config(state=state)
+
+    on_sound_toggle()
+
+    # --- The Clip Browser's "Open in..." button: any editor the user has.
+    tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    tk.Label(frame, text="Other editor:").grid(row=next_row, column=0, sticky="w")
+    editor_row = tk.Frame(frame)
+    editor_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    editor_path_var = tk.StringVar(value=run_config.get("custom_editor_path") or "")
+    editor_name_var = tk.StringVar()
+
+    def show_editor_name(*_args):
+        path = editor_path_var.get().strip()
+        name = os.path.basename(path.rstrip("/\\")) if path else "None"
+        editor_name_var.set(name if len(name) <= 16 else name[:15] + "\u2026")
+
+    editor_path_var.trace_add("write", show_editor_name)
+    show_editor_name()
+    tk.Label(editor_row, textvariable=editor_name_var, width=16, anchor="w").pack(side="left")
+
+    def on_choose_editor():
+        if sys.platform == "darwin":
+            path = filedialog.askdirectory(parent=root, title="Choose your video editor (.app)",
+                                           initialdir="/Applications")
+        else:
+            filetypes = [("Programs", "*.exe")] if sys.platform == "win32" else []
+            path = filedialog.askopenfilename(
+                parent=root, title="Choose your video editor", filetypes=filetypes + [("All files", "*")],
+            )
+        if path:
+            editor_path_var.set(path)
+
+    tk.Button(editor_row, text="Choose...", command=on_choose_editor).pack(side="left", padx=(px(4), 0))
+    tk.Button(editor_row, text="Clear", command=lambda: editor_path_var.set("")).pack(
+        side="left", padx=(px(4), 0)
+    )
+    next_row += 1
+
+    tk.Label(frame, text="Scripts", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    stuck_var = tk.BooleanVar(value=stuck_enabled)
+    tk.Checkbutton(frame, text="Enable stuck-screen detection", variable=stuck_var).grid(
+        row=next_row, column=0, columnspan=2, sticky="w"
+    )
+    next_row += 1
+    black_var = tk.BooleanVar(value=black_enabled)
+    tk.Checkbutton(frame, text="Enable black-screen detection", variable=black_var).grid(
+        row=next_row, column=0, columnspan=2, sticky="w"
+    )
+    next_row += 1
+    disk_warnings_var = tk.BooleanVar(value=disk_warnings_enabled)
+    tk.Checkbutton(frame, text="Enable disk space warnings", variable=disk_warnings_var).grid(
+        row=next_row, column=0, columnspan=2, sticky="w"
+    )
+    next_row += 1
+
+    autostart_obs_var = tk.BooleanVar(value=run_config["autostart_obs"])
+    autostart_tray_var = tk.BooleanVar(value=run_config["autostart_tray"])
+    tk.Label(frame, text="Autostart with PC boot", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+
+    obs_check = tk.Checkbutton(
+        frame, text="Automatically start OBS with PC boot", variable=autostart_obs_var
+    )
+    obs_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+
+    tray_check = tk.Checkbutton(
+        frame, text="Also start the tray widget at boot", variable=autostart_tray_var
+    )
+    tray_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+
+    def on_obs_autostart_toggle():
+        # Same constraint as Setup's own wizard: the boot entry always
+        # runs both flags off of a single "run.py --boot" launch, and
+        # apply_boot_autostart() removes that entry entirely when OBS's
+        # flag is off - so the tray flag would be inert (no boot entry
+        # left to consult it) rather than actually starting anything.
+        if autostart_obs_var.get():
+            tray_check.config(state="normal")
+        else:
+            autostart_tray_var.set(False)
+            tray_check.config(state="disabled")
+
+    obs_check.config(command=on_obs_autostart_toggle)
+    on_obs_autostart_toggle()
+
+    tk.Label(frame, text="OBS Websocket", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+
+    tk.Label(frame, text="Port:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+    port_var = tk.StringVar(value=str(port))
+    tk.Entry(frame, textvariable=port_var, width=24).grid(
+        row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4)
+    )
+    next_row += 1
+
+    tk.Label(frame, text="Password:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+    password_var = tk.StringVar(value=password)
+    password_row = tk.Frame(frame)
+    password_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    next_row += 1
+    password_entry = tk.Entry(password_row, textvariable=password_var, width=20, show="*")
+    password_entry.pack(side="left")
+
+    password_visible = tk.BooleanVar(value=False)
+
+    def on_toggle_password_visibility():
+        password_entry.config(show="" if password_visible.get() else "*")
+
+    tk.Checkbutton(
+        password_row,
+        text="\U0001F441",  # eye emoji - toggles the entry above between "*" and plain text
+        variable=password_visible,
+        command=on_toggle_password_visibility,
+        indicatoron=False,
+        width=2,
+    ).pack(side="left", padx=(px(4), 0))
+
+    def on_copy_password():
+        root.clipboard_clear()
+        root.clipboard_append(password_var.get())
+        root.update()  # hand the text to the clipboard now, not at the next idle moment
+        copy_button.config(text="Copied!")
+        root.after(1500, lambda: copy_button.winfo_exists() and copy_button.config(text="Copy"))
+
+    copy_button = tk.Button(password_row, text="Copy", command=on_copy_password, width=7)
+    copy_button.pack(side="left", padx=(px(4), 0))
+
+    if updater is not None:
+        update_config = updater.load_update_config()
+        local_version = updater.get_local_version()
+
+        tk.Label(frame, text="Updates", font=("", 10, "bold")).grid(
+            row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+        )
+        next_row += 1
+
+        tk.Label(frame, text=f"Current version: {local_version}", fg="gray40").grid(
+            row=next_row, column=0, columnspan=2, sticky="w"
+        )
+        next_row += 1
+
+        check_updates_var = tk.BooleanVar(value=update_config["check_for_updates"])
+
+        def on_toggle_check_updates():
+            try:
+                updater.change_update_config(check_for_updates=check_updates_var.get())
+            except Exception as exc:
+                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                check_updates_var.set(not check_updates_var.get())
+
+        tk.Checkbutton(
+            frame, text="Allow checking for updates (when ClipEm starts)", variable=check_updates_var,
+            command=on_toggle_check_updates,
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        next_row += 1
+
+        channel_labels = {updater.CHANNEL_RELEASES: "Releases", updater.CHANNEL_LATEST: "Latest (dev builds)"}
+        channel_var = tk.StringVar(value=channel_labels.get(update_config["update_channel"], "Releases"))
+        saved_channel = {"label": channel_var.get()}
+
+        def on_channel_selected(_event=None):
+            label = channel_var.get()
+            if label == saved_channel["label"]:
+                return
+            channel = next(key for key, text in channel_labels.items() if text == label)
+            if channel == updater.CHANNEL_LATEST:
+                explanation = (
+                    "The Latest channel installs development builds published for testing (the \"dev\" "
+                    "pre-release on GitHub) before they become a release. They may be unfinished or "
+                    "broken.\n\nSwitch to Latest?"
+                )
+            else:
+                explanation = (
+                    "The Releases channel installs only published releases. If you're on a dev build, "
+                    "the next update check offers the current release instead.\n\nSwitch to Releases?"
+                )
+            if not messagebox.askyesno("Update Channel", explanation, parent=root):
+                channel_var.set(saved_channel["label"])
+                return
+            try:
+                updater.change_update_config(update_channel=channel, skipped_version=None)
+            except Exception as exc:
+                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                channel_var.set(saved_channel["label"])
+                return
+            saved_channel["label"] = label
+
+        tk.Label(frame, text="Update channel:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+        channel_box = ttk.Combobox(frame, textvariable=channel_var, values=list(channel_labels.values()),
+                                   state="readonly", width=18)
+        channel_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+        channel_box.bind("<<ComboboxSelected>>", on_channel_selected)
+        next_row += 1
+
+        source_repo_var = tk.StringVar(value=update_config["source_repo"])
+
+        def save_source_repo(repo):
+            try:
+                updater.change_update_config(source_repo=repo, skipped_version=None)
+            except Exception as exc:
+                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                return
+            source_repo_var.set(repo)
+
+        def on_change_source_repo():
+            if not messagebox.askyesno(
+                "Update Source",
+                "ClipEm downloads its updates from the releases of this GitHub repository.\n\n"
+                "Only change it if you know the repository publishes ClipEm builds - updates must "
+                "still be signed with the official ClipEm release key, so any other repository "
+                "makes update checks fail.\n\nChange the update source?",
+                parent=root,
+            ):
+                return
+            repo = simpledialog.askstring(
+                "Update Source", "GitHub repository (owner/name):", initialvalue=source_repo_var.get(), parent=root,
+            )
+            if repo is None:
+                return
+            repo = repo.strip()
+            if not updater.is_valid_repo(repo):
+                messagebox.showerror("Update Source", f"\"{repo}\" isn't a GitHub repository like owner/name.")
+                return
+            save_source_repo(repo)
+
+        tk.Label(frame, text="Update source:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+        source_row = tk.Frame(frame)
+        source_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+        tk.Entry(source_row, textvariable=source_repo_var, state="readonly", width=22).pack(side="left")
+        tk.Button(source_row, text="Change...", command=on_change_source_repo).pack(side="left", padx=(px(4), 0))
+        tk.Button(
+            source_row, text="Reset", command=lambda: save_source_repo(updater.DEFAULT_SOURCE_REPO),
+        ).pack(side="left", padx=(px(4), 0))
+        next_row += 1
+
+        def on_check_for_updates():
+            check_button.config(state="disabled", text="Checking...")
+            run_in_background(root, updater.check_for_update, on_update_checked)
+
+        def on_update_checked(result, error):
+            check_button.config(state="normal", text="Check for Updates")
+            if error is not None:
+                result = {"error": str(error)}
+            if result["error"]:
+                messagebox.showerror(
+                    "Check for Updates",
+                    f"Couldn't check {source_repo_var.get()} for updates:\n{result['error']}",
+                )
+                return
+            current, latest = result["local_version"], result["remote_version"]
+            if not result["update_available"]:
+                messagebox.showinfo(
+                    "Check for Updates",
+                    f"Current version: {current}\nLatest version: {latest}\n\nClipEm is up to date.",
+                )
+                return
+            changes = "\n".join(f"  \u2022 {line}" for line in updater.describe_update(result))
+            if messagebox.askyesno(
+                "Check for Updates",
+                f"An update is available:\n\n{changes}\n\nInstall it now? This closes OBS and the "
+                "tray icon, updates ClipEm and starts them again.\n\n(Choosing No offers it again the "
+                "next time ClipEm starts.)",
+            ):
+                try:
+                    updater.change_update_config(install_on_next_launch=True)
+                except Exception as exc:
+                    messagebox.showerror("Check for Updates", f"Couldn't save the update choice:\n{exc}")
+                    return
+                check_button.config(state="disabled", text="Restarting...")
+                run_in_background(root, restart_clipem, on_clipem_restarted)
+
+        def on_clipem_restarted(error_message, exc):
+            if exc is not None:
+                log.warning(f"Restart ClipEm failed: {exc}")
+                error_message = (f"Couldn't restart ClipEm ({exc}). The update will be installed the "
+                                 "next time ClipEm starts.")
+            if error_message:
+                messagebox.showwarning("Check for Updates", error_message)
+            root.destroy()
+
+        check_button = tk.Button(frame, text="Check for Updates", command=on_check_for_updates)
+        check_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        next_row += 1
+
+    tk.Label(
+        frame,
+        text=(
+            "Autostart, screen-detection, update settings and a new clip sound file\n"
+            "apply right away. OBS only reads the websocket, hotkey and clip sound\n"
+            "on/off and volume when it starts - if it's running, you'll be offered\n"
+            "a restart."
+        ),
+        fg="gray40",
+        justify="left",
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(12), 0))
+    next_row += 1
+
+    if ws_load_error:
+        tk.Label(
+            frame,
+            text=f"Warning: couldn't read current websocket settings ({ws_load_error})",
+            fg="red",
+            wraplength=px(280),
+            justify="left",
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
+        next_row += 1
+
+    def on_save():
+        try:
+            port_val = obs_config.validate_port(port_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid Port", "Port must be a number from 1 to 65535.")
+            return
+        password_val = password_var.get()
+        if not password_val:
+            messagebox.showerror("Invalid Password", "Password can't be empty.")
+            return
+        hotkey_val = [hotkey_ctrl_var.get(), hotkey_alt_var.get(), hotkey_shift_var.get(), hotkey_key_var.get()]
+        try:
+            obs_config.hotkey_label_to_obs_key(hotkey_val[3])
+        except ValueError:
+            messagebox.showerror("Invalid Hotkey", "Pick a key for the clip hotkey.")
+            return
+        obs_settings = {
+            "websocket": {"port": port_val, "password": password_val},
+            "clip_hotkey": hotkey_val,
+            "clip_sound": {"enabled": bool(sound_enabled_var.get()), "volume": round(sound_volume_var.get() / 100, 2)},
+        }
+        if chosen_sound["path"]:
+            # A plain file OBS's script reads on every clip - takes effect
+            # straight away, OBS running or not.
+            try:
+                obs_config.replace_clip_sound_wav(chosen_sound["path"])
+            except Exception as exc:
+                messagebox.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=root)
+                return
+            chosen_sound["path"] = None
+
+        try:
+            # Fresh copy: the tray widget writes to this file too (see
+            # obs_config.set_capture_display_user_changed).
+            run_config = load_run_config()
+            run_config["autostart_obs"] = autostart_obs_var.get()
+            run_config["autostart_tray"] = autostart_tray_var.get()
+            # Read by the tray widget before each check - see stuck_screen.py.
+            run_config["stuck_check_enabled"] = bool(stuck_var.get())
+            run_config["black_check_enabled"] = bool(black_var.get())
+            # Read by the tray widget each poll - see disk_space.py.
+            run_config["disk_space_warnings_enabled"] = bool(disk_warnings_var.get())
+            run_config["custom_editor_path"] = editor_path_var.get().strip()
+            save_run_config(run_config)
+            apply_boot_autostart(run_config["autostart_obs"])
+        except Exception as exc:
+            messagebox.showerror("Save Failed", f"Couldn't save autostart, screen-detection and disk-space settings: {exc}")
+            return
+
+        try:
+            outcome = save_obs_settings(obs_settings, initial_obs_settings)
+        except Exception as exc:
+            messagebox.showerror("Save Failed", f"Couldn't save settings: {exc}")
+            return
+        if outcome == "unchanged":
+            root.destroy()
+            return
+        if outcome == "applied":
+            messagebox.showinfo("Saved", "Settings saved.")
+            root.destroy()
+            return
+
+        if not messagebox.askyesno(
+            "Restart OBS?",
+            "OBS only picks up websocket, hotkey and clip sound settings when it "
+            "starts. Restart OBS now to apply them?\n\n"
+            "(Choosing No applies them the next time ClipEm starts OBS.)",
+        ):
+            root.destroy()
+            return
+
+        for child in button_frame.winfo_children():
+            child.config(state="disabled")
+        status_var.set("Restarting OBS...")
+
+        def on_restarted(error_message, exc):
+            if exc is not None:
+                log.warning(f"Restart OBS failed: {exc}")
+                error_message = (
+                    f"Couldn't restart OBS ({exc}). Your settings are saved and will "
+                    "apply the next time ClipEm starts OBS."
+                )
+            if error_message:
+                messagebox.showwarning("Restart OBS", error_message)
+            root.destroy()
+
+        run_in_background(root, restart_obs_with_queued_settings, on_restarted)
+
+    def on_cancel():
+        root.destroy()
+
+    status_var = tk.StringVar(value="")
+    tk.Label(frame, textvariable=status_var, fg="gray40").grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(10), 0)
+    )
+    next_row += 1
+
+    button_frame = tk.Frame(frame)
+    button_frame.grid(row=next_row, column=0, columnspan=2, pady=(px(14), 0), sticky="e")
+    tk.Button(button_frame, text="Cancel", command=on_cancel, width=10).pack(side="left", padx=px(4))
+    tk.Button(button_frame, text="Save", command=on_save, width=10).pack(side="left", padx=px(4))
+
+    root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

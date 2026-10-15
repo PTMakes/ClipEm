@@ -1,0 +1,12 @@
+# Exact pins so every install gets the versions a release was tested with.
+# Each must have wheels for every interpreter ClipEm runs on: the bundled
+# Windows and portable Linux Pythons (both 3.12), older Windows installs'
+# 3.10, and macOS system Pythons (3.10 up to 3.14).
+pystray==0.19.5; sys_platform != "linux"
+dbus-next==0.2.3; sys_platform == "linux"
+Pillow==12.3.0
+websocket-client==1.9.2
+# Split audio tracks: which apps are playing sound (app_audio.py).
+pycaw==20260927; sys_platform == "win32"
+comtypes==1.4.17; sys_platform == "win32"
+psutil==7.2.2; sys_platform == "win32"

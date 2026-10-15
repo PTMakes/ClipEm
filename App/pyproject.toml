@@ -1,0 +1,29 @@
+# Tooling config only - ClipEm isn't installed as a package. Its runtime
+# dependencies live in App/Shared/tray-widget/requirements.txt and
+# App/Shared/Installer/mic-filter/requirements.txt (installed by Setup).
+[project]
+name = "clipem-app"
+version = "0"
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest==8.*", "ruff==0.16.*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+extend-exclude = ["App/Linux", "App/Windows", "App/macOS"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "B", "UP", "I"]
+ignore = [
+    "E402",  # entry points extend sys.path before importing sibling modules
+    "UP015", # explicit open(..., "r") is the house style
+]
+
+[tool.ruff.lint.per-file-ignores]
+# dbus-next declares D-Bus signatures as string annotations ("s", "a(iiay)").
+"App/Shared/tray-widget/sni_tray.py" = ["F821", "F722"]

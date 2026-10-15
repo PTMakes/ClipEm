@@ -1,0 +1,18 @@
+# Cloudflare Pages response headers (applied to the static export).
+/*
+  Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'
+
+# Update/install manifests and their signatures must never be served stale.
+# Only installs from before updates moved to GitHub (<= 1.3.5) read them here.
+/updates/*
+  Cache-Control: no-cache
+  Access-Control-Allow-Origin: *
+
+/linuxinstall.sh
+  Cache-Control: no-cache
+  Content-Type: text/plain; charset=utf-8

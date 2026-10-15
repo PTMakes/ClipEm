@@ -1,0 +1,5 @@
+# Never deploy release binaries (they're GitHub Release assets), even if a
+# copy is sitting in public/ locally.
+*.zip
+*.tar.gz
+*.exe

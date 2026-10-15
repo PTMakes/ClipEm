@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClipEm Clips</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <header class="sidebar-head">
+      <h1>Clips</h1>
+      <span id="clip-count" class="muted"></span>
+    </header>
+    <div id="sound-banner" class="banner" hidden>Click anywhere to turn on hover sound</div>
+    <ul id="clip-list" aria-label="Clips, newest first"></ul>
+    <p id="empty" class="muted" hidden>No clips yet - save one with your clip hotkey.</p>
+  </aside>
+  <main id="main">
+    <div id="player-wrap">
+      <video id="player" controls preload="metadata"></video>
+      <p id="no-selection" class="muted">Pick a clip on the left.</p>
+    </div>
+    <section id="details" hidden>
+      <div class="title-row">
+        <h2 id="clip-title"></h2>
+        <span id="clip-meta" class="muted"></span>
+      </div>
+      <div class="actions">
+        <button id="edit-losslesscut" class="primary"></button>
+        <button id="edit-custom" hidden></button>
+        <button id="reveal">Show in folder</button>
+      </div>
+      <p id="tracks-note" class="muted"></p>
+      <p id="status" role="status"></p>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

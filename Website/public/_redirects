@@ -1,0 +1,3 @@
+# Release binaries are GitHub Release assets of PTMakes/ClipEm (see
+# Dev/release.sh), not on this site. Keep the long-standing download URL working.
+/ClipEmSetup.exe  https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupWindows.exe  302

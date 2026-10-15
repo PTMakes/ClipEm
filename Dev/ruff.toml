@@ -1,0 +1,8 @@
+# Same rules as PTMClipEm-App's pyproject.toml; release.sh preflight runs it.
+line-length = 120
+target-version = "py310"
+extend-exclude = ["obs-src", "dist", "obs-install"]
+
+[lint]
+select = ["E9", "F", "B", "UP", "I"]
+ignore = ["UP015"]  # explicit open(..., "r") is the house style

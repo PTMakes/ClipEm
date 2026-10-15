@@ -1,0 +1,124 @@
+# Per-user Claude Code settings.
+**/.claude/settings.local.json
+**/.claude/settings.json
+
+# Python bytecode and tooling caches.
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Local secrets (R2 credentials etc.).
+.env
+.env.*
+
+# Never commit the release signing key (it lives in ~/.config/clipem by
+# default - see generate-signing-key.sh); this just guards against copies.
+*.pem
+*.pfx
+
+# misc
+.DS_Store
+
+
+# ---------------------------------------------------------------------------
+# App/
+# ---------------------------------------------------------------------------
+
+# OBS + Python are fetched at install time (ClipEmSetup.exe / linuxinstall.sh /
+# Setup_Windows.bat / Setup_Linux.sh), verified against
+# clipem.app/updates/install-manifest.json - never commit them.
+/App/App/Windows/Python/
+/App/App/Windows/bin/
+/App/App/Windows/data/
+/App/App/Windows/obs-plugins/
+/App/App/Linux/python/
+/App/App/Linux/obs-install/
+
+# Per-machine checksum baseline recorded after a fresh OBS/Python fetch -
+# see record_local_checksums() in App/Shared/Installer/setup.py.
+/App/App/checksums_local.json
+
+# Per-install runtime state: logs, the tray widget's single-instance lock,
+# the updater's staging/backup folders, Setup's generated launchers and the
+# per-user update preference.
+/App/App/logs/
+/App/App/macOS/
+/App/App/Linux/tray-deps/
+/App/App/Linux/xdgconfig/
+/App/App/Shared/.update-staging/
+/App/App/Shared/.update-backup/
+/App/App/Shared/update_config.json
+/App/App/Shared/tray-widget/.tray.lock
+/App/App/Shared/tray-widget/.settings.lock
+/App/App/Shared/tray-widget/.clip_browser.lock
+/App/App/Shared/tray-widget/.clip_browser.url
+# Clip Browser thumbnails and its browser profile; LosslessCut, downloaded on request.
+/App/App/cache/
+/App/App/Windows/LosslessCut/
+/App/App/Linux/LosslessCut/
+# Settings changed while OBS was running, waiting to be applied (obs_config).
+/App/App/Shared/pending_obs_settings.json
+# Which app owns which split audio track (tray-widget/app_audio.py).
+/App/App/Shared/app_tracks.json
+# OBS's own logs, written through the linked OBS-Config when OBS runs from
+# a checkout - never ship them in the release zip.
+/App/App/Shared/OBS-Config/logs/
+/App/App/Shared/Installer/launch_obs.command
+
+
+# ---------------------------------------------------------------------------
+# Dev/
+# ---------------------------------------------------------------------------
+
+# Build output from release.sh / build scripts - regenerated, never committed.
+/Dev/dist/
+/Dev/test/
+/Dev/test_results.txt
+/Dev/gui_layout_test_results.txt
+/Dev/.linux-python-xft-work/
+/Dev/.pipewire-audio-work/
+/Dev/installer/windows/dist/
+/Dev/installer/windows/build/
+/Dev/.ffmpeg-build/
+
+# The from-source Linux OBS build (build-obs-from-source-for-linux.sh).
+# Published as a release asset by release.sh - rebuild it rather than
+# versioning ~1700 binaries in git.
+/Dev/obs-install/
+
+# Upstream OBS clone that build-obs-from-source-for-linux.sh fetches, checks
+# out at the pinned tag and patches in place - not vendored.
+/Dev/obs-src/
+
+
+# ---------------------------------------------------------------------------
+# Website/
+# ---------------------------------------------------------------------------
+
+# dependencies
+/Website/node_modules/
+
+# next.js
+/Website/.next/
+/Website/out/
+/Website/next-env.d.ts
+*.tsbuildinfo
+
+# production
+/Website/build/
+
+# Cloudflare wrangler local state
+/Website/.wrangler/
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Release binaries are GitHub Release assets of PTMakes/ClipEm (see
+# Dev/release.sh), never committed here - only the signed manifests in
+# Website/public/updates are.
+*.zip
+*.tar.gz
+*.exe
