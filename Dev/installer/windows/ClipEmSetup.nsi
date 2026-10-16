@@ -19,6 +19,9 @@
 !ifndef VERSION
   !error "Build with build.sh, which passes -DVERSION=<X.Y.Z>"
 !endif
+!ifndef VI_VERSION
+  !error "Build with build.sh, which passes -DVI_VERSION=<X.Y.Z.0>"
+!endif
 
 !define PRODUCT_NAME "ClipEm"
 !define PUBLISHER "PT Makes"
@@ -30,7 +33,7 @@ InstallDir "$LOCALAPPDATA\ClipEm"
 RequestExecutionLevel user
 Unicode true
 
-VIProductVersion "${VERSION}.0"
+VIProductVersion "${VI_VERSION}"
 VIAddVersionKey "ProductName" "${PRODUCT_NAME}"
 VIAddVersionKey "ProductVersion" "${VERSION}"
 VIAddVersionKey "FileVersion" "${VERSION}"

@@ -95,7 +95,9 @@ VC_REDIST_URL="https://download.visualstudio.microsoft.com/download/pr/bd1c8d9d-
 fetch_pinned "$VC_REDIST_URL" "$BUILD_DIR/VC_redist.x64.exe"
 python3 "$SCRIPT_DIR/extract_vcruntime.py" "$BUILD_DIR/VC_redist.x64.exe" "$BUILD_DIR/vcruntime.zip"
 
-(cd "$SCRIPT_DIR" && makensis -V2 -DVERSION="$VERSION" ClipEmSetup.nsi)
+# VIProductVersion takes X.X.X.X only - a dev version's "-dev.<stamp>"
+# stays in the text version fields.
+(cd "$SCRIPT_DIR" && makensis -V2 -DVERSION="$VERSION" -DVI_VERSION="${VERSION%%-*}.0" ClipEmSetup.nsi)
 
 if [[ -n "${CLIPEM_CODESIGN_PFX:-}" ]]; then
   osslsigncode sign -pkcs12 "$CLIPEM_CODESIGN_PFX" -pass "${CLIPEM_CODESIGN_PASSWORD:-}" \
