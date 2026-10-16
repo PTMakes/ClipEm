@@ -9,7 +9,7 @@ import argparse
 import os
 import subprocess
 
-from release_common import UPDATES_BASE_URL, sha256_of_file, write_json_atomic
+from release_common import release_asset_url, sha256_of_file, write_json_atomic
 
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store"}
 
@@ -106,7 +106,7 @@ def parse_args():
     )
     parser.add_argument(
         "--url",
-        help=f"Public URL of the zip (default: {UPDATES_BASE_URL}/<zip name>)",
+        help="Public URL of the zip (default: its GitHub release asset URL)",
     )
     return parser.parse_args()
 
@@ -123,7 +123,7 @@ def main():
     if any(manifest_args):
         if not all(manifest_args):
             raise SystemExit("--zip, --version, and --manifest-out must be given together")
-        url = args.url or f"{UPDATES_BASE_URL}/{os.path.basename(args.zip)}"
+        url = args.url or release_asset_url(args.version, os.path.basename(args.zip))
         write_version_manifest(args.zip, args.version, url, args.manifest_out)
 
 
