@@ -109,6 +109,39 @@ def test_update_replaces_code_and_keeps_user_files(install):
     assert not os.path.exists(os.path.join(shared, updater.BACKUP_DIR_NAME))
 
 
+def test_reinstall_without_settings_resets_them(install):
+    import reinstall
+
+    shared, publish = install
+    publish(_shared_zip(dict(NEW_FILES, VERSION=OLD_VERSION)), version=OLD_VERSION)
+    request = {"keep_obs_settings": False, "keep_clipem_settings": False}
+
+    ok, message = updater.apply_update(preserved=reinstall.preserved_paths(request))
+
+    assert ok, message
+    assert _read(shared, "Installer/run.py") == "new run.py"
+    assert _read(shared, "OBS-Config/basic.ini") == "shipped OBS settings"
+    assert _read(shared, "run_config.json") == "shipped run config"
+    assert _read(shared, "Scripts/replay_buffer_save_sound.wav") == "shipped sound"
+    assert not os.path.exists(os.path.join(shared, "pending_obs_settings.json"))
+    # Locks and the macOS launcher are kept regardless.
+    assert _read(shared, "tray-widget/.tray.lock") == "4242"
+    assert _read(shared, "Installer/launch_obs.command").endswith("user's launcher")
+
+
+def test_reinstall_keeping_obs_settings_only(install):
+    import reinstall
+
+    shared, publish = install
+    publish(_shared_zip(NEW_FILES))
+    request = {"keep_obs_settings": True, "keep_clipem_settings": False}
+
+    assert updater.apply_update(preserved=reinstall.preserved_paths(request))[0]
+    assert _read(shared, "OBS-Config/basic.ini") == "user's OBS settings"
+    assert _read(shared, "pending_obs_settings.json") == "user's queued settings"
+    assert _read(shared, "run_config.json") == "shipped run config"
+
+
 def test_shipped_file_is_used_when_there_is_no_user_copy(install):
     shared, publish = install
     os.remove(os.path.join(shared, "Scripts", "replay_buffer_save_sound.wav"))

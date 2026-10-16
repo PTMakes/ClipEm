@@ -12,7 +12,3 @@
 /updates/*
   Cache-Control: no-cache
   Access-Control-Allow-Origin: *
-
-/linuxinstall.sh
-  Cache-Control: no-cache
-  Content-Type: text/plain; charset=utf-8

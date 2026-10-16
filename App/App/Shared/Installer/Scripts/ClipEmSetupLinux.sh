@@ -1,6 +1,6 @@
 #!/bin/bash
-# ClipEm's Linux installer - also hosted as-is at https://clipem.app/linuxinstall.sh
-# for `curl -fsSL https://clipem.app/linuxinstall.sh | bash`.
+# ClipEm's Linux installer - also uploaded as-is as an asset of every GitHub
+# release of PTMakes/ClipEm, for `curl -fsSL https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupLinux.sh | bash`.
 #
 # Downloads (with sha256 verification against the install manifest of the
 # latest GitHub release of PTMakes/ClipEm, whose Ed25519 release
@@ -10,7 +10,7 @@
 # Safe to re-run any time - every step here only fetches what's missing.
 #
 # Usage:
-#   curl -fsSL https://clipem.app/linuxinstall.sh | bash
+#   curl -fsSL https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupLinux.sh | bash
 #   ./Setup_Linux.sh [install-dir]
 set -euo pipefail
 
@@ -162,7 +162,7 @@ sha256_verify() {
 
 # --- 2. Portable Python ----------------------------------------------------
 # Always ClipEm's own (python-build-standalone, with an Xft-enabled Tk - see
-# Dev/repack-linux-python-xft.sh), never the system python3: that one may be
+# Dev/build/repack-linux-python-xft.sh), never the system python3: that one may be
 # too old, lack tkinter entirely (so no graphical wizard), or change version
 # under the tray widget's compiled dependencies with the next distro upgrade.
 

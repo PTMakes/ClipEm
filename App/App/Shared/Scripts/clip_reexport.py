@@ -16,7 +16,7 @@ Settings (set by ClipEm's setup wizard, editable in OBS's Tools > Scripts):
   split_tracks_enabled, reexport_enabled, target_mb, crop_seconds
 
 Uses the ffmpeg ClipEm installs (App/Windows/ffmpeg or App/Linux/ffmpeg,
-built from official source by Dev/build-ffmpeg.sh), falling back to one on
+built from official source by Dev/build/build-ffmpeg.sh), falling back to one on
 PATH (macOS). Encoding runs in a background thread at low CPU priority so it
 never stalls OBS or the game being recorded.
 """

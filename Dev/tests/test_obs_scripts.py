@@ -288,3 +288,15 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
             "the tray's restart request should press the capture's Select Monitor button"
         assert libobs.ui_tasks == 1, "...on OBS's UI thread, once"
         assert "clipem_reload_request" not in fake.capture_settings.values
+
+
+def test_clip_sound_volume_scaling_matches_obs_config(tmp_path, monkeypatch):
+    """replay_buffer_save_sound.py can't import obs_config inside OBS, so it
+    carries its own copy of the Windows volume scaling."""
+    import inspect
+
+    import obs_config
+
+    script = _load_script(os.path.join(SCRIPTS_DIR, "replay_buffer_save_sound.py"), FakeObspython(tmp_path), monkeypatch)
+    for name in ("wav_at_volume", "play_wav_windows"):
+        assert inspect.getsource(getattr(script, name)) == inspect.getsource(getattr(obs_config, name))

@@ -407,8 +407,10 @@ def install_obs(manifest, system, log):
     log(f"OBS updated to {updater.artifact_version(entry)}.")
 
 
-def _pip_install(python, requirements, log, target=None):
+def _pip_install(python, requirements, log, target=None, force=False):
     args = [python, "-m", "pip", "install", "--disable-pip-version-check", "--no-warn-script-location"]
+    if force:
+        args.append("--force-reinstall")
     if target:
         args += ["--target", target]
     log(f"Installing {os.path.relpath(requirements, SHARED_DIR)}...")
@@ -428,7 +430,9 @@ def _write_tray_python_pin(deps_dir, python):
         f.write(os.path.realpath(python))
 
 
-def install_packages(system, requirement_sets, log):
+def install_packages(system, requirement_sets, log, force=False):
+    """force: reinstall even what's already at the pinned version (a clean
+    reinstall). Linux's tray-deps folder is always built afresh anyway."""
     if system == "Linux":
         linux_dir = os.path.join(APP_DIR, "Linux")
         staging = os.path.join(linux_dir, ".tray-deps" + STAGING_SUFFIX)
@@ -444,7 +448,7 @@ def install_packages(system, requirement_sets, log):
         return
     python = python_exe(system)
     for requirements in requirement_sets:
-        _pip_install(python, requirements, log)
+        _pip_install(python, requirements, log, force=force)
 
 
 def install_linux_python(manifest, log):

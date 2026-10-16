@@ -6,7 +6,7 @@ import { RELEASES_URL } from "./site";
 
 const WINDOWS_EXE_URL =
   process.env.NEXT_PUBLIC_CLIPEM_EXE_URL ?? "https://clipem.app/ClipEmSetup.exe";
-const LINUX_INSTALL_COMMAND = "curl -fsSL https://clipem.app/linuxinstall.sh | bash";
+const LINUX_INSTALL_COMMAND = "curl -fsSL https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupLinux.sh | bash";
 // Read from the install manifest at build time, so each release bumps it.
 const VERSION_LABEL = (
   <p className="version-label">

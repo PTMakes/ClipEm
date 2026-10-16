@@ -14,7 +14,7 @@ from our side.
 Exposes just the slice of pystray's API tray_widget.py actually uses, so
 that module can import this in place of pystray with no other changes:
 Icon(name, icon=PIL_image, title=str, menu=Menu), Menu(*items),
-MenuItem(text_or_fn, action, enabled=fn_or_None).
+MenuItem(text_or_fn, action, enabled=fn_or_None, visible=fn_or_None).
 
 Specs implemented (minimally - one level of submenus, no checkboxes/icons
 per item):
@@ -67,9 +67,10 @@ def _run_action(item, icon):
     threading.Thread(target=item.action, args=(icon, item), daemon=True, name="tray-menu-action").start()
 
 class MenuItem:
-    def __init__(self, text, action, enabled=None):
+    def __init__(self, text, action, enabled=None, visible=None):
         self._text = text
         self._enabled = enabled
+        self._visible = visible
         # Matches pystray's own convention: passing a Menu as the action
         # makes this item a submenu container (hover to expand) instead of
         # a directly-clickable entry - see Quit's "close OBS too?" submenu
@@ -86,6 +87,9 @@ class MenuItem:
 
     def is_enabled(self):
         return self._enabled(self) if self._enabled is not None else True
+
+    def is_visible(self):
+        return self._visible(self) if self._visible is not None else True
 
 
 class Menu:
@@ -196,7 +200,7 @@ def _item_properties(item):
     props = {
         "label": Variant("s", item.label()),
         "enabled": Variant("b", item.is_enabled()),
-        "visible": Variant("b", True),
+        "visible": Variant("b", item.is_visible()),
         "type": Variant("s", "standard"),
     }
     if item.submenu is not None:

@@ -9,7 +9,7 @@ anything else is installed), the portable Linux Python, and system Pythons.
 
 Verification only - nothing secret is ever handled here, so the usual
 constant-time concerns don't apply. Signing happens at release time with
-openssl (see Dev/release_common.py).
+openssl (see Dev/release/release_common.py).
 
 CLI (used by bootstrap.ps1):
     python ed25519_verify.py <public-key-file> <message-file> <signature-file>

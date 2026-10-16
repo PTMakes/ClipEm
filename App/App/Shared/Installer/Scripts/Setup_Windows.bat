@@ -4,7 +4,7 @@ cd /d "%~dp0"
 
 set "PYTHON_DIR=%~dp0App\Windows\Python"
 set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
-rem sha256 of python-3.12.10-embed-amd64.zip - must match Dev/upstream-pins.json
+rem sha256 of python-3.12.10-embed-amd64.zip - must match Dev/release/upstream-pins.json
 rem (and WINDOWS_PYTHON_VERSION in setup.py); CI checks the two agree.
 set "PYTHON_SHA256=4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
 

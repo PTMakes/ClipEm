@@ -32,10 +32,10 @@
 #     libraries through TCL_LIBRARY, not an archive appended to the .so
 #     (which `strip` below would destroy anyway).
 #
-# Usage: ./repack-linux-python-xft.sh <cpython-version> <pbs-tag>
-#   e.g. ./repack-linux-python-xft.sh 3.12.14 20260924
+# Usage: ./build/repack-linux-python-xft.sh <cpython-version> <pbs-tag>
+#   e.g. ./build/repack-linux-python-xft.sh 3.12.14 20260924
 #
-# The vanilla asset's sha256 is pinned in upstream-pins.json; the first time
+# The vanilla asset's sha256 is pinned in release/upstream-pins.json; the first time
 # a new PBS release is used, the pin is taken from that release's own
 # published SHA256SUMS (and re-checked against it on every later run).
 #
@@ -52,10 +52,10 @@ PBS_TAG="${2:?Usage: $0 <cpython-version> <pbs-tag>}"
 # explicit point sizes and TkDefaultFont correctly.
 TCLTK_86_VERSION="8.6.16"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DIST_DIR="$SCRIPT_DIR/dist"
-PINS_FILE="$SCRIPT_DIR/upstream-pins.json"
-WORK_DIR="$SCRIPT_DIR/.linux-python-xft-work"
+DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+DIST_DIR="$DEV_DIR/dist"
+PINS_FILE="$DEV_DIR/release/upstream-pins.json"
+WORK_DIR="$DEV_DIR/.linux-python-xft-work"
 mkdir -p "$DIST_DIR"
 
 ASSET="cpython-${PY_VERSION}+${PBS_TAG}-x86_64-unknown-linux-gnu-install_only.tar.gz"
@@ -80,7 +80,7 @@ path, url, sha = sys.argv[1], sys.argv[2], sys.argv[3]
 pins = json.load(open(path))
 pins[url] = sha
 write_json_atomic(path, pins)
-" "$PINS_FILE" "$1" "$2" "$SCRIPT_DIR"
+" "$PINS_FILE" "$1" "$2" "$DEV_DIR/release"
 }
 
 VANILLA_SHA256="$(pin_lookup "$VANILLA_URL")"

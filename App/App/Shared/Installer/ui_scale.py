@@ -15,7 +15,7 @@ Why the platforms need different handling:
     bitmap-stretches it (blurry, and the only reason it used to look
     "bigger" than on Linux). enable_dpi_awareness() opts out of that; Tk
     then reports the real DPI through `tk scaling`.
-  - Linux (Xft Tk - see Dev/repack-linux-python-xft.sh): point-size fonts
+  - Linux (Xft Tk - see Dev/build/repack-linux-python-xft.sh): point-size fonts
     are handed to Xft as points and converted with the desktop's Xft.dpi
     resource, but Tk's own pixel math (`tk scaling`) comes from the X
     server's reported screen size, which is usually a flat 96 regardless

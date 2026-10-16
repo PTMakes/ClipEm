@@ -1,7 +1,7 @@
 """
 Removes the OS-level boot/login autostart entry created by Setup's
-autostart step (see apply_boot_autostart) without re-running the rest of
-Setup. UninstallAutostart.bat/.sh are thin per-OS shims that just find a
+autostart step (see apply_boot_autostart) - and on Windows the Start Menu
+entry - without re-running the rest of Setup. UninstallAutostart.bat/.sh are thin per-OS shims that just find a
 Python interpreter and exec this file, same pattern as Setup*.
 
 Safe to run any time - a no-op if nothing was ever registered. Only removes
@@ -27,6 +27,7 @@ def main():
     for entry in others:
         # Another ClipEm folder's (or an older version's) - not ours to remove.
         print(f"Left in place: {entry['path']} starts ClipEm from somewhere else.")
+    autostart.remove_start_menu_shortcut()
 
 
 if __name__ == "__main__":

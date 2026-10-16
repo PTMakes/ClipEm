@@ -80,14 +80,21 @@ MAX_ZIP_ENTRIES = 5000
 # to, as opposed to code/scripts shipped fresh with every release. Top-level
 # entries are simply never swapped; nested ones live inside folders that are
 # swapped wholesale, so the live copy is carried over into the new folder.
-PRESERVED_RELATIVE_PATHS = {
+# Split in three so a clean reinstall (reinstall.py) can reset the OBS or
+# ClipEm settings while still keeping the rest.
+OBS_SETTINGS_PATHS = {
     "OBS-Config",
+    "pending_obs_settings.json",
+    # The app audio slots in OBS's scene collection - meaningless without it.
+    "app_tracks.json",
+}
+CLIPEM_SETTINGS_PATHS = {
     "run_config.json",
     "update_config.json",
-    "pending_obs_settings.json",
-    "app_tracks.json",
     # Setup's "replace the clip sound" copies the user's .wav over this.
     "Scripts/replay_buffer_save_sound.wav",
+}
+ALWAYS_PRESERVED_PATHS = {
     # Single-instance locks of the (possibly still running) tray widget and
     # its settings dialog - losing them lets a second tray icon start.
     "tray-widget/.tray.lock",
@@ -97,6 +104,7 @@ PRESERVED_RELATIVE_PATHS = {
     # The macOS Finder alias Setup creates points at this launcher.
     "Installer/launch_obs.command",
 }
+PRESERVED_RELATIVE_PATHS = OBS_SETTINGS_PATHS | CLIPEM_SETTINGS_PATHS | ALWAYS_PRESERVED_PATHS
 
 STAGING_DIR_NAME = ".update-staging"
 BACKUP_DIR_NAME = ".update-backup"
@@ -373,11 +381,11 @@ def _read_package_version(extracted_shared):
         return None
 
 
-def carry_over_preserved(live_dir, staged_dir):
-    """Copies each nested PRESERVED_RELATIVE_PATHS file that exists in the
-    live install into the staged tree (over any shipped copy), so swapping
-    in the staged folder keeps it."""
-    for rel_path in sorted(PRESERVED_RELATIVE_PATHS):
+def carry_over_preserved(live_dir, staged_dir, preserved=None):
+    """Copies each nested `preserved` (default PRESERVED_RELATIVE_PATHS) file
+    that exists in the live install into the staged tree (over any shipped
+    copy), so swapping in the staged folder keeps it."""
+    for rel_path in sorted(PRESERVED_RELATIVE_PATHS if preserved is None else preserved):
         if "/" not in rel_path:
             continue
         src = os.path.join(live_dir, *rel_path.split("/"))
@@ -389,22 +397,29 @@ def carry_over_preserved(live_dir, staged_dir):
         shutil.copy2(src, dest)
 
 
-def swap_in(staged_dir, dest_dir, backup_dir):
-    """Moves every entry of staged_dir into dest_dir by rename, first moving
-    any existing entry of the same name into backup_dir. On failure, every
-    move made so far is undone before re-raising."""
+def swap_in(staged_dir, dest_dir, backup_dir, preserved=None, reset=()):
+    """Moves every entry of staged_dir (except the top-level `preserved`
+    ones, default PRESERVED_RELATIVE_PATHS) into dest_dir by rename, first
+    moving any existing entry of the same name into backup_dir. Entries of
+    dest_dir named in `reset` go to backup_dir too, even with nothing staged
+    to replace them. On failure, every move made so far is undone before
+    re-raising."""
+    preserved = PRESERVED_RELATIVE_PATHS if preserved is None else preserved
+    names = set(os.listdir(staged_dir)) | {name for name in reset if os.path.lexists(os.path.join(dest_dir, name))}
     moved = []  # (name, had_previous)
     os.makedirs(backup_dir, exist_ok=True)
     try:
-        for name in sorted(os.listdir(staged_dir)):
-            if name in PRESERVED_RELATIVE_PATHS:
+        for name in sorted(names):
+            if name in preserved:
                 continue
             dest = os.path.join(dest_dir, name)
             had_previous = os.path.lexists(dest)
             if had_previous:
                 os.replace(dest, os.path.join(backup_dir, name))
             moved.append((name, had_previous))
-            os.replace(os.path.join(staged_dir, name), dest)
+            staged = os.path.join(staged_dir, name)
+            if os.path.lexists(staged):
+                os.replace(staged, dest)
     except BaseException:
         for name, had_previous in reversed(moved):
             dest = os.path.join(dest_dir, name)
@@ -422,10 +437,15 @@ def _remove_path(path):
         os.remove(path)
 
 
-def apply_update(manifest=None):
+def apply_update(manifest=None, preserved=None):
     """Downloads and verifies the "shared" zip for this platform and swaps
-    it into App/Shared, preserving PRESERVED_RELATIVE_PATHS.
+    it into App/Shared, preserving `preserved` (default
+    PRESERVED_RELATIVE_PATHS). The other PRESERVED_RELATIVE_PATHS are reset:
+    replaced by the shipped copy, or removed if the package has none - how
+    reinstall.py starts the OBS or ClipEm settings afresh.
     Returns (ok, message)."""
+    preserved = PRESERVED_RELATIVE_PATHS if preserved is None else set(preserved)
+    reset = {path for path in PRESERVED_RELATIVE_PATHS - preserved if "/" not in path}
     try:
         manifest = manifest or fetch_manifest()
         entry = manifest_entry(manifest, _platform_key(), "shared")
@@ -460,8 +480,8 @@ def apply_update(manifest=None):
                 f"published version ({manifest_version}). Aborting update."
             )
 
-        carry_over_preserved(SHARED_DIR, extracted_shared)
-        swap_in(extracted_shared, SHARED_DIR, backup_dir)
+        carry_over_preserved(SHARED_DIR, extracted_shared, preserved)
+        swap_in(extracted_shared, SHARED_DIR, backup_dir, preserved, reset)
         return True, f"Updated ClipEm to version {manifest_version}."
     except Exception as exc:
         return False, f"Update failed (previous version kept): {exc}"

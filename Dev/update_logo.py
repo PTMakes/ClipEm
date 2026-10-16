@@ -4,17 +4,17 @@ files (ClipEm.png, ClipEm.webp, both 1080x1080) that live next to this
 script, then re-checksums App/Shared so setup.py's integrity check doesn't
 flag the new files as unexpected.
 
-Run this after replacing Dev/ClipEm.png / Dev/ClipEm.webp with new artwork:
+Run this after replacing Dev/assets/ClipEm.png / Dev/assets/ClipEm.webp with new artwork:
 
     python3 Dev/update_logo.py
 
 Derived assets (all regenerated, none hand-edited - re-run this instead of
 touching them directly):
-  - PTMClipEm-App/App/Shared/tray-widget/ClipEm.png  (tray icon source)
-  - PTMClipEm-App/App/Shared/tray-widget/ClipEm.ico  (Windows shortcut icon)
-  - Dev/installer/windows/ClipEm.ico                 (NSIS installer icon)
-  - PTMClipEm-Website/app/icon.png                   (Next.js favicon)
-  - PTMClipEm-Website/public/logo.webp               (hero logo)
+  - App/App/Shared/tray-widget/ClipEm.png  (tray icon source)
+  - App/App/Shared/tray-widget/ClipEm.ico  (Windows shortcut icon)
+  - Dev/installer/windows/ClipEm.ico       (NSIS installer icon)
+  - Website/app/icon.png                   (Next.js favicon)
+  - Website/public/logo.webp               (hero logo)
 """
 
 import os
@@ -26,14 +26,14 @@ from PIL import Image
 DEV_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(DEV_DIR)
 
-SOURCE_PNG = os.path.join(DEV_DIR, "ClipEm.png")
-SOURCE_WEBP = os.path.join(DEV_DIR, "ClipEm.webp")
+SOURCE_PNG = os.path.join(DEV_DIR, "assets", "ClipEm.png")
+SOURCE_WEBP = os.path.join(DEV_DIR, "assets", "ClipEm.webp")
 
-APP_SHARED_DIR = os.path.join(REPO_ROOT, "PTMClipEm-App", "App", "Shared")
+APP_SHARED_DIR = os.path.join(REPO_ROOT, "App", "App", "Shared")
 TRAY_WIDGET_DIR = os.path.join(APP_SHARED_DIR, "tray-widget")
 NSIS_DIR = os.path.join(DEV_DIR, "installer", "windows")
-WEBSITE_APP_DIR = os.path.join(REPO_ROOT, "PTMClipEm-Website", "app")
-WEBSITE_PUBLIC_DIR = os.path.join(REPO_ROOT, "PTMClipEm-Website", "public")
+WEBSITE_APP_DIR = os.path.join(REPO_ROOT, "Website", "app")
+WEBSITE_PUBLIC_DIR = os.path.join(REPO_ROOT, "Website", "public")
 
 ICO_SIZES = [(16, 16), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
 FAVICON_SIZE = (512, 512)
@@ -83,7 +83,7 @@ def main():
 
     print("Re-checksumming App/Shared...", flush=True)
     subprocess.run(
-        [sys.executable, os.path.join(DEV_DIR, "generate_checksums.py"), APP_SHARED_DIR],
+        [sys.executable, os.path.join(DEV_DIR, "release", "generate_checksums.py"), APP_SHARED_DIR],
         check=True,
     )
 

@@ -25,10 +25,13 @@ import obs_config  # noqa: E402
 import obs_install  # noqa: E402
 import obs_process  # noqa: E402
 import portable_launch_helper as helper  # noqa: E402
+import reinstall  # noqa: E402
 import updater  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
     DEFAULT_RUN_CONFIG,
+    INSTALLER_DIR,
+    ROOT_DIR,
     SHARED_DIR,
     TRAY_LOCK_PATH,
     TRAY_PYTHON_PIN_FILENAME,
@@ -41,6 +44,10 @@ from clipem_common import (  # noqa: E402
 )
 
 TRAY_WIDGET_SCRIPT = os.path.join(SHARED_DIR, "tray-widget", "tray_widget.py")
+
+# Set for the tray widget when OBS was started without --startreplaybuffer
+# because the clips folder was missing - see _obs_launch_flags.
+REPLAY_BUFFER_DEFERRED_ENV = "CLIPEM_REPLAY_BUFFER_DEFERRED"
 
 POST_UPDATE_FLAG = "--post-update"
 # Added by _restart_self: this launch replaces the one that started it, which
@@ -256,6 +263,21 @@ def _ensure_obs(system):
     return exe
 
 
+def _obs_launch_flags():
+    """(OBS's flags after the portable one, extra env for the tray widget).
+    With the clips folder missing - e.g. on a cloud drive that isn't mounted
+    yet at login - --startreplaybuffer would only get OBS's "path is
+    invalid" error dialog, so OBS starts without it and the tray widget
+    starts the replay buffer once the folder is there
+    (tray-widget/clip_folder.py)."""
+    clips_dir = obs_config.load_clip_folder()
+    if os.path.isdir(clips_dir):
+        return ["--startreplaybuffer", "--minimize-to-tray", "--multi"], {}
+    log.warning(f"Clips folder {clips_dir} isn't there - starting OBS without the replay buffer; "
+                "the tray widget starts it once the folder is.")
+    return ["--minimize-to-tray", "--multi"], {REPLAY_BUFFER_DEFERRED_ENV: "1"}
+
+
 def run_windows(config):
     platform_dir = obs_install.platform_dir("Windows")
     exe = _ensure_obs("Windows")
@@ -264,9 +286,10 @@ def run_windows(config):
     helper.prepare(platform_dir)
     _clear_sentinel(os.path.join(platform_dir, "config", "obs-studio"))
 
+    obs_flags, tray_env = _obs_launch_flags()
     if config["autostart_obs"]:
         subprocess.Popen(
-            [exe, "--portable", "--startreplaybuffer", "--minimize-to-tray", "--multi"],
+            [exe, "--portable", *obs_flags],
             cwd=os.path.dirname(exe),
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
@@ -276,7 +299,7 @@ def run_windows(config):
 
     if config["autostart_tray"]:
         python_exe = sys.executable  # the bundled embeddable Python running this script
-        _start_tray_widget(python_exe)
+        _start_tray_widget(python_exe, extra_env=tray_env)
     else:
         log.info("Boot autostart for the tray widget is off.")
 
@@ -290,16 +313,15 @@ def run_macos(config):
     helper.prepare(platform_dir)
     _clear_sentinel(os.path.join(platform_dir, "config", "obs-studio"))
 
+    obs_flags, tray_env = _obs_launch_flags()
     if config["autostart_obs"]:
-        subprocess.Popen(
-            [exe, "--portable", "--startreplaybuffer", "--minimize-to-tray", "--multi"]
-        )
+        subprocess.Popen([exe, "--portable", *obs_flags])
         log.info("Started OBS.")
     else:
         log.info("Boot autostart for OBS is off - config wired, start it yourself.")
 
     if config["autostart_tray"]:
-        _start_tray_widget(sys.executable, tray_deps_dir=os.path.join(platform_dir, "tray-deps"))
+        _start_tray_widget(sys.executable, extra_env=tray_env, tray_deps_dir=os.path.join(platform_dir, "tray-deps"))
     else:
         log.info("Boot autostart for the tray widget is off.")
 
@@ -316,9 +338,10 @@ def run_linux(config):
     # App/Linux so the helper still finds App/Shared as its parent's Shared/.
     helper.prepare(platform_dir, config_link_name=os.path.join("obs-install", "config"))
     _clear_sentinel(os.path.join(obs_install_dir, "config", "obs-studio"))
+    obs_flags, tray_env = _obs_launch_flags()
     if config["autostart_obs"]:
         subprocess.Popen(
-            [exe, "-p", "--startreplaybuffer", "--minimize-to-tray", "--multi"],
+            [exe, "-p", *obs_flags],
             cwd=os.path.dirname(exe),
         )
         log.info("Started OBS.")
@@ -326,7 +349,7 @@ def run_linux(config):
         log.info("Boot autostart for OBS is off - config wired, start it yourself.")
 
     if config["autostart_tray"]:
-        tray_env = {"PYSTRAY_BACKEND": "appindicator"}
+        tray_env["PYSTRAY_BACKEND"] = "appindicator"
         _start_tray_widget(sys.executable, extra_env=tray_env, tray_deps_dir=os.path.join(platform_dir, "tray-deps"))
     else:
         log.info("Boot autostart for the tray widget is off.")
@@ -383,6 +406,65 @@ def _install_pending_update():
         log.exception("Installing the update failed")
         _show_error(f"ClipEm couldn't finish updating ({exc}).\n\nIt will keep using the current version "
                     "and offer the update again.")
+
+
+def _reinstall_if_requested():
+    """Before OBS starts: carries out a clean reinstall chosen in Settings
+    (see reinstall.py). The request is cleared before anything that could
+    fail on every launch, so a failure is reported once, not repeatedly.
+    Exits instead of returning when Setup takes over."""
+    request = reinstall.load_request()
+    if not request:
+        return
+    try:
+        manifest = updater.fetch_manifest()
+    except Exception as exc:
+        reinstall.clear_request()
+        log.warning(f"Reinstall: couldn't get the update manifest: {exc}")
+        _show_error(f"ClipEm couldn't download a fresh copy to reinstall from ({exc}).\n\n"
+                    "Nothing was changed - starting ClipEm as it is.")
+        return
+    try:
+        if request["stage"] == reinstall.STAGE_SHARED:
+            log.info(f"Reinstalling ClipEm {manifest['version']} (request: {request})...")
+            ok, message = _run_with_notice(
+                "Reinstalling ClipEm...", lambda: reinstall.reinstall_shared(request, manifest),
+            )
+            log.info(message)
+            if not ok:
+                reinstall.clear_request()
+                _show_error(message)
+                return
+            _restart_self([])  # the freshly installed run.py does the rest
+        reinstall.clear_request()
+        plan = reinstall.component_plan(manifest)
+        if plan:
+            parts = reinstall.describe_plan(plan)
+            log.info(f"Reinstalling: {'; '.join(parts)}")
+            _run_with_notice(
+                "Reinstalling ClipEm - downloading:\n  " + "\n  ".join(parts) + "\n\nThis can take a few minutes.",
+                lambda: reinstall.reinstall_components(manifest, plan, log.info),
+            )
+        log.info("Reinstall finished.")
+    except Exception as exc:
+        log.exception("Reinstalling failed")
+        _show_error(f"ClipEm couldn't finish reinstalling ({exc}).\n\nWhat was already reinstalled stays; "
+                    "the rest keeps the previous version.")
+        return
+    if not request.get("keep_obs_settings"):
+        _start_setup()
+
+
+def _start_setup():
+    """Opens Setup (its finish page starts ClipEm again) and exits."""
+    log.info("OBS settings were reset - starting Setup instead of OBS.")
+    kwargs = {"cwd": ROOT_DIR}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = _DETACHED_FLAGS
+    else:
+        kwargs["start_new_session"] = True
+    subprocess.Popen([sys.executable, os.path.join(INSTALLER_DIR, "setup.py")], **kwargs)
+    sys.exit(0)
 
 
 UPDATE_NOW, UPDATE_NEXT_LAUNCH, UPDATE_SKIP = "now", "next_launch", "skip"
@@ -597,6 +679,7 @@ def main():
     # (what to launch automatically at boot) apply.
     may_update = _claim_launch()
     if may_update:
+        _reinstall_if_requested()
         _install_pending_update()
     # Before OBS ever starts: the shipped obs-websocket password is public
     # (same file in every install), so replace it if Setup hasn't yet.

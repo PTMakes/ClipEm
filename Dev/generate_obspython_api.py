@@ -23,12 +23,14 @@ import ast
 import json
 import re
 import sys
+from pathlib import Path
 
-from release_common import SCRIPT_DIR
+sys.path.insert(0, str(Path(__file__).resolve().parent / "release"))
+from release_common import DEV_DIR  # noqa: E402
 
-OBS_INSTALL = SCRIPT_DIR / "obs-install"
-OBS_SRC = SCRIPT_DIR / "obs-src" / "shared" / "obs-scripting"
-OUT_PATH = SCRIPT_DIR / "tests" / "obspython_api.json"
+OBS_INSTALL = DEV_DIR / "obs-install"
+OBS_SRC = DEV_DIR / "obs-src" / "shared" / "obs-scripting"
+OUT_PATH = DEV_DIR / "tests" / "obspython_api.json"
 
 
 def _obs_version():

@@ -92,7 +92,7 @@ def parse_args():
         description="Generate checksums.json for an app dir, and optionally the "
         "update version manifest (clipem-latest.json) for a release zip."
     )
-    parser.add_argument("app_dir", help="Path to PTMClipEm-App/App/Shared to checksum")
+    parser.add_argument("app_dir", help="Path to App/App/Shared to checksum")
     parser.add_argument("--zip", help="Path to the shared-resources release zip")
     parser.add_argument("--version", help="Version string to record in the version manifest")
     parser.add_argument(

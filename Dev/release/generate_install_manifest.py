@@ -50,13 +50,13 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--linux-obs-tar", required=True)
     parser.add_argument(
         "--linux-python-tar", required=True,
-        help="Xft-enabled build produced by Dev/repack-linux-python-xft.sh",
+        help="Xft-enabled build produced by Dev/build/repack-linux-python-xft.sh",
     )
-    parser.add_argument("--linux-ffmpeg", required=True, help="Linux archive from Dev/build-ffmpeg.sh")
-    parser.add_argument("--windows-ffmpeg", required=True, help="Windows archive from Dev/build-ffmpeg.sh")
+    parser.add_argument("--linux-ffmpeg", required=True, help="Linux archive from Dev/build/build-ffmpeg.sh")
+    parser.add_argument("--windows-ffmpeg", required=True, help="Windows archive from Dev/build/build-ffmpeg.sh")
     parser.add_argument(
         "--ffmpeg-source", required=True,
-        help="Source tarball from Dev/build-ffmpeg.sh - published for the GPL, linked from clipem.app",
+        help="Source tarball from Dev/build/build-ffmpeg.sh - published for the GPL, linked from clipem.app",
     )
     parser.add_argument("--windows-obs-version", required=True)
     parser.add_argument("--windows-python-version", required=True)

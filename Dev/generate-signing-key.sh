@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Creates ClipEm's Ed25519 release signing key (once) and stamps its public
 # half into everything that ships it:
-#   - PTMClipEm-App/App/Shared/Installer/signing_public_key.txt
-#   - PTMClipEm-App/App/Shared/Installer/Scripts/ClipEmSetupLinux.sh
+#   - App/App/Shared/Installer/signing_public_key.txt
+#   - App/App/Shared/Installer/Scripts/ClipEmSetupLinux.sh
 # (the Windows installer bundles signing_public_key.txt at build time).
 #
 # The private key is written OUTSIDE the repo, to $CLIPEM_SIGNING_KEY or
@@ -18,7 +18,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY_PATH="${CLIPEM_SIGNING_KEY:-$HOME/.config/clipem/signing-key.pem}"
-INSTALLER_DIR="$SCRIPT_DIR/../PTMClipEm-App/App/Shared/Installer"
+INSTALLER_DIR="$SCRIPT_DIR/../App/App/Shared/Installer"
 PUBLIC_KEY_FILE="$INSTALLER_DIR/signing_public_key.txt"
 LINUX_INSTALLER="$INSTALLER_DIR/Scripts/ClipEmSetupLinux.sh"
 
@@ -39,8 +39,8 @@ PUBLIC_KEY="$(openssl pkey -in "$KEY_PATH" -pubout -outform DER | tail -c 32 | b
 printf '%s\n' "$PUBLIC_KEY" > "$PUBLIC_KEY_FILE"
 sed -i "s|^CLIPEM_SIGNING_PUBLIC_KEY=\".*\"|CLIPEM_SIGNING_PUBLIC_KEY=\"$PUBLIC_KEY\"|" "$LINUX_INSTALLER"
 
-python3 "$SCRIPT_DIR/release_common.py" check-key
+python3 "$SCRIPT_DIR/release/release_common.py" check-key
 echo "Stamped public key $PUBLIC_KEY into:"
 echo "  $PUBLIC_KEY_FILE"
 echo "  $LINUX_INSTALLER"
-echo "Commit those two files (PTMClipEm-App) before the next release."
+echo "Commit those two files (App) before the next release."

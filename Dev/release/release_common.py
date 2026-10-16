@@ -7,7 +7,7 @@ release URLs, and Ed25519 manifest signing.
 Signing uses openssl (3.0+) with a private key that lives OUTSIDE the repo:
   $CLIPEM_SIGNING_KEY, or ~/.config/clipem/signing-key.pem by default.
 Create it once with Dev/generate-signing-key.sh. The matching public key is
-shipped in PTMClipEm-App/App/Shared/Installer/signing_public_key.txt and
+shipped in App/App/Shared/Installer/signing_public_key.txt and
 stamped into ClipEmSetupLinux.sh; clients refuse any manifest it didn't sign.
 
 Releases are GitHub Releases of RELEASE_REPO (PTMakes/ClipEm, or
@@ -54,8 +54,9 @@ import zipfile
 from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-ROOT_DIR = SCRIPT_DIR.parent
-APP_INSTALLER_DIR = ROOT_DIR / "PTMClipEm-App" / "App" / "Shared" / "Installer"
+DEV_DIR = SCRIPT_DIR.parent
+ROOT_DIR = DEV_DIR.parent
+APP_INSTALLER_DIR = ROOT_DIR / "App" / "App" / "Shared" / "Installer"
 PUBLIC_KEY_FILE = APP_INSTALLER_DIR / "signing_public_key.txt"
 LINUX_INSTALLER_SCRIPT = APP_INSTALLER_DIR / "Scripts" / "ClipEmSetupLinux.sh"
 LINUX_INSTALLER_KEY_PREFIX = 'CLIPEM_SIGNING_PUBLIC_KEY="'
@@ -206,7 +207,7 @@ def write_deterministic_zip(base_dir, top, out_path, epoch, progress=None) -> in
 
 def build_portable_bundle(shared_zip, obs_install, python_tar, ffmpeg_tar, setup_script, stage_dir,
                           out_zip, epoch, wheelhouse=None) -> None:
-    """The offline alternative to linuxinstall.sh: a ClipEm/ folder with
+    """The offline alternative to ClipEmSetupLinux.sh: a ClipEm/ folder with
     everything the installer would otherwise download (the shared files, the
     Linux OBS build, the portable Python and ffmpeg, and - from build_wheelhouse
     - the tray widget's packages) plus ClipEmSetupLinux.sh, zipped
@@ -263,7 +264,7 @@ def build_portable_bundle(shared_zip, obs_install, python_tar, ffmpeg_tar, setup
     bar.finish()
 
 
-DOWNLOAD_CACHE_DIR = SCRIPT_DIR / "dist" / "cache"
+DOWNLOAD_CACHE_DIR = DEV_DIR / "dist" / "cache"
 # The offline zips' wheelhouse targets: the Python each platform's bundle runs.
 WHEEL_PLATFORMS = {
     "Windows": ["win_amd64"],

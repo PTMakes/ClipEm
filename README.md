@@ -6,58 +6,11 @@ Everything lives in one repo, [PTMakes/ClipEm](https://github.com/PTMakes/ClipEm
 
 | Folder | Contents |
 | --- | --- |
+| `App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
 | `Dev/` | Build, release and installer tooling. `Dev/obs-src` is the upstream OBS source, as a submodule. |
-| `PTMClipEm-App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
-| `PTMClipEm-Website/` | clipem.app: the landing page, a copy of the signed update manifests for old installs, and `linuxinstall.sh`. |
+| `Website/` | clipem.app: the landing page and a copy of the signed update manifests for old installs. |
 
-```
-git clone https://github.com/PTMakes/ClipEm.git
-git -C ClipEm submodule update --init   # Dev/obs-src, only to build Linux OBS
-```
-
-## How an install works
-
-1. **The installer runs.** Windows users get `ClipEmSetupWindows.exe`
-   (NSIS + `installer/windows/bootstrap.ps1`). Linux users run
-   `linuxinstall.sh`, which is `App/Shared/Installer/Scripts/ClipEmSetupLinux.sh`.
-2. **The manifest is checked.** The installer fetches the latest GitHub
-   release's `install-manifest.json` and its `.sig`, then
-   checks the Ed25519 release signature against the public key it ships
-   with.
-3. **Downloads are checked.** Only after the signature checks out does it
-   download what the manifest lists (OBS, a portable Python, the shared
-   zip) and check each file's sha256.
-4. **Setup takes over.** `App/Shared/Installer/setup.py` handles everything
-   from there: the wizard, the OBS config, the tray widget and autostart.
-5. **Launching.** `run.py` only ever starts ClipEm's own OBS build. On
-   Windows and Linux, if it's missing, `run.py` downloads it first
-   (`obs_install.py`, the same verified download Setup uses). If that fails,
-   it shows an error and stops. It never falls back to a system-wide OBS.
-6. **Updates.** On every launch, `run.py` asks `updater.py` for a newer
-   release. The updater makes the same signature and sha256 checks and
-   applies the update atomically, rolling back on failure.
-
-Every release is a GitHub release of PTMakes/ClipEm (tag `vX.Y.Z`). Its
-assets are all the binaries plus the signed manifests, and the manifests'
-URLs point at those assets. GitHub's limit is 2 GiB per asset, with no limit
-on total size or bandwidth. `clipem.app/ClipEmSetup.exe` redirects to the
-latest release's `ClipEmSetupWindows.exe`.
-
-The updater reads `https://github.com/<source repo>/releases/latest/download/install-manifest.json`.
-In the tray widget's Settings, users can change:
-
-- **Update channel.** *Releases* (the default) or *Latest*, which reads the
-  rolling `dev` prerelease instead (see [Testing dev builds](#testing-dev-builds)).
-- **Update source.** The GitHub repo, `PTMakes/ClipEm` by default. Settings
-  explains and asks before changing it. Another repo only works if its
-  manifests are signed with ClipEm's release key.
-
-Installs up to 1.3.5 only know `clipem.app/updates/install-manifest.json`
-(and the even older `clipem-latest.json`). So `release.sh` keeps copying the
-signed manifests to the website. Those installs read it there, download the
-new version from GitHub and read GitHub themselves after that.
-Old R2 objects at `downloads.clipem.app` are left alone, so old links keep
-working.
+#### How to build/run a release:
 
 ## One-time setup
 
@@ -73,27 +26,19 @@ The script does three things:
   (mode 600), outside every repo. Set `CLIPEM_SIGNING_KEY` to keep it
   somewhere else.
 - **Stamps the public key** into
-  `PTMClipEm-App/App/Shared/Installer/signing_public_key.txt` and
+  `App/App/Shared/Installer/signing_public_key.txt` and
   `ClipEmSetupLinux.sh`.
 - **Checks** that everything matches.
 
-Commit the two stamped files in `PTMClipEm-App`. The Windows installer
-picks up the public key at build time.
+Commit the two stamped files in `App`. The Windows installer picks up the public key at build time.
 
 Back the private key up offline, for example in a password manager.
 
-- **If it's lost:** you can't publish updates that existing installs will
-  accept. They would need a manual reinstall.
-- **If it leaks:** anyone could sign a malicious update. Treat it like a
-  production credential.
-
-`release.sh` refuses to run if the key is missing, or if any shipped copy
-of the public key doesn't match it.
+`release.sh` refuses to run if the key is missing, or if any shipped copy of the public key doesn't match it.
 
 ### Tools
 
-You need `git jq zip tar gzip curl openssl` (3.0+), `python3` and
-`makensis` (NSIS).
+You need `git jq zip tar gzip curl openssl python3 makensis`
 
 ### GitHub CLI
 
@@ -119,7 +64,7 @@ Dev/release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
 
 1. **Preflight.** Checks the tools, the signing key, the version bump, that
    the Windows and Linux Pythons share a minor version, and that the release
-   isn't already uploaded. Runs `ruff` and `pytest` for `PTMClipEm-App` and
+   isn't already uploaded. Runs `ruff` and `pytest` for `App` and
    `Dev/` (the GUI layout test is skipped without a display). If the repo has
    uncommitted changes, it asks for a commit message and commits them before
    building (`--allow-dirty` builds from them uncommitted instead).
@@ -136,12 +81,11 @@ Dev/release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
 
    The only changes to the source tree are `App/Shared/VERSION`,
    `App/Shared/checksums.json` and any new entries in
-   `Dev/upstream-pins.json`.
+   `Dev/release/upstream-pins.json`.
 3. **Sign both manifests.**
-4. **Upload everything** to a *draft* GitHub release `vX.Y.Z`. The
-   manifests go last.
-5. **Copy to the website.** The signed manifests and `linuxinstall.sh`
-   go into `PTMClipEm-Website/public`, for installs up to 1.3.5.
+4. **Upload everything**, plus `ClipEmSetupLinux.sh`, to a *draft* GitHub
+   release `vX.Y.Z`, after asking you first. The manifests go last.
+5. **Copy to the website.** The signed manifests go into `Website/public`, for installs up to 1.3.5.
 6. **Commit** "Update X.Y.Z", then ask whether to push `main` and publish the
    draft, which tags the release commit. Answer no to get the commands to
    run later instead.
@@ -174,6 +118,60 @@ For a fresh install of the dev build on Linux:
 ```
 CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json ./ClipEmSetupLinux.sh
 ```
+
+
+
+
+
+
+
+
+
+## How an install works
+
+1. **The installer runs.** Windows users get `ClipEmSetupWindows.exe`
+   (NSIS + `installer/windows/bootstrap.ps1`). Linux users run
+   `App/Shared/Installer/Scripts/ClipEmSetupLinux.sh`, uploaded as an asset of
+   each release (`clipem.app/linuxinstall.sh` redirects to the latest one).
+2. **The manifest is checked.** The installer fetches the latest GitHub
+   release's `install-manifest.json` and its `.sig`, then
+   checks the Ed25519 release signature against the public key it ships
+   with.
+3. **Downloads are checked.** Only after the signature checks out does it
+   download what the manifest lists (OBS, a portable Python, the shared
+   zip) and check each file's sha256.
+4. **Setup takes over.** `App/Shared/Installer/setup.py` handles everything
+   from there: the wizard, the OBS config, the tray widget and autostart.
+5. **Launching.** `run.py` only ever starts ClipEm's own OBS build. On
+   Windows and Linux, if it's missing, `run.py` downloads it first
+   (`obs_install.py`, the same verified download Setup uses). If that fails,
+   it shows an error and stops. It never falls back to a system-wide OBS.
+6. **Updates.** On every launch, `run.py` asks `updater.py` for a newer
+   release. The updater makes the same signature and sha256 checks and
+   applies the update atomically, rolling back on failure.
+
+Every release is a GitHub release of PTMakes/ClipEm (tag `vX.Y.Z`). Its
+assets are all the binaries plus the signed manifests, and the manifests'
+URLs point at those assets. GitHub's limit is 2 GiB per asset, with no limit
+on total size or bandwidth. `clipem.app/ClipEmSetup.exe` redirects to the
+latest release's `ClipEmSetupWindows.exe`.
+
+The updater reads `https://github.com/<source repo>/releases/latest/download/install-manifest.json`.
+In the tray widget's Settings, users can change:
+
+- **Update channel.** *Releases* (the default) or *Latest*, which reads the
+  rolling `dev` prerelease instead (see [Testing dev builds](#testing-dev-builds)).
+- **Update source.** The GitHub repo, `PTMakes/ClipEm` by default. Settings
+  explains and asks before changing it. Another repo only works if its
+  manifests are signed with ClipEm's release key.
+
+Installs prior to 1.3.6 only look for `clipem.app/updates/install-manifest.json`
+(and the even older `clipem-latest.json`). So `release.sh` keeps copying the
+signed manifests to the website. Those installs read it there, download the
+new version from GitHub and then update to read the GitHub themselves after that.
+Old R2 objects at `downloads.clipem.app` are left alone, so old links keep
+working.
+
 
 ### Where versions come from
 
@@ -259,8 +257,8 @@ checks that a 16pt font really renders at 16pt.
 
 | Folder | Checks |
 | --- | --- |
-| `PTMClipEm-App` | `ruff check .` |
-| `PTMClipEm-Website` | `npm run lint`, `npm run typecheck`, `npm run build`, and that each manifest has a signature. |
+| `App` | `ruff check .` |
+| `Website` | `npm run lint`, `npm run typecheck`, `npm run build`, and that each manifest has a signature. |
 | `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; the GUI layout test runs under `xvfb-run` in CI). `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. |
 
 The workflows are in `.github/workflows/`: `app.yml` (App + Dev) and

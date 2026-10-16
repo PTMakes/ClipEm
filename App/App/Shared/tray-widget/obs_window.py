@@ -212,6 +212,62 @@ def show_obs(log):
         return False
 
 
+# Windows: OBS hides itself to the tray with Qt's hide(). ShowWindow() on
+# that window bypasses Qt - Qt still thinks it's hidden and never paints it
+# (a blank white OBS), and the next minimize/hide goes through Qt's stale
+# state. So, as on Linux, a hidden OBS is shown by "clicking" its own tray
+# icon: Qt's QSystemTrayIcon gets clicks as a message to a hidden helper
+# window titled "QTrayIconMessageWindow" (qwindowssystemtrayicon.cpp,
+# MYWM_NOTIFYICON = WM_APP + 101; NIN_SELECT is a left click). OBS toggles on
+# it, so it's only sent when that toggle goes the right way.
+QT_TRAY_WINDOW_TITLE = "QTrayIconMessageWindow"
+QT_MYWM_NOTIFYICON = 0x8000 + 101
+NIN_SELECT = 0x0400
+
+
+def _find_qt_tray_window_win32(pids):
+    """(hwnd, pid) of the tray icon helper window of one of pids, or None."""
+    import ctypes
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    found = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _enum_proc(hwnd, _lparam):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value not in pids:
+            return True
+        buf = ctypes.create_unicode_buffer(len(QT_TRAY_WINDOW_TITLE) + 2)
+        user32.GetWindowTextW(hwnd, buf, len(buf))
+        if buf.value == QT_TRAY_WINDOW_TITLE:
+            found.append((hwnd, pid.value))
+            return False
+        return True
+
+    user32.EnumWindows(_enum_proc, 0)
+    return found[0] if found else None
+
+
+def _click_tray_icon_win32(pids, log):
+    """Toggles OBS's window the way clicking its tray icon does. True if the
+    click was sent."""
+    import ctypes
+
+    tray = _find_qt_tray_window_win32(pids)
+    if not tray:
+        return False
+    hwnd, pid = tray
+    user32 = ctypes.windll.user32
+    # OBS raises its window itself when shown; let it take the foreground,
+    # which Windows only allows a process the user just interacted with.
+    user32.AllowSetForegroundWindow(pid)
+    user32.PostMessageW(hwnd, QT_MYWM_NOTIFYICON, 0, NIN_SELECT)
+    log.info("Clicked OBS's tray icon.")
+    return True
+
+
 def _show_windows(pids, log):
     import ctypes
 
@@ -222,8 +278,14 @@ def _show_windows(pids, log):
     hwnd = match[0]
     user32 = ctypes.windll.user32
     SW_SHOW, SW_RESTORE = 5, 9
-    # Hidden by --minimize-to-tray (not minimized): SW_SHOW; minimized: restore.
-    user32.ShowWindow(hwnd, SW_RESTORE if user32.IsIconic(hwnd) else SW_SHOW)
+    if not user32.IsWindowVisible(hwnd):
+        # Hidden to the tray (--minimize-to-tray): OBS has to show it itself.
+        if _click_tray_icon_win32(pids, log):
+            return True
+        log.warning("Show OBS: OBS's tray icon not found; showing its window directly.")
+        user32.ShowWindow(hwnd, SW_SHOW)
+    elif user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, SW_RESTORE)
     user32.SetForegroundWindow(hwnd)
     return True
 
@@ -240,7 +302,7 @@ def hide_obs(log):
         if not pids:
             return False
         if sys.platform == "win32":
-            return _hide_windows(pids)
+            return _hide_windows(pids, log)
         if sys.platform == "darwin":
             code, _ = _run(["osascript", "-e",
                             'tell application "System Events" to set visible of process "OBS" to false'])
@@ -262,15 +324,21 @@ def hide_obs(log):
         return False
 
 
-def _hide_windows(pids):
+def _hide_windows(pids, log):
     import ctypes
 
     match = obs_process._find_main_window_win32(pids)
     if not match:
         return False
+    user32 = ctypes.windll.user32
+    if not user32.IsWindowVisible(match[0]) or user32.IsIconic(match[0]):
+        return True  # already out of the way - a tray click would show it
+    # Back to the tray, as clicking OBS's own icon does (see _show_windows).
+    if _click_tray_icon_win32(pids, log):
+        return True
     WM_SYSCOMMAND, SC_MINIMIZE = 0x0112, 0xF020
-    # A normal minimize, so OBS's own "minimize to tray" setting applies.
-    ctypes.windll.user32.PostMessageW(match[0], WM_SYSCOMMAND, SC_MINIMIZE, 0)
+    # No tray icon: a normal minimize, so OBS's own "minimize to tray" setting applies.
+    user32.PostMessageW(match[0], WM_SYSCOMMAND, SC_MINIMIZE, 0)
     return True
 
 

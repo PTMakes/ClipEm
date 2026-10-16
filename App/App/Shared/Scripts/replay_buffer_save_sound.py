@@ -21,14 +21,6 @@ def script_properties():
         props, "audio_file", "Audio File", obs.OBS_PATH_FILE, "WAV files (*.wav)", None
     )
     obs.obs_properties_add_float_slider(props, "audio_volume", "Volume", 0.0, 1.0, 0.01)
-    if _SYSTEM == "Windows":
-        obs.obs_properties_add_text(
-            props,
-            "volume_note",
-            "Note: volume control isn't supported on Windows; the sound "
-            "plays at your system volume.",
-            obs.OBS_TEXT_INFO,
-        )
     return props
 
 
@@ -57,6 +49,57 @@ def on_event(event):
         play_sound(audio_file, audio_volume)
 
 
+# Same as App/Shared/Installer/obs_config.py's - this runs inside OBS and
+# can't import that.
+def wav_at_volume(path, volume):
+    """The WAV file at path, as bytes, with its samples scaled by volume
+    (0-1) - winsound has no volume control of its own. Integer PCM only;
+    raises wave.Error for anything else (e.g. float samples)."""
+    import array
+    import io
+    import wave
+
+    volume = max(0.0, min(1.0, volume))
+    with wave.open(path, "rb") as src:
+        params = src.getparams()
+        frames = src.readframes(params.nframes)
+    width = params.sampwidth
+    if width == 1:  # unsigned, centred on 128
+        frames = bytes(128 + int((b - 128) * volume) for b in frames)
+    elif width in (2, 4):
+        samples = array.array("h" if width == 2 else "i", frames)
+        frames = array.array(samples.typecode, (int(s * volume) for s in samples)).tobytes()
+    elif width == 3:
+        scaled = bytearray(len(frames))
+        for i in range(0, len(frames) - 2, 3):
+            sample = int.from_bytes(frames[i:i + 3], "little", signed=True)
+            scaled[i:i + 3] = int(sample * volume).to_bytes(3, "little", signed=True)
+        frames = bytes(scaled)
+    else:
+        raise wave.Error(f"unsupported sample width {width}")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(frames)
+    return buf.getvalue()
+
+
+def play_wav_windows(path, volume):
+    """Plays path at volume without blocking. winsound can't play from
+    memory asynchronously, so the scaled copy plays on its own thread; a
+    WAV it can't scale plays as-is (at the system volume)."""
+    import threading
+    import wave
+    import winsound
+
+    try:
+        data = wav_at_volume(path, volume)
+    except (wave.Error, EOFError):
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        return
+    threading.Thread(target=winsound.PlaySound, args=(data, winsound.SND_MEMORY), daemon=True).start()
+
+
 def play_sound(filepath, volume):
     """Play a WAV file with whatever the host OS provides.
 
@@ -69,9 +112,7 @@ def play_sound(filepath, volume):
 
     try:
         if _SYSTEM == "Windows":
-            import winsound
-
-            winsound.PlaySound(filepath, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            play_wav_windows(filepath, volume)
         elif _SYSTEM == "Darwin":
             subprocess.Popen(["afplay", "-v", str(volume), filepath])
         else:

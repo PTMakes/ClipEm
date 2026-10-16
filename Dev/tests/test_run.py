@@ -355,3 +355,24 @@ def test_restarts_are_marked_as_restarts(monkeypatch):
     monkeypatch.setattr(run.os, "execv", lambda exe, argv: seen.append(argv[2:]))
     run._restart_self([run.POST_UPDATE_FLAG])
     assert seen == [["--boot", run.POST_UPDATE_FLAG, run.RESTARTED_FLAG]]
+
+
+def test_obs_skips_replay_buffer_while_clips_folder_is_missing(app, monkeypatch, tmp_path):
+    _, launched = app
+    exe = run.obs_install.obs_exe("Linux")
+    os.makedirs(os.path.dirname(exe))
+    open(exe, "w").close()
+    clips = tmp_path / "pCloudDrive" / "Clips"
+    monkeypatch.setattr(run.obs_config, "load_clip_folder", lambda: str(clips))
+    trays = []
+    monkeypatch.setattr(run, "_start_tray_widget", lambda python, extra_env=None, **k: trays.append(extra_env))
+    with_tray = {"autostart_obs": True, "autostart_tray": True}
+
+    run.run_linux(with_tray)
+    assert "--startreplaybuffer" not in launched[-1]
+    assert trays[-1][run.REPLAY_BUFFER_DEFERRED_ENV] == "1"
+
+    clips.mkdir(parents=True)
+    run.run_linux(with_tray)
+    assert "--startreplaybuffer" in launched[-1]
+    assert run.REPLAY_BUFFER_DEFERRED_ENV not in trays[-1]

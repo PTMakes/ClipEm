@@ -14,6 +14,7 @@ APP_INSTALLER_DIR = INSTALLER_DIR
 TRAY_WIDGET_DIR = os.path.join(APP_SHARED_DIR, "tray-widget")
 SCRIPTS_DIR = os.path.join(APP_SHARED_DIR, "Scripts")
 sys.path.insert(0, DEV_DIR)
+sys.path.insert(0, os.path.join(DEV_DIR, "release"))
 sys.path.insert(0, INSTALLER_DIR)
 
 

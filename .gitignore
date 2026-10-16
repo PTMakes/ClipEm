@@ -26,7 +26,7 @@ __pycache__/
 # App/
 # ---------------------------------------------------------------------------
 
-# OBS + Python are fetched at install time (ClipEmSetup.exe / linuxinstall.sh /
+# OBS + Python are fetched at install time (ClipEmSetupWindows.exe / ClipEmSetupLinux.sh /
 # Setup_Windows.bat / Setup_Linux.sh), verified against
 # clipem.app/updates/install-manifest.json - never commit them.
 /App/App/Windows/Python/
@@ -75,7 +75,6 @@ __pycache__/
 # Build output from release.sh / build scripts - regenerated, never committed.
 /Dev/dist/
 /Dev/test/
-/Dev/test_results.txt
 /Dev/gui_layout_test_results.txt
 /Dev/.linux-python-xft-work/
 /Dev/.pipewire-audio-work/

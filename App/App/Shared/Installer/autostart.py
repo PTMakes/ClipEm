@@ -21,6 +21,9 @@ from clipem_common import APP_DIR, INSTALLER_DIR, ROOT_DIR, SHARED_DIR
 
 RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
 MACOS_LAUNCH_AGENT_LABEL = "com.ptmakes.clipem"
+# The tray widget's AppUserModelID, also stamped on the Start Menu shortcut
+# so Windows names its notifications "ClipEm" - see set_shortcut_app_id.
+WINDOWS_APP_ID = "PTMakes.ClipEm"
 
 
 # ---------------------------------------------------------------------------
@@ -324,6 +327,66 @@ def apply_boot_autostart(enabled):
 # Desktop shortcut
 # ---------------------------------------------------------------------------
 
+def start_menu_shortcut_path():
+    """The Start Menu entry that makes ClipEm show up in Windows Search, and
+    names its notifications (see WINDOWS_APP_ID). None if APPDATA is unset."""
+    appdata = os.environ.get("APPDATA")
+    if not appdata:
+        return None
+    return os.path.join(appdata, "Microsoft", "Windows", "Start Menu", "Programs", "ClipEm.lnk")
+
+
+def set_shortcut_app_id(shortcut_path, app_id):
+    """Stamps a .lnk with System.AppUserModel.ID. A process using the same
+    explicit AppUserModelID then gets the shortcut's name and icon on its
+    notifications instead of its exe's ("Python"). WScript.Shell can't set
+    this property, so it goes through the shell's IPropertyStore directly.
+    Raises OSError on failure."""
+    import ctypes
+    import uuid
+    from ctypes import wintypes
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("bytes", ctypes.c_ubyte * 16)]
+
+    def guid(text):
+        g = GUID()
+        ctypes.memmove(g.bytes, uuid.UUID(text).bytes_le, 16)
+        return g
+
+    class PROPERTYKEY(ctypes.Structure):
+        _fields_ = [("fmtid", GUID), ("pid", wintypes.DWORD)]
+
+    class PROPVARIANT(ctypes.Structure):
+        _fields_ = [("vt", ctypes.c_ushort), ("reserved", ctypes.c_ushort * 3),
+                    ("pwszVal", ctypes.c_wchar_p), ("padding", ctypes.c_void_p)]
+
+    GPS_READWRITE, VT_LPWSTR = 2, 31
+    iid_property_store = guid("886D8EEB-8CF2-4446-8D02-CDBA1DBDCF99")
+    pkey_app_user_model_id = PROPERTYKEY(guid("9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3"), 5)
+
+    ctypes.windll.ole32.CoInitializeEx(None, 2)  # COINIT_APARTMENTTHREADED; already-initialized is fine
+    store = ctypes.c_void_p()
+    ctypes.oledll.shell32.SHGetPropertyStoreFromParsingName(
+        ctypes.c_wchar_p(shortcut_path), None, GPS_READWRITE,
+        ctypes.byref(iid_property_store), ctypes.byref(store),
+    )
+    vtable = ctypes.cast(store, ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))).contents
+
+    def method(index, restype, *argtypes):
+        return ctypes.WINFUNCTYPE(restype, ctypes.c_void_p, *argtypes)(vtable[index])
+
+    # IPropertyStore vtable: IUnknown (0-2), GetCount, GetAt, GetValue, SetValue (6), Commit (7).
+    try:
+        value = PROPVARIANT(vt=VT_LPWSTR, pwszVal=app_id)
+        method(6, ctypes.HRESULT, ctypes.POINTER(PROPERTYKEY), ctypes.POINTER(PROPVARIANT))(
+            store, ctypes.byref(pkey_app_user_model_id), ctypes.byref(value),
+        )
+        method(7, ctypes.HRESULT)(store)
+    finally:
+        method(2, ctypes.c_ulong)(store)
+
+
 def create_shortcut_windows():
     # pythonw.exe, not python.exe: run.py only launches OBS and the tray
     # widget, and python.exe left a console window open that killed the tray
@@ -337,6 +400,39 @@ def create_shortcut_windows():
     )
     run_powershell(script, check=True)
     print(f"Created shortcut: {shortcut_path}")
+
+    # A shortcut in the ClipEm folder isn't indexed by Windows Search - one
+    # in the Start Menu is. Best effort: the folder's own shortcut is enough
+    # to run ClipEm.
+    start_menu_path = start_menu_shortcut_path()
+    if not start_menu_path:
+        return
+    try:
+        os.makedirs(os.path.dirname(start_menu_path), exist_ok=True)
+        run_powershell(windows_shortcut_script(
+            start_menu_path, pythonw, windows_command_line_arg(RUN_PY), ROOT_DIR, icon,
+        ), check=True)
+        set_shortcut_app_id(start_menu_path, WINDOWS_APP_ID)
+        print(f"Added ClipEm to the Start Menu: {start_menu_path}")
+    except Exception as exc:
+        print(f"Could not add ClipEm to the Start Menu ({exc}) - skipping it.", file=sys.stderr)
+
+
+def remove_start_menu_shortcut():
+    """Removes the Start Menu entry if it starts this install (one from
+    another ClipEm folder is left alone). Windows only; a no-op elsewhere."""
+    path = start_menu_shortcut_path() if platform.system() == "Windows" else None
+    if not path or not os.path.exists(path):
+        return
+    for shortcut, command in _windows_startup_shortcuts(os.path.dirname(path)):
+        if os.path.normcase(shortcut) == os.path.normcase(path) and _points_at_this_install(command):
+            try:
+                os.remove(path)
+                print(f"Removed the Start Menu entry {path}")
+            except OSError as exc:
+                print(f"Could not remove the Start Menu entry {path}: {exc}", file=sys.stderr)
+            return
+    print(f"Left in place: {path} starts ClipEm from somewhere else.")
 
 
 def create_shortcut_macos():

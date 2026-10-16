@@ -179,3 +179,14 @@ def test_check_for_update_channel_switch(tmp_path, monkeypatch, channel, local, 
     result = updater.check_for_update()
     assert result["shared_update"] is expected
     assert result["update_available"] is expected
+
+
+def test_swap_in_resets_entries_not_preserved(tmp_path):
+    live, staged, backup = (str(tmp_path / n) for n in ("live", "staged", "backup"))
+    _tree(live, {"VERSION": "1", "run_config.json": "mine", "app_tracks.json": "mine", "OBS-Config/a": "mine"})
+    _tree(staged, {"VERSION": "2", "run_config.json": "shipped", "OBS-Config/a": "shipped"})
+    keep = updater.PRESERVED_RELATIVE_PATHS - {"run_config.json", "app_tracks.json"}
+    updater.swap_in(staged, live, backup, preserved=keep, reset={"run_config.json", "app_tracks.json"})
+    assert _read(live, "run_config.json") == "shipped"
+    assert not os.path.exists(os.path.join(live, "app_tracks.json"))  # nothing shipped - removed
+    assert _read(live, "OBS-Config/a") == "mine"

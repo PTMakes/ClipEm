@@ -60,3 +60,45 @@ def test_leaked_developer_clips_path_reads_as_unset(tmp_path, monkeypatch):
     ini.write_text(f"[SimpleOutput]\nFilePath={obs_config.LEAKED_CLIPS_DIRS[0]}\n")
     monkeypatch.setattr(obs_config, "BASIC_INI", str(ini))
     assert obs_config.load_clip_folder() == obs_config.DEFAULT_CLIPS_DIR
+
+
+def _write_wav(path, width, samples):
+    import wave
+
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1)
+        f.setsampwidth(width)
+        f.setframerate(8000)
+        f.writeframes(samples)
+
+
+def test_wav_at_volume_scales_every_integer_pcm_width(tmp_path):
+    import array
+    import io
+    import wave
+
+    cases = {
+        1: (bytes([0, 128, 255]), bytes([64, 128, 191])),
+        2: (array.array("h", [-32768, 0, 32766]).tobytes(), array.array("h", [-16384, 0, 16383]).tobytes()),
+        3: (b"".join(v.to_bytes(3, "little", signed=True) for v in (-8388608, 1000, 8388606)),
+            b"".join(v.to_bytes(3, "little", signed=True) for v in (-4194304, 500, 4194303))),
+        4: (array.array("i", [-2**31, 10, 2**31 - 2]).tobytes(), array.array("i", [-2**30, 5, 2**30 - 1]).tobytes()),
+    }
+    for width, (samples, halved) in cases.items():
+        path = tmp_path / f"{width}.wav"
+        _write_wav(path, width, samples)
+        with wave.open(io.BytesIO(obs_config.wav_at_volume(str(path), 0.5)), "rb") as f:
+            assert (f.getsampwidth(), f.readframes(3)) == (width, halved)
+        with wave.open(io.BytesIO(obs_config.wav_at_volume(str(path), 1.5)), "rb") as f:
+            assert f.readframes(3) == samples  # clamped to full volume
+
+
+def test_wav_at_volume_rejects_what_it_cant_scale(tmp_path):
+    import wave
+
+    import pytest
+
+    bad = tmp_path / "bad.wav"
+    bad.write_bytes(b"RIFF")
+    with pytest.raises((wave.Error, EOFError)):
+        obs_config.wav_at_volume(str(bad), 0.5)

@@ -23,16 +23,16 @@
 # Requirements (Arch/CachyOS):
 #   sudo pacman -S --needed base-devel git nasm mingw-w64-gcc
 #
-# Usage: ./build-ffmpeg.sh [--force]
+# Usage: ./build/build-ffmpeg.sh [--force]
 set -euo pipefail
 
 FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUT_DIR="$SCRIPT_DIR/dist/ffmpeg"
-WORK_DIR="$SCRIPT_DIR/.ffmpeg-build"
+DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OUT_DIR="$DEV_DIR/dist/ffmpeg"
+WORK_DIR="$DEV_DIR/.ffmpeg-build"
 VERSION="${FFMPEG_TAG#n}"
 LINUX_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-linux-x86_64.tar.gz"
 WINDOWS_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-windows-x86_64.zip"
@@ -141,7 +141,7 @@ This ffmpeg was built for ClipEm from unmodified official sources:
   x264             https://code.videolan.org/videolan/x264  commit $X264_COMMIT
 Licensed under the GNU GPL (see LICENSE.txt). The exact source code is
 published next to this download as ffmpeg-$VERSION-source.tar.gz, and the
-build script is Dev/build-ffmpeg.sh in the ClipEm repository.
+build script is Dev/build/build-ffmpeg.sh in the ClipEm repository.
 EOF
 }
 

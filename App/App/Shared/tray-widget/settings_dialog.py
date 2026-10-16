@@ -14,6 +14,7 @@ before it next starts OBS.
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import tkinter as tk
@@ -27,10 +28,17 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # paths and atomic writes (clipem_common/obs_config) and the per-OS boot
 # autostart entry (autostart.apply_boot_autostart).
 sys.path.insert(0, INSTALLER_DIR)
+import bug_report  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
+import reinstall  # noqa: E402
 from app_window import style_app_window, use_windows_app_id  # noqa: E402
-from autostart import apply_boot_autostart  # noqa: E402
+from autostart import (  # noqa: E402
+    apply_boot_autostart,
+    describe_autostart_entry,
+    find_autostart_entries,
+    remove_autostart_entries,
+)
 from clipem_common import (  # noqa: E402
     acquire_instance_lock,
     exit_with_parent,
@@ -90,13 +98,17 @@ def save_obs_settings(obs_settings, initial_obs_settings):
     return "applied"
 
 
-def restart_clipem():
-    """To install a chosen update: closes OBS and the tray widget, then
-    starts everything again via run.py, which installs the update before
-    starting them. Returns None on success, or an error message."""
+UPDATE_PENDING_MESSAGE = "The update will be installed the next time ClipEm starts."
+REINSTALL_PENDING_MESSAGE = "ClipEm will be reinstalled the next time it starts."
+
+
+def restart_clipem(pending_message=UPDATE_PENDING_MESSAGE):
+    """To install a chosen update (or carry out a reinstall): closes OBS and
+    the tray widget, then starts everything again via run.py, which does
+    that before starting them. Returns None on success, or an error message
+    ending with pending_message."""
     if not obs_process.close_obs_stopping_outputs(log):
-        return ("OBS didn't close (it may be showing a dialog). The update will be installed the next "
-                "time ClipEm starts.")
+        return f"OBS didn't close (it may be showing a dialog). {pending_message}"
     if obs_config.load_pending_obs_settings():
         obs_config.apply_pending_obs_settings()
     # This dialog closes with the tray widget (exit_with_parent) - opt out
@@ -105,6 +117,16 @@ def restart_clipem():
     stop_tray_widget(log)
     start_run_py()
     return None
+
+
+def reveal_file(path):
+    """Shows path in the system's file manager (its folder, on Linux)."""
+    if sys.platform == "win32":
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", "-R", path])
+    else:
+        subprocess.Popen(["xdg-open", os.path.dirname(path)])
 
 
 def run_in_background(root, work, on_done):
@@ -282,11 +304,6 @@ def main():
     play_button = tk.Button(sound_row, text="Play", command=on_play_sound)
     play_button.pack(side="left", padx=(px(4), 0))
     next_row += 1
-    if sys.platform == "win32":
-        tk.Label(frame, text="(Windows plays it at your system volume.)", fg="gray40").grid(
-            row=next_row, column=0, columnspan=2, sticky="w"
-        )
-        next_row += 1
 
     def on_sound_toggle():
         state = "normal" if sound_enabled_var.get() else "disabled"
@@ -386,6 +403,79 @@ def main():
 
     obs_check.config(command=on_obs_autostart_toggle)
     on_obs_autostart_toggle()
+
+    # Install/Uninstall act straight away (no Save needed) on the OS's
+    # autostart entry itself - including ones left by another ClipEm folder.
+    autostart_status_var = tk.StringVar()
+
+    def show_autostart_status():
+        try:
+            entries = find_autostart_entries()
+        except Exception as exc:
+            autostart_status_var.set(f"Autostart entry: unknown ({exc})")
+            return
+        others = sum(1 for entry in entries if not entry["this_install"])
+        text = "installed" if len(entries) > others else "not installed"
+        if others:
+            text += f" (+{others} from another ClipEm folder)"
+        autostart_status_var.set(f"Autostart entry: {text}")
+
+    def save_autostart_flags():
+        config = load_run_config()
+        config["autostart_obs"] = bool(autostart_obs_var.get())
+        config["autostart_tray"] = bool(autostart_tray_var.get())
+        save_run_config(config)
+
+    def on_install_autostart():
+        if not autostart_obs_var.get():
+            autostart_obs_var.set(True)
+            autostart_tray_var.set(True)
+            on_obs_autostart_toggle()
+        try:
+            save_autostart_flags()
+            apply_boot_autostart(True)
+        except Exception as exc:
+            messagebox.showerror("Install Autostart", f"Couldn't install autostart: {exc}", parent=root)
+        show_autostart_status()
+        if not any(entry["this_install"] for entry in find_autostart_entries()):
+            messagebox.showerror(
+                "Install Autostart", "Couldn't create the autostart entry - your system may not support it.",
+                parent=root,
+            )
+
+    def on_uninstall_autostart():
+        entries = find_autostart_entries()
+        to_remove = [entry for entry in entries if entry["this_install"]]
+        others = [entry for entry in entries if not entry["this_install"]]
+        if others and messagebox.askyesno(
+            "Uninstall Autostart",
+            "These ClipEm autostart entries start another ClipEm folder (or an older version):\n\n"
+            + "\n".join(f"  \u2022 {describe_autostart_entry(entry)}" for entry in others)
+            + "\n\nRemove them too?",
+            parent=root,
+        ):
+            to_remove += others
+        autostart_obs_var.set(False)
+        on_obs_autostart_toggle()
+        try:
+            save_autostart_flags()
+            remove_autostart_entries(to_remove)
+        except Exception as exc:
+            messagebox.showerror("Uninstall Autostart", f"Couldn't uninstall autostart: {exc}", parent=root)
+        show_autostart_status()
+
+    autostart_row = tk.Frame(frame)
+    autostart_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+    tk.Button(autostart_row, text="Install Autostart", command=on_install_autostart).pack(side="left")
+    tk.Button(autostart_row, text="Uninstall Autostart", command=on_uninstall_autostart).pack(
+        side="left", padx=(px(4), 0)
+    )
+    next_row += 1
+    tk.Label(frame, textvariable=autostart_status_var, fg="gray40").grid(
+        row=next_row, column=0, columnspan=2, sticky="w"
+    )
+    next_row += 1
+    show_autostart_status()
 
     tk.Label(frame, text="OBS Websocket", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
@@ -587,6 +677,114 @@ def main():
         check_button = tk.Button(frame, text="Check for Updates", command=on_check_for_updates)
         check_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
         next_row += 1
+
+    # --- Troubleshooting: a bug report zip, and a clean reinstall.
+    tk.Label(frame, text="Troubleshooting", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+
+    def on_bug_report():
+        path = filedialog.asksaveasfilename(
+            parent=root, title="Save Bug Report", initialdir=bug_report.default_save_dir(),
+            initialfile=bug_report.default_file_name(), defaultextension=".zip",
+            filetypes=[("Zip files", "*.zip")],
+        )
+        if not path:
+            return
+        bug_button.config(state="disabled", text="Creating...")
+        run_in_background(
+            root, lambda: bug_report.create_bug_report(path),
+            lambda count, error: on_bug_report_done(path, count, error),
+        )
+
+    def on_bug_report_done(path, count, error):
+        bug_button.config(state="normal", text="Create Bug Report...")
+        if error is not None:
+            log.warning(f"Bug report failed: {error}")
+            messagebox.showerror("Bug Report", f"Couldn't create the bug report:\n{error}", parent=root)
+            return
+        log.info(f"Bug report saved: {path} ({count} log files)")
+        if messagebox.askyesno(
+            "Bug Report",
+            f"Saved the bug report ({count} log files) to:\n{path}\n\n"
+            "It holds ClipEm's and OBS's logs and a summary of this install (versions, settings and "
+            "folder paths) - the websocket password is left out. Attach it to your bug report.\n\n"
+            "Show it in its folder?",
+            parent=root,
+        ):
+            try:
+                reveal_file(path)
+            except OSError as exc:
+                messagebox.showerror("Bug Report", f"Couldn't open the folder: {exc}", parent=root)
+
+    def on_reinstall():
+        dialog = tk.Toplevel(root)
+        dialog.title("Reinstall ClipEm")
+        dialog.resizable(False, False)
+        dialog.transient(root)
+        body = tk.Frame(dialog, padx=px(16), pady=px(12))
+        body.pack()
+        tk.Label(
+            body, justify="left", wraplength=px(380),
+            text=(
+                "Downloads ClipEm, OBS and the tray widget's packages again and replaces the "
+                "installed copies - for when something is broken or missing. Your clips aren't "
+                "touched.\n\nThis closes OBS and the tray icon - clips not saved yet are lost."
+            ),
+        ).pack(anchor="w")
+        keep_obs_var = tk.BooleanVar(value=True)
+        keep_clipem_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            body, variable=keep_obs_var, justify="left",
+            text="Try to keep OBS settings (scenes, capture, audio, video quality,\nclip folder, hotkey)",
+        ).pack(anchor="w", pady=(px(10), 0))
+        tk.Checkbutton(
+            body, variable=keep_clipem_var, justify="left",
+            text="Try to keep ClipEm settings (autostart, screen checks, updates,\nclip sound)",
+        ).pack(anchor="w")
+        tk.Label(
+            body, fg="gray40", justify="left", wraplength=px(380),
+            text="Without the OBS settings, Setup opens afterwards to choose them again.",
+        ).pack(anchor="w", pady=(px(6), 0))
+
+        def on_confirm():
+            try:
+                reinstall.request_reinstall(keep_obs_var.get(), keep_clipem_var.get())
+            except Exception as exc:
+                messagebox.showerror("Reinstall ClipEm", f"Couldn't start the reinstall: {exc}", parent=dialog)
+                return
+            log.info(f"Reinstall requested (keep OBS settings: {keep_obs_var.get()}, "
+                     f"keep ClipEm settings: {keep_clipem_var.get()})")
+            dialog.destroy()
+            for child in button_frame.winfo_children():
+                child.config(state="disabled")
+            reinstall_button.config(state="disabled")
+            status_var.set("Restarting ClipEm to reinstall...")
+            run_in_background(root, lambda: restart_clipem(REINSTALL_PENDING_MESSAGE), on_reinstall_restarted)
+
+        dialog_buttons = tk.Frame(body)
+        dialog_buttons.pack(anchor="e", pady=(px(12), 0))
+        tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
+        tk.Button(dialog_buttons, text="Reinstall", command=on_confirm, width=10).pack(side="left", padx=px(4))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        dialog.grab_set()
+
+    def on_reinstall_restarted(error_message, exc):
+        if exc is not None:
+            log.warning(f"Restart ClipEm for the reinstall failed: {exc}")
+            error_message = f"Couldn't restart ClipEm ({exc}). {REINSTALL_PENDING_MESSAGE}"
+        if error_message:
+            messagebox.showwarning("Reinstall ClipEm", error_message)
+        root.destroy()
+
+    troubleshooting_row = tk.Frame(frame)
+    troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+    bug_button = tk.Button(troubleshooting_row, text="Create Bug Report...", command=on_bug_report)
+    bug_button.pack(side="left")
+    reinstall_button = tk.Button(troubleshooting_row, text="Reinstall ClipEm...", command=on_reinstall)
+    reinstall_button.pack(side="left", padx=(px(4), 0))
+    next_row += 1
 
     tk.Label(
         frame,

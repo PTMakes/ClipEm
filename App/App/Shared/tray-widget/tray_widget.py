@@ -35,10 +35,13 @@ if sys.platform == "linux":
 else:
     import pystray
 
-import obs_config  # noqa: E402 - from App/Shared/Installer, see sys.path above
+import autostart  # noqa: E402 - from App/Shared/Installer, see sys.path above
+import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import obs_window  # noqa: E402
 from app_audio import AppTrackMonitor  # noqa: E402
+from app_window import use_windows_app_id  # noqa: E402
+from clip_folder import ClipFolderWatch  # noqa: E402
 from clipem_common import acquire_instance_lock, release_instance_lock, setup_logging, start_clipem  # noqa: E402
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
@@ -109,6 +112,18 @@ def ensure_single_instance():
     if not acquire_instance_lock(LOCK_PATH):
         log.warning("Tray widget already running; not starting another.")
         sys.exit(0)
+
+
+def use_clipem_notification_name():
+    """Windows names a notification after the process's AppUserModelID - by
+    default pythonw.exe's ("Python"). Setup's Start Menu shortcut carries
+    WINDOWS_APP_ID, so claiming it makes them say "ClipEm" - but only once
+    that shortcut exists, or Windows would show the bare ID instead."""
+    if sys.platform != "win32":
+        return
+    path = autostart.start_menu_shortcut_path()
+    if path and os.path.exists(path):
+        use_windows_app_id(autostart.WINDOWS_APP_ID)
 
 
 def tray_host_available():
@@ -210,6 +225,11 @@ class TrayApp:
         )
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
         self.app_tracks = AppTrackMonitor()
+        self.clip_folder = ClipFolderWatch(
+            self._notify,
+            fallback_dir=obs_config.load_clip_folder,
+            deferred=os.environ.pop("CLIPEM_REPLAY_BUFFER_DEFERRED", "") == "1",  # see run.py
+        )
         self.icon = _TrayIcon(
             "clipem",
             icon=app_icon(dim=True),
@@ -221,6 +241,15 @@ class TrayApp:
 
     def _build_menu(self):
         return pystray.Menu(
+            pystray.MenuItem(
+                "Clips Folder Unavailable",
+                pystray.Menu(
+                    pystray.MenuItem(self._missing_clip_folder_label, None, enabled=lambda item: False),
+                    pystray.MenuItem("Check Again", self._check_clip_folder),
+                    pystray.MenuItem("Create Clips Folder", self._create_clip_folder),
+                ),
+                visible=self._clip_folder_missing,
+            ),
             pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip),
             pystray.MenuItem("Clip Browser...", self._open_clip_browser),
             pystray.MenuItem("Open Clips Folder", self._open_clips_folder),
@@ -310,10 +339,32 @@ class TrayApp:
         except Exception as exc:
             log.warning(f"Failed to open the Clip Browser: {exc}")
 
+    def _clip_folder_missing(self, item):
+        return self.connected and self.clip_folder.missing_dir is not None
+
+    def _missing_clip_folder_label(self, item):
+        return f"Waiting for {self.clip_folder.missing_dir}"
+
+    def _check_clip_folder(self, icon, item):
+        if self.connected and self.client is not None:
+            self.clip_folder.tick(self.client, self.replay_active)
+            self.icon.update_menu()
+
+    def _create_clip_folder(self, icon, item):
+        if self.connected and self.client is not None:
+            self.clip_folder.create_missing_dir(self.client, self.replay_active)
+            self.icon.update_menu()
+
     def _open_clips_folder(self, icon, item):
         # The folder the user picked in Setup (basic.ini), not a fixed path.
         clips_dir = obs_config.load_clip_folder()
-        os.makedirs(clips_dir, exist_ok=True)
+        if not os.path.isdir(clips_dir):
+            # Not created here: on a cloud drive that isn't mounted yet, a
+            # local folder in its mount point can stop it mounting.
+            if clips_dir != obs_config.DEFAULT_CLIPS_DIR:
+                self._notify(f"The clips folder {clips_dir} isn't available.")
+                return
+            os.makedirs(clips_dir, exist_ok=True)
         if sys.platform == "win32":
             os.startfile(clips_dir)  # noqa: S606 - user-initiated, opens own folder
         elif sys.platform == "darwin":
@@ -421,6 +472,7 @@ class TrayApp:
         log.info(f"Connected to OBS at {url}.")
         self.stuck_screen.forget()
         self.app_tracks.forget()
+        self.clip_folder.forget()
 
     def _on_input_settings_changed(self, event):
         try:
@@ -488,6 +540,10 @@ class TrayApp:
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
                 self.app_tracks.tick(self.client)
+                missing_before = self.clip_folder.missing_dir
+                self.clip_folder.tick(self.client, self.replay_active)
+                if self.clip_folder.missing_dir != missing_before:
+                    self.icon.update_menu()
             except ObsWebSocketConnectionLost as exc:
                 # e.g. OBS restarted to apply new websocket settings - this
                 # connection is dead for good; the next loop reconnects,
@@ -526,6 +582,7 @@ class TrayApp:
 
 if __name__ == "__main__":
     ensure_single_instance()
+    use_clipem_notification_name()
     app = TrayApp()
     try:
         app.run()

@@ -5,8 +5,8 @@
 #
 # Bundles, into the installer, everything bootstrap.ps1 needs to verify a
 # release before downloading it (see bootstrap.ps1's header):
-#   build/ed25519_verify.py        - from PTMClipEm-App
-#   build/signing_public_key.txt   - from PTMClipEm-App (must be set - see
+#   build/ed25519_verify.py        - from App
+#   build/signing_public_key.txt   - from App (must be set - see
 #                                    Dev/generate-signing-key.sh)
 #   build/bootstrap-pins.json      - URL + pinned sha256 of the embeddable
 #                                    Windows Python (setup.py's
@@ -28,7 +28,7 @@ set -euo pipefail
 VERSION="${1:?Usage: $0 <version>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEV_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-INSTALLER_SRC="$DEV_DIR/../PTMClipEm-App/App/Shared/Installer"
+INSTALLER_SRC="$DEV_DIR/../App/App/Shared/Installer"
 BUILD_DIR="$SCRIPT_DIR/build"
 OUTPUT="$SCRIPT_DIR/dist/ClipEmSetupWindows.exe"
 
@@ -49,7 +49,7 @@ rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR" "$SCRIPT_DIR/dist"
 cp "$INSTALLER_SRC/ed25519_verify.py" "$INSTALLER_SRC/signing_public_key.txt" "$BUILD_DIR/"
 
-python3 - "$INSTALLER_SRC/setup.py" "$DEV_DIR/upstream-pins.json" "$BUILD_DIR/bootstrap-pins.json" <<'PYEOF'
+python3 - "$INSTALLER_SRC/setup.py" "$DEV_DIR/release/upstream-pins.json" "$BUILD_DIR/bootstrap-pins.json" <<'PYEOF'
 import json, re, sys
 setup_py, pins_path, out_path = sys.argv[1:4]
 version = re.search(r'^WINDOWS_PYTHON_VERSION = "([^"]+)"', open(setup_py).read(), re.M).group(1)
@@ -64,7 +64,7 @@ PYEOF
 # Downloads <url> to <out> and checks it against its sha256 in
 # upstream-pins.json - fails if it isn't pinned or doesn't match.
 fetch_pinned() {
-  python3 - "$1" "$DEV_DIR/upstream-pins.json" "$2" <<'PYEOF'
+  python3 - "$1" "$DEV_DIR/release/upstream-pins.json" "$2" <<'PYEOF'
 import hashlib, json, sys, urllib.request
 url, pins_path, out_path = sys.argv[1:4]
 sha256 = json.load(open(pins_path)).get(url)
