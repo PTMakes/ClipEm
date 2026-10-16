@@ -6,3 +6,8 @@ extend-exclude = ["obs-src", "dist", "obs-install"]
 [lint]
 select = ["E9", "F", "B", "UP", "I"]
 ignore = ["UP015"]  # explicit open(..., "r") is the house style
+
+[lint.isort]
+# Dev/release/'s modules, imported by path (release.sh, tests) - not found
+# as first-party on their own since they moved out of Dev/.
+known-first-party = ["generate_checksums", "generate_install_manifest", "release_common"]
