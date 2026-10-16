@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Writes PTMClipEm-App/tests/obspython_api.json: every name OBS's `obspython`
+Writes Dev/tests/obspython_api.json: every name OBS's `obspython`
 module really has, taken from our Linux OBS build. tests/test_obs_scripts.py
 runs ClipEm's OBS scripts against a stand-in that allows only these names,
 so a call to something obspython doesn't have (e.g. obs.script_path())
@@ -24,11 +24,11 @@ import json
 import re
 import sys
 
-from release_common import ROOT_DIR, SCRIPT_DIR
+from release_common import SCRIPT_DIR
 
 OBS_INSTALL = SCRIPT_DIR / "obs-install"
 OBS_SRC = SCRIPT_DIR / "obs-src" / "shared" / "obs-scripting"
-OUT_PATH = ROOT_DIR / "PTMClipEm-App" / "tests" / "obspython_api.json"
+OUT_PATH = SCRIPT_DIR / "tests" / "obspython_api.json"
 
 
 def _obs_version():

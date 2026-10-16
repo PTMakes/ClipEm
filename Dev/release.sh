@@ -201,14 +201,14 @@ step "Lint and tests"
 # The OBS script tests check against obspython's real API as of our Linux
 # OBS build - regenerate the snapshot whenever that build changes.
 python3 "$SCRIPT_DIR/generate_obspython_api.py" --check \
-  || die "Run Dev/generate_obspython_api.py and commit PTMClipEm-App/tests/obspython_api.json"
+  || die "Run Dev/generate_obspython_api.py and commit Dev/tests/obspython_api.json"
 (cd "$APP_DIR" && "${RUFF[@]}" check .) || die "ruff found problems in PTMClipEm-App"
 (cd "$SCRIPT_DIR" && "${RUFF[@]}" check .) || die "ruff found problems in Dev/"
 if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   echo "WARNING: no display - the GUI layout test will be skipped (run it under xvfb-run before releasing)." >&2
 fi
 TEST_LOG="$SCRIPT_DIR/test_results.txt"
-if ! { (cd "$APP_DIR" && python3 -m pytest -q) && (cd "$SCRIPT_DIR" && python3 -m pytest -q tests); } > "$TEST_LOG" 2>&1; then
+if ! (cd "$SCRIPT_DIR" && python3 -m pytest -q tests) > "$TEST_LOG" 2>&1; then
   cat "$TEST_LOG"
   die "Tests FAILED - see $TEST_LOG"
 fi

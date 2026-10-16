@@ -7,10 +7,7 @@ version = "0"
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-dev = ["pytest==8.*", "ruff==0.16.*"]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
+dev = ["ruff==0.16.*"]
 
 [tool.ruff]
 line-length = 120

@@ -1,13 +1,13 @@
 # ClipEm maintainer tooling
 
-ClipEm is a portable OBS Studio distribution for clipping games. It ships
-a preconfigured replay buffer, a setup wizard and an optional tray widget.
+ClipEm is a tool for clipping games. It ships
+a preconfigured OBS with a replay buffer, a NSIS (Windows) and Python (Linux) setup/install wizard and an optional Python tray widget.
 Everything lives in one repo, [PTMakes/ClipEm](https://github.com/PTMakes/ClipEm):
 
 | Folder | Contents |
 | --- | --- |
 | `Dev/` | Build, release and installer tooling. `Dev/obs-src` is the upstream OBS source, as a submodule. |
-| `PTMClipEm-App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts), plus `tests/`. |
+| `PTMClipEm-App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
 | `PTMClipEm-Website/` | clipem.app: the landing page, a copy of the signed update manifests for old installs, and `linuxinstall.sh`. |
 
 ```
@@ -259,18 +259,18 @@ checks that a 16pt font really renders at 16pt.
 
 | Folder | Checks |
 | --- | --- |
-| `PTMClipEm-App` | `ruff check .`, `pytest`. The GUI layout test runs under `xvfb-run` in CI. |
+| `PTMClipEm-App` | `ruff check .` |
 | `PTMClipEm-Website` | `npm run lint`, `npm run typecheck`, `npm run build`, and that each manifest has a signature. |
-| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests`. `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. |
+| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; the GUI layout test runs under `xvfb-run` in CI). `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. |
 
 The workflows are in `.github/workflows/`: `app.yml` (App + Dev) and
 `website.yml`. Each runs only when its folders change.
 
 ### OBS script tests
 
-`tests/test_obs_scripts.py` (in `PTMClipEm-App`) runs every OBS script through
+`Dev/tests/test_obs_scripts.py` runs every OBS script through
 its lifecycle against a stand-in `obspython` that only has the names the real
-one has. Those names are in `tests/obspython_api.json`, generated from the
+one has. Those names are in `Dev/tests/obspython_api.json`, generated from the
 Linux OBS build by `Dev/generate_obspython_api.py`. Re-run that script after
 rebuilding OBS; `release.sh` stops if the snapshot is out of date.
 

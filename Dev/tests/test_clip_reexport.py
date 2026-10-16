@@ -8,8 +8,8 @@ import types
 import zipfile
 
 import pytest
+from conftest import SCRIPTS_DIR
 
-SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "App", "Shared", "Scripts")
 sys.modules.setdefault("obspython", types.ModuleType("obspython"))  # only exists inside OBS
 sys.path.insert(0, SCRIPTS_DIR)
 
