@@ -8,6 +8,9 @@ check() compares each with the signed install manifest:
 - OBS: the version in the manifest entry's file name vs. the installed OBS's
   own version (falling back to obs_install.INSTALLED_VERSIONS_PATH).
 - Python: the same, vs. the bundled interpreter's version.
+- ffmpeg: the manifest entry's sha256 vs. the one recorded when it was
+  installed (a rebuild with new features keeps FFmpeg's version) - only
+  if ClipEm's ffmpeg is installed at all.
 - Packages: the exact pins in requirements.txt vs. what's installed - only
   for sets that were installed at all (the tray widget is optional).
 Only ever upgrades, never downgrades.
@@ -317,6 +320,12 @@ def check(manifest, system=None):
         local = installed(system)
         if updater.is_newer(remote, local):
             found[name] = (local, remote)
+    ffmpeg = manifest.get(key, {}).get("ffmpeg")
+    if ffmpeg and os.path.isfile(ffmpeg_exe(system)):
+        local = obs_install.installed_sha256("ffmpeg")
+        if local != ffmpeg["sha256"].lower():
+            name = os.path.basename(ffmpeg.get("url", "")).removesuffix(".tar.gz").removesuffix(".zip")
+            found["ffmpeg"] = (local, name)
     packages = outdated_package_sets(system)
     if packages:
         found["packages"] = packages
@@ -329,6 +338,8 @@ def describe(plan):
         lines.append("OBS {} -> {}".format(*plan["obs"]))
     if "python" in plan:
         lines.append("ClipEm's Python {} -> {}".format(*plan["python"]))
+    if "ffmpeg" in plan:
+        lines.append(f"ffmpeg (new build: {plan['ffmpeg'][1]})")
     if "packages" in plan:
         names = ["tray widget" if path == TRAY_REQUIREMENTS else "mic filter" for path in plan["packages"]]
         lines.append(f"Updated {' and '.join(names)} packages")
@@ -405,6 +416,47 @@ def install_obs(manifest, system, log):
     obs_install.record_installed_version("obs", entry)
     obs_install.record_local_checksums([os.path.join(dest, name) for name in program_dirs], f"{folder} OBS", log=log)
     log(f"OBS updated to {updater.artifact_version(entry)}.")
+
+
+def ffmpeg_exe(system):
+    return os.path.join(obs_install.platform_dir(system), "ffmpeg", "bin",
+                        "ffmpeg.exe" if system == "Windows" else "ffmpeg")
+
+
+def install_ffmpeg(manifest, system, log):
+    """Replaces App/<platform>/ffmpeg with the manifest's build."""
+    dest = obs_install.platform_dir(system)
+    staging = os.path.join(dest, ".ffmpeg" + STAGING_SUFFIX)
+    backup = os.path.join(dest, ".ffmpeg" + BACKUP_SUFFIX)
+    archive = os.path.join(dest, "ffmpeg-update" + (".zip" if system == "Windows" else ".tar.gz"))
+    _clean(staging, backup)
+    os.makedirs(staging)
+    try:
+        entry = _download(manifest, system, "ffmpeg", archive, log)
+        log("Extracting ffmpeg...")
+        if archive.endswith(".zip"):
+            with zipfile.ZipFile(archive) as zf:
+                updater.validate_zip(zf, root="ffmpeg")
+                zf.extractall(staging)
+        else:
+            obs_install._extract(archive, staging)
+        os.remove(archive)
+        exe = os.path.relpath(ffmpeg_exe(system), dest)
+        if not os.path.isfile(os.path.join(staging, exe)):
+            raise updater.UpdateError(f"the downloaded ffmpeg package has no {exe.replace(os.sep, '/')}")
+        unexpected = sorted(set(os.listdir(staging)) - {"ffmpeg"})
+        if unexpected:
+            raise updater.UpdateError(f"the downloaded ffmpeg package has unexpected entries: {', '.join(unexpected)}")
+        if system != "Windows":
+            os.chmod(os.path.join(staging, exe), 0o755)
+        updater.swap_in(staging, dest, backup, preserved=())
+    finally:
+        if os.path.exists(archive):
+            os.remove(archive)
+        _clean(staging, backup)
+    obs_install.record_installed_sha256("ffmpeg", entry)
+    obs_install.record_local_checksums([os.path.join(dest, "ffmpeg")], "ffmpeg", log=log)
+    log("ffmpeg updated.")
 
 
 def _pip_install(python, requirements, log, target=None, force=False):
@@ -586,6 +638,8 @@ def install(manifest, plan, log, run_args=()):
         return CONTINUE
     if "obs" in plan:
         install_obs(manifest, system, log)
+    if "ffmpeg" in plan:
+        install_ffmpeg(manifest, system, log)
     if "python" in plan:
         # Reinstalls every package set for the new Python too.
         if system == "Linux":

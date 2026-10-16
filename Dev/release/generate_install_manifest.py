@@ -36,10 +36,6 @@ from release_common import (
 
 PINS_PATH = SCRIPT_DIR / "upstream-pins.json"
 OBS_REPO = "obsproject/obs-studio"
-LOSSLESSCUT_REPO = "mifi/lossless-cut"
-# LosslessCut's release assets, per manifest platform - downloaded on request
-# by the Clip Browser (Installer/editor_install.py).
-LOSSLESSCUT_ASSETS = {"windows": "LosslessCut-win-x64.7z", "linux": "LosslessCut-linux-x64.tar.bz2"}
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -62,7 +58,6 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--windows-python-version", required=True)
     parser.add_argument("--windows-pip-version", required=True)
     parser.add_argument("--macos-obs-version", required=True)
-    parser.add_argument("--losslesscut-version", required=True)
     return parser.parse_args(argv)
 
 
@@ -112,10 +107,6 @@ def github_asset(pins: dict, repo: str, tag: str, asset: str) -> dict:
 
 def github_obs_asset(pins: dict, version: str, asset: str) -> dict:
     return github_asset(pins, OBS_REPO, version, asset)
-
-
-def losslesscut_asset(pins: dict, version: str, platform_key: str) -> dict:
-    return github_asset(pins, LOSSLESSCUT_REPO, f"v{version}", LOSSLESSCUT_ASSETS[platform_key])
 
 
 def pypi_wheel(pins: dict, package: str, version: str) -> dict:
@@ -170,14 +161,12 @@ def main(argv=None) -> None:
         "pip_wheel": pypi_wheel(pins, "pip", args.windows_pip_version),
         "ffmpeg": windows_ffmpeg,
         "shared": shared,
-        "losslesscut": losslesscut_asset(pins, args.losslesscut_version, "windows"),
     }
     macos = {
         "obs_arm64": github_obs_asset(pins, mac_obs, f"OBS-Studio-{mac_obs}-macOS-Apple.dmg"),
         "obs_x86_64": github_obs_asset(pins, mac_obs, f"OBS-Studio-{mac_obs}-macOS-Intel.dmg"),
         "shared": shared,
     }
-    linux_losslesscut = losslesscut_asset(pins, args.losslesscut_version, "linux")
     write_json_atomic(PINS_PATH, pins)
 
     # Key order matters: ClipEmSetupLinux.sh reads linux.python's fields with
@@ -188,7 +177,6 @@ def main(argv=None) -> None:
         "windows": windows,
         "linux": {
             "obs": linux_obs, "python": linux_python, "shared": shared, "ffmpeg": linux_ffmpeg,
-            "losslesscut": linux_losslesscut,
         },
         "macos": macos,
         # Corresponding source for the GPL binaries above (not downloaded by

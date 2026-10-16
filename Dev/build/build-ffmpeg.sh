@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Builds the ffmpeg binary ClipEm ships for re-exporting smaller copies of
-# saved clips (App/Shared/Scripts/clip_reexport.py), from official source:
+# saved clips (App/Shared/Scripts/clip_reexport.py), splitting their audio
+# tracks, and the clip editor (App/Shared/tray-widget/clip_edit.py), from
+# official source:
 #   - FFmpeg  https://github.com/FFmpeg/FFmpeg          (pinned tag + commit)
 #   - x264    https://code.videolan.org/videolan/x264   (pinned commit)
 #
@@ -10,13 +12,15 @@
 #
 # The build is deliberately minimal: the ffmpeg CLI only, H.264 via x264,
 # FFmpeg's native AAC encoder, the demuxers/decoders OBS recordings can
-# contain, and the MP4 muxer. No network, no hardware acceleration, no
-# autodetected system libraries - so the result is reproducible and small.
+# contain, MP4/MKV output, JPEG thumbnails, raw PCM (waveforms) and the
+# filters the clip editor's exports use. No network, no hardware
+# acceleration, no autodetected system libraries - so the result is
+# reproducible and small.
 #
 # Output (in Dev/dist/ffmpeg/, reused if already built for these pins):
-#   ffmpeg-<ver>-linux-x86_64.tar.gz     bin/ffmpeg + LICENSE/SOURCES
-#   ffmpeg-<ver>-windows-x86_64.zip      bin/ffmpeg.exe + LICENSE/SOURCES
-#   ffmpeg-<ver>-source.tar.gz           the exact FFmpeg + x264 sources built
+#   ffmpeg-<ver>-<rev>-linux-x86_64.tar.gz   bin/ffmpeg + LICENSE/SOURCES
+#   ffmpeg-<ver>-<rev>-windows-x86_64.zip    bin/ffmpeg.exe + LICENSE/SOURCES
+#   ffmpeg-<ver>-<rev>-source.tar.gz         the exact FFmpeg + x264 sources built
 #                                        (published alongside the binaries -
 #                                        the GPL requires offering them)
 #
@@ -29,18 +33,21 @@ set -euo pipefail
 FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
+# ClipEm's own build revision: bump it whenever FFMPEG_COMMON_FLAGS change, so
+# the archives get new names (and hashes) and installs pick the new build up.
+BUILD_REV="r2"
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEV_DIR/dist/ffmpeg"
 WORK_DIR="$DEV_DIR/.ffmpeg-build"
 VERSION="${FFMPEG_TAG#n}"
-LINUX_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-linux-x86_64.tar.gz"
-WINDOWS_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-windows-x86_64.zip"
-SOURCE_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-source.tar.gz"
+LINUX_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-$BUILD_REV-linux-x86_64.tar.gz"
+WINDOWS_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-$BUILD_REV-windows-x86_64.zip"
+SOURCE_ARCHIVE="$OUT_DIR/ffmpeg-$VERSION-$BUILD_REV-source.tar.gz"
 JOBS="$(nproc)"
 
 if [[ "${1:-}" != "--force" && -f "$LINUX_ARCHIVE" && -f "$WINDOWS_ARCHIVE" && -f "$SOURCE_ARCHIVE" ]]; then
-  echo "ffmpeg $VERSION already built in $OUT_DIR (pass --force to rebuild)"
+  echo "ffmpeg $VERSION ($BUILD_REV) already built in $OUT_DIR (pass --force to rebuild)"
   exit 0
 fi
 
@@ -81,7 +88,8 @@ tag_commit="$(git ls-remote https://github.com/FFmpeg/FFmpeg.git "refs/tags/$FFM
 
 # --- Build -----------------------------------------------------------------
 # Everything OBS can write to a recording (H.264/HEVC/AV1 video, AAC/Opus
-# audio, in MP4/MOV/MKV/FLV/TS) must be readable; output is H.264+AAC MP4.
+# audio, in MP4/MOV/MKV/FLV/TS) must be readable; output is H.264+AAC in
+# MP4/MKV, JPEG thumbnails, and raw PCM for the editor's waveforms.
 # shellcheck disable=SC2054  # commas are part of the configure values
 FFMPEG_COMMON_FLAGS=(
   --enable-gpl --enable-libx264
@@ -93,10 +101,11 @@ FFMPEG_COMMON_FLAGS=(
   --enable-demuxer=mov,matroska,flv,mpegts,aac,h264,hevc
   --enable-decoder=h264,hevc,av1,aac,aac_latm,opus,mp3,pcm_s16le,pcm_f32le
   --enable-parser=h264,hevc,av1,aac,aac_latm,opus
-  --enable-encoder=libx264,aac
-  --enable-muxer=mp4
+  --enable-encoder=libx264,aac,mjpeg,pcm_s16le
+  --enable-muxer=mp4,matroska,null,pcm_s16le,image2
   --enable-bsf=aac_adtstoasc,h264_mp4toannexb,extract_extradata
   --enable-filter=scale,format,aresample,aformat,null,anull,trim,atrim,setpts,asetpts
+  --enable-filter=concat,volume,amix,adelay,apad,afade,asplit,split
   --enable-swscale --enable-swresample
 )
 
@@ -140,7 +149,7 @@ This ffmpeg was built for ClipEm from unmodified official sources:
   FFmpeg $FFMPEG_TAG  https://github.com/FFmpeg/FFmpeg  commit $FFMPEG_COMMIT
   x264             https://code.videolan.org/videolan/x264  commit $X264_COMMIT
 Licensed under the GNU GPL (see LICENSE.txt). The exact source code is
-published next to this download as ffmpeg-$VERSION-source.tar.gz, and the
+published next to this download as ffmpeg-$VERSION-$BUILD_REV-source.tar.gz, and the
 build script is Dev/build/build-ffmpeg.sh in the ClipEm repository.
 EOF
 }
@@ -163,8 +172,17 @@ package() {  # <name> <binary> <archive>
 
 build_target linux-x86_64 ""
 strip "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg"
-"$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" -hide_banner -encoders 2>/dev/null | grep -q libx264 \
-  || { echo "Linux build has no libx264 encoder" >&2; exit 1; }
+check_has() {  # <-encoders|-muxers|-filters> <name>...
+  local kind="$1" listing
+  shift
+  listing="$("$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" -hide_banner "$kind" 2>/dev/null)"
+  for name in "$@"; do
+    grep -qE "^ *[A-Z.|]+ +$name( |$)" <<<"$listing" || { echo "Linux build has no $name ($kind)" >&2; exit 1; }
+  done
+}
+check_has -encoders libx264 aac mjpeg pcm_s16le
+check_has -muxers mp4 matroska null s16le image2
+check_has -filters concat volume amix adelay apad afade asplit split scale
 if ldd "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" >/dev/null 2>&1; then
   echo "Linux build is dynamically linked - expected a static binary" >&2
   exit 1
@@ -182,4 +200,4 @@ tar --sort=name --owner=0 --group=0 --numeric-owner --exclude=.git \
 echo "Wrote $SOURCE_ARCHIVE"
 
 rm -rf "$WORK_DIR/linux-x86_64" "$WORK_DIR/windows-x86_64"
-echo -e "\nDone: ffmpeg $VERSION for Linux and Windows in $OUT_DIR"
+echo -e "\nDone: ffmpeg $VERSION ($BUILD_REV) for Linux and Windows in $OUT_DIR"

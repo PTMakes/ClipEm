@@ -348,7 +348,7 @@ def main():
 
     on_sound_toggle()
 
-    # --- The Clip Browser's "Open in..." button: any editor the user has.
+    # --- The clip editor's "Open in..." button: any editor the user has.
     tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )

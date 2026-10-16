@@ -60,6 +60,19 @@ def record_installed_version(component, entry):
         write_json_atomic(INSTALLED_VERSIONS_PATH, versions)
 
 
+def record_installed_sha256(component, entry):
+    """For downloads whose version doesn't change when they're rebuilt
+    (ClipEm's ffmpeg: same FFmpeg release, new build flags) - the manifest's
+    sha256 is what tells them apart."""
+    versions = load_json(INSTALLED_VERSIONS_PATH, {}) or {}
+    versions[f"{component}_sha256"] = entry["sha256"].lower()
+    write_json_atomic(INSTALLED_VERSIONS_PATH, versions)
+
+
+def installed_sha256(component):
+    return (load_json(INSTALLED_VERSIONS_PATH, {}) or {}).get(f"{component}_sha256")
+
+
 def record_local_checksums(root_dirs, label, log=print):
     """Hashes every file under the given (absolute) root_dirs and merges
     the results into App/checksums_local.json. Called right after a fresh

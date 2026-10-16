@@ -251,7 +251,7 @@ class TrayApp:
                 visible=self._clip_folder_missing,
             ),
             pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip),
-            pystray.MenuItem("Clip Browser...", self._open_clip_browser),
+            pystray.MenuItem("Edit Clips...", self._open_clip_editor),
             pystray.MenuItem("Open Clips Folder", self._open_clips_folder),
             pystray.MenuItem(self._replay_label, self._toggle_replay_buffer),
             pystray.MenuItem(self._recording_label, self._toggle_recording),
@@ -331,13 +331,13 @@ class TrayApp:
             log.warning(f"Failed to save clip: {exc}")
             self._notify(f"Failed to save clip: {exc}")
 
-    def _open_clip_browser(self, icon, item):
+    def _open_clip_editor(self, icon, item):
         try:
             self._children.append(subprocess.Popen(
                 [sys.executable, CLIP_BROWSER_SCRIPT, "--parent-pid", str(os.getpid())]
             ))
         except Exception as exc:
-            log.warning(f"Failed to open the Clip Browser: {exc}")
+            log.warning(f"Failed to open the clip editor: {exc}")
 
     def _clip_folder_missing(self, item):
         return self.connected and self.clip_folder.missing_dir is not None

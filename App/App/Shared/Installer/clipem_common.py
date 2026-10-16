@@ -30,7 +30,7 @@ VERSION_PATH = os.path.join(SHARED_DIR, "VERSION")
 # entry autostart.apply_boot_autostart creates) - a plain launch always
 # starts everything. Missing/corrupt file means "start everything".
 RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
-# custom_editor_path: the Clip Browser's "Open in..." editor (tray Settings).
+# custom_editor_path: the clip editor's "Open in..." editor (tray Settings).
 DEFAULT_RUN_CONFIG = {"autostart_obs": True, "autostart_tray": True, "custom_editor_path": ""}
 
 # Written next to the macOS/Linux tray-deps by setup.install_tray_widget():

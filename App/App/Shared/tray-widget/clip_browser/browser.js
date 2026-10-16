@@ -1,9 +1,11 @@
 "use strict";
 
-// Served by clip_browser.py under a per-run token path - every request here
-// is relative to it.
+// The clip list sidebar (hover to play with sound, move to scrub) and what
+// the editor (editor.js, which defines select() and renderDetails()) shares
+// with it. Served by clip_browser.py under a per-run token path - every
+// request here is relative to it.
 const POLL_MS = 3000;
-const INSTALL_POLL_MS = 1000;
+const SIDEBAR_KEY = "clipem.sidebarHidden";
 
 const state = {
   clips: [],
@@ -11,7 +13,6 @@ const state = {
   editors: null,
   soundAllowed: true, // false after the browser refused to play with sound
   hovering: null, // {name, thumb, fraction}
-  installing: false, // LosslessCut download in progress
 };
 
 const $ = (id) => document.getElementById(id);
@@ -224,109 +225,41 @@ document.addEventListener("click", () => {
 }, { capture: true });
 
 // ---------------------------------------------------------------------------
-// Main pane
+// Showing and hiding the sidebar
 // ---------------------------------------------------------------------------
 
-function selectedClip() {
-  return state.clips.find((c) => c.name === state.selected) || null;
-}
-
-function select(name) {
-  if (state.selected !== name) {
-    state.selected = name;
-    player.src = mediaUrl(name);
-    setStatus("");
-  }
-  for (const li of list.children) li.classList.toggle("selected", li.dataset.name === name);
-  renderDetails();
-}
-
-function renderDetails() {
-  const clip = selectedClip();
-  $("details").hidden = !clip;
-  $("no-selection").hidden = !!clip;
-  if (!clip) {
-    player.removeAttribute("src");
-    player.load();
-    return;
-  }
-  $("clip-title").textContent = clip.name;
-  $("clip-meta").textContent = [formatWhen(clip.mtime), formatDuration(clip.duration), formatSize(clip.size)]
-    .filter(Boolean).join(" · ");
-  $("tracks-note").textContent = clip.tracks_file
-    ? `Editors open ${clip.tracks_file}, with every audio track kept separate.`
-    : "";
-  renderEditorButtons();
-}
-
-function renderEditorButtons() {
-  const editors = state.editors;
-  const lc = $("edit-losslesscut");
-  const custom = $("edit-custom");
-  if (!editors) return;
-  lc.hidden = !editors.losslesscut.supported;
-  if (state.installing) {
-    lc.disabled = true;
-  } else {
-    lc.disabled = false;
-    lc.textContent = editors.losslesscut.installed
-      ? "Edit in LosslessCut"
-      : `Download LosslessCut (~${editors.losslesscut.download_mb} MB)`;
-  }
-  custom.hidden = !editors.custom;
-  if (editors.custom) custom.textContent = `Open in ${editors.custom.label}`;
-}
-
-async function openIn(editor) {
-  const clip = selectedClip();
-  if (!clip) return;
+function setSidebarHidden(hidden) {
+  document.body.classList.toggle("sidebar-hidden", hidden);
+  $("toggle-sidebar").setAttribute("aria-pressed", String(!hidden));
+  if (hidden && state.hovering) stopHover(state.hovering.thumb);
   try {
-    const result = await api("api/open", { name: clip.name, editor });
-    setStatus(`Opened ${result.file}.`);
-  } catch (err) {
-    setStatus(err.message, true);
-  }
+    localStorage.setItem(SIDEBAR_KEY, hidden ? "1" : "");
+  } catch (err) { /* storage unavailable - just not remembered */ }
+  window.dispatchEvent(new Event("resize"));
 }
 
-async function installLosslessCut() {
-  state.installing = true;
-  renderEditorButtons();
-  try {
-    let status = await api("api/install-losslesscut", {});
-    while (status.state === "running") {
-      $("edit-losslesscut").textContent = status.message || "Downloading LosslessCut...";
-      await new Promise((resolve) => setTimeout(resolve, INSTALL_POLL_MS));
-      status = await api("api/install-status");
-    }
-    setStatus(status.message, status.state === "error");
-  } catch (err) {
-    setStatus(err.message, true);
-  } finally {
-    state.installing = false;
-    await loadEditors();
-  }
-}
+$("toggle-sidebar").addEventListener("click", () => {
+  setSidebarHidden(!document.body.classList.contains("sidebar-hidden"));
+});
 
-$("edit-losslesscut").addEventListener("click", () => {
-  if (state.editors && state.editors.losslesscut.installed) openIn("losslesscut");
-  else installLosslessCut();
-});
-$("edit-custom").addEventListener("click", () => openIn("custom"));
-$("reveal").addEventListener("click", async () => {
-  const clip = selectedClip();
-  if (!clip) return;
-  try {
-    await api("api/reveal", { name: clip.name });
-  } catch (err) {
-    setStatus(err.message, true);
-  }
-});
-player.addEventListener("play", () => {
-  if (state.hovering) stopHover(state.hovering.thumb);
-});
+try {
+  if (localStorage.getItem(SIDEBAR_KEY)) setSidebarHidden(true);
+} catch (err) { /* storage unavailable */ }
+
+function typingIn(target) {
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement;
+}
 
 document.addEventListener("keydown", (e) => {
-  if (e.target instanceof HTMLButtonElement || !["ArrowUp", "ArrowDown"].includes(e.key)) return;
+  if (typingIn(e.target) || e.ctrlKey || e.metaKey || e.altKey) return;
+  // Tab only toggles when nothing has focus, so keyboard focus moves as usual.
+  if (e.key === "Tab" && !e.shiftKey && e.target === document.body) {
+    e.preventDefault();
+    setSidebarHidden(!document.body.classList.contains("sidebar-hidden"));
+    return;
+  }
+  if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
   const index = state.clips.findIndex((c) => c.name === state.selected);
   const next = state.clips[index + (e.key === "ArrowDown" ? 1 : -1)];
   if (next) {
@@ -340,13 +273,8 @@ document.addEventListener("keydown", (e) => {
 // Loading
 // ---------------------------------------------------------------------------
 
-async function loadEditors() {
-  try {
-    state.editors = await api("api/editors");
-  } catch (err) {
-    setStatus(err.message, true);
-  }
-  renderEditorButtons();
+function selectedClip() {
+  return state.clips.find((c) => c.name === state.selected) || null;
 }
 
 async function loadClips() {
@@ -354,6 +282,7 @@ async function loadClips() {
     const data = await api("api/clips");
     const newest = data.clips[0] && data.clips[0].name;
     const hadNewest = state.clips[0] && state.clips[0].name;
+    const first = state.clips.length === 0 && state.selected === null;
     state.clips = data.clips;
     renderList();
     if (!selectedClip()) {
@@ -362,14 +291,10 @@ async function loadClips() {
       if (newest) select(newest);
       else renderDetails();
     } else {
-      if (newest && newest !== hadNewest) setStatus(`New clip: ${newest}`);
+      if (!first && newest && newest !== hadNewest) setStatus(`New clip: ${newest}`);
       renderDetails();
     }
   } catch (err) {
     setStatus(`Can't reach ClipEm: ${err.message}`, true);
   }
 }
-
-loadEditors();
-loadClips();
-setInterval(loadClips, POLL_MS);

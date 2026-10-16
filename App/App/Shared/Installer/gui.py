@@ -138,7 +138,6 @@ class Wizard(tk.Tk):
         self._bitrate_resolution = (video_settings["width"], video_settings["height"])
         self.filesize_estimate_var = tk.StringVar(value="")
         self.split_tracks_var = tk.BooleanVar(value=controller["load_split_tracks"]())
-        self.get_losslesscut_var = tk.BooleanVar(value=False)  # opt-in download
         reexport = controller["load_clip_reexport"]()
         self.reexport_var = tk.BooleanVar(value=reexport["reexport_enabled"])
         self.crop_duration_var = tk.IntVar(
@@ -822,13 +821,6 @@ class Wizard(tk.Tk):
         else:
             self._show_app_track_list()
 
-        if self.controller["losslesscut_supported"]() and not self.controller["losslesscut_installed"]():
-            ttk.Frame(self.container).pack(pady=(self.px(PAD // 2), 0))
-            self._make_toggle(
-                self.container, self.get_losslesscut_var,
-                f"Also get LosslessCut (~{self.controller['losslesscut_download_mb']} MB) for quick trims",
-            )
-
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_audio_devices)
         ttk.Button(bar, text="Continue", command=self._apply_split_tracks).pack(side="right")
 
@@ -874,56 +866,7 @@ class Wizard(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Setup", f"Could not save the split audio tracks setting:\n{exc}")
             return
-        if self.get_losslesscut_var.get() and not self.controller["losslesscut_installed"]():
-            self._download_losslesscut(then=self._show_clip_quality)
-        else:
-            self._show_clip_quality()
-
-    def _download_losslesscut(self, then):
-        """Downloads LosslessCut in the background behind a small progress
-        window (like the mic filter's dependency install); a failure is
-        reported but doesn't stop setup - the Clip Browser offers it again."""
-        progress = tk.Toplevel(self)
-        progress.title("LosslessCut")
-        progress.transient(self)
-        progress.resizable(False, False)
-        progress.grab_set()
-        message_var = tk.StringVar(value="Downloading LosslessCut...")
-        ttk.Label(progress, textvariable=message_var, padding=self.px(PAD)).pack()
-        results = queue.Queue()
-
-        def worker():
-            try:
-                self.controller["install_losslesscut"](log=lambda m: results.put(("log", str(m).strip())))
-                results.put(("done", None))
-            except Exception as exc:
-                results.put(("error", str(exc)))
-
-        threading.Thread(target=worker, daemon=True).start()
-
-        def poll():
-            while True:
-                try:
-                    kind, payload = results.get_nowait()
-                except queue.Empty:
-                    progress.after(200, poll)
-                    return
-                if kind == "log":
-                    message_var.set(payload)
-                    self.setup_log.append(payload + "\n")
-                    continue
-                progress.destroy()
-                if kind == "error":
-                    messagebox.showerror(
-                        "LosslessCut",
-                        f"Could not download LosslessCut:\n{payload}\n\nThe Clip Browser can try again later.",
-                    )
-                else:
-                    self.get_losslesscut_var.set(False)
-                then()
-                return
-
-        progress.after(200, poll)
+        self._show_clip_quality()
 
     def _show_clip_quality(self):
         self._clear()

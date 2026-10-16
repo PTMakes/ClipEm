@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>ClipEm Clips</title>
+  <title>ClipEm Editor</title>
+  <link rel="icon" href="/clipem-editor/icon.png">
   <link rel="stylesheet" href="app.css">
 </head>
 <body>
@@ -17,24 +18,51 @@
     <p id="empty" class="muted" hidden>No clips yet - save one with your clip hotkey.</p>
   </aside>
   <main id="main">
-    <div id="player-wrap">
-      <video id="player" controls preload="metadata"></video>
-      <p id="no-selection" class="muted">Pick a clip on the left.</p>
-    </div>
-    <section id="details" hidden>
+    <header id="toolbar">
+      <button id="toggle-sidebar" title="Show or hide the clip list (Tab)" aria-pressed="true">Clips</button>
       <div class="title-row">
         <h2 id="clip-title"></h2>
         <span id="clip-meta" class="muted"></span>
       </div>
-      <div class="actions">
-        <button id="edit-losslesscut" class="primary"></button>
+      <div class="spacer"></div>
+      <button id="undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
+      <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
+      <button id="reset" title="Undo every edit to this clip" disabled>Reset</button>
+    </header>
+    <div id="player-wrap">
+      <video id="player" preload="auto" playsinline muted></video>
+      <p id="no-selection" class="muted">Pick a clip on the left.</p>
+    </div>
+    <section id="editor" hidden>
+      <div id="transport">
+        <button id="play" class="icon" title="Play / pause (Space)" aria-label="Play">&#9654;</button>
+        <span id="time" class="mono"></span>
+        <span id="kept-length" class="muted"></span>
+        <div class="spacer"></div>
+        <span class="muted hint">Drag on the timeline to select &middot; drag the handles to trim</span>
+      </div>
+      <div id="panel" hidden></div>
+      <div id="timeline-scroll">
+        <div id="timeline"></div>
+        <button id="toggle-unused" class="link" hidden></button>
+      </div>
+      <footer id="export-bar">
+        <button id="export-full" class="primary">Export full quality</button>
+        <button id="export-discord" class="primary">Export for Discord</button>
+        <span id="discord-note" class="muted"></span>
+        <div class="spacer"></div>
         <button id="edit-custom" hidden></button>
         <button id="reveal">Show in folder</button>
+      </footer>
+      <div id="export-progress" hidden>
+        <div class="bar"><div class="fill"></div></div>
+        <span id="export-message"></span>
+        <button id="export-cancel">Cancel</button>
       </div>
-      <p id="tracks-note" class="muted"></p>
       <p id="status" role="status"></p>
     </section>
   </main>
-  <script src="app.js"></script>
+  <script src="browser.js"></script>
+  <script src="editor.js"></script>
 </body>
 </html>

@@ -237,6 +237,54 @@ def test_failed_obs_download_keeps_the_installed_obs(app):
     assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["obs-install"]
 
 
+# --- ffmpeg ------------------------------------------------------------------
+
+def test_ffmpeg_is_outdated_when_its_build_hash_changes(app, monkeypatch):
+    app_dir, _archives, _downloads = app
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: None)
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    manifest = _manifest(linux_ffmpeg="https://x.invalid/ffmpeg-9.0.2-r2-linux-x86_64.tar.gz")
+    assert components.check(manifest, "Linux") == {}  # not installed - nothing to update
+    exe = app_dir / "Linux" / "ffmpeg" / "bin" / "ffmpeg"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    assert components.check(manifest, "Linux") == {"ffmpeg": (None, "ffmpeg-9.0.2-r2-linux-x86_64")}
+    obs_install.record_installed_sha256("ffmpeg", {"sha256": "X"})
+    assert components.check(manifest, "Linux") == {}
+    assert components.describe({"ffmpeg": (None, "ffmpeg-9.0.2-r2-linux-x86_64")}) == [
+        "ffmpeg (new build: ffmpeg-9.0.2-r2-linux-x86_64)",
+    ]
+
+
+def test_ffmpeg_update_replaces_the_build(app):
+    app_dir, archives, _downloads = app
+    exe = app_dir / "Linux" / "ffmpeg" / "bin" / "ffmpeg"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("old ffmpeg")
+    (app_dir / "Linux" / "obs-install").mkdir()
+    archives["ffmpeg-9.0.2-r2-linux-x86_64.tar.gz"] = lambda dest: _tar(dest, {
+        "ffmpeg/bin/ffmpeg": b"new ffmpeg", "ffmpeg/LICENSE.txt": b"GPL",
+    })
+    manifest = _manifest(linux_ffmpeg="https://x.invalid/ffmpeg-9.0.2-r2-linux-x86_64.tar.gz")
+    components.install_ffmpeg(manifest, "Linux", log=lambda message: None)
+    assert exe.read_text() == "new ffmpeg" and os.access(exe, os.X_OK)
+    assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["ffmpeg", "obs-install"]
+    assert obs_install.installed_sha256("ffmpeg") == "x"
+
+
+def test_failed_ffmpeg_download_keeps_the_installed_ffmpeg(app):
+    app_dir, _archives, _downloads = app
+    exe = app_dir / "Linux" / "ffmpeg" / "bin" / "ffmpeg"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("old ffmpeg")
+    manifest = _manifest(linux_ffmpeg="https://x.invalid/ffmpeg-9.0.2-r2-linux-x86_64.tar.gz")
+    with pytest.raises(updater.UpdateError):
+        components.install_ffmpeg(manifest, "Linux", log=lambda message: None)
+    assert exe.read_text() == "old ffmpeg"
+    assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["ffmpeg"]
+
+
 # --- Installing Python and packages ----------------------------------------
 
 def _fake_pip(installed):
@@ -296,11 +344,12 @@ def test_install_orders_and_reports_what_the_caller_must_do(monkeypatch):
     calls = []
     monkeypatch.setattr(components, "_system", lambda: "Linux")
     monkeypatch.setattr(components, "install_obs", lambda m, s, log: calls.append("obs"))
+    monkeypatch.setattr(components, "install_ffmpeg", lambda m, s, log: calls.append("ffmpeg"))
     monkeypatch.setattr(components, "install_linux_python", lambda m, log: calls.append("python"))
     monkeypatch.setattr(components, "install_packages", lambda s, sets, log: calls.append("packages"))
-    plan = {"obs": ("1.0.0", "2.0.0"), "python": ("3.12.0", "3.12.1"), "packages": ["x"]}
+    plan = {"obs": ("1.0.0", "2.0.0"), "ffmpeg": (None, "f"), "python": ("3.12.0", "3.12.1"), "packages": ["x"]}
     assert components.install({}, plan, log=print) == components.RESTART
-    assert calls == ["obs", "python"]  # the Python update reinstalls the packages itself
+    assert calls == ["obs", "ffmpeg", "python"]  # the Python update reinstalls the packages itself
     calls.clear()
     assert components.install({}, {"packages": ["x"]}, log=print) == components.CONTINUE
     assert calls == ["packages"]

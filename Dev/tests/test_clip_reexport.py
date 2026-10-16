@@ -20,9 +20,10 @@ import updater  # noqa: E402
 
 
 def test_bitrate_leaves_headroom_under_target():
-    kbps = clip_reexport.video_bitrate_kbps(10, 20)
-    total_mb = (kbps + clip_reexport.AUDIO_BITRATE_KBPS) * 20 / 8192
-    assert 9.0 < total_mb <= 10 * clip_reexport.SIZE_HEADROOM
+    kbps = clip_reexport.video_bitrate_kbps(20, 20)
+    total_bytes = (kbps + clip_reexport.AUDIO_BITRATE_KBPS) * 1000 / 8 * 20
+    assert 18_000_000 < total_bytes <= 20_000_000 * clip_reexport.SIZE_HEADROOM  # Discord counts decimal MB
+    assert clip_reexport.DEFAULT_TARGET_MB == setup.DEFAULT_TARGET_FILESIZE_MB == 20
     assert clip_reexport.video_bitrate_kbps(1, 3600) == clip_reexport.MIN_VIDEO_BITRATE_KBPS
 
 

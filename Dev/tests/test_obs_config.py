@@ -102,3 +102,31 @@ def test_wav_at_volume_rejects_what_it_cant_scale(tmp_path):
     bad.write_bytes(b"RIFF")
     with pytest.raises((wave.Error, EOFError)):
         obs_config.wav_at_volume(str(bad), 0.5)
+
+
+def _scene_with_reexport(tmp_path, monkeypatch, settings):
+    path = tmp_path / "scenes.json"
+    path.write_text(json.dumps({"modules": {"scripts-tool": [
+        {"path": "/x/Scripts/clip_reexport.py", "settings": settings},
+    ]}}))
+    monkeypatch.setattr(obs_config, "SCENE_COLLECTION_JSON", str(path))
+    return path
+
+
+def test_discord_target_moves_from_10_to_20_mb_once(tmp_path, monkeypatch):
+    path = _scene_with_reexport(tmp_path, monkeypatch, {"target_mb": 10.0, "reexport_enabled": True})
+    assert obs_config.migrate_discord_target_size() is True
+    settings = json.loads(path.read_text())["modules"]["scripts-tool"][0]["settings"]
+    assert settings["target_mb"] == 20.0 and settings["reexport_enabled"] is True
+    settings["target_mb"] = 10.0  # chosen again by the user afterwards
+    path.write_text(json.dumps({"modules": {"scripts-tool": [{"path": "clip_reexport.py", "settings": settings}]}}))
+    assert obs_config.migrate_discord_target_size() is False
+    assert json.loads(path.read_text())["modules"]["scripts-tool"][0]["settings"]["target_mb"] == 10.0
+
+
+def test_discord_target_keeps_a_custom_size(tmp_path, monkeypatch):
+    path = _scene_with_reexport(tmp_path, monkeypatch, {"target_mb": 8.0})
+    assert obs_config.migrate_discord_target_size() is False
+    assert json.loads(path.read_text())["modules"]["scripts-tool"][0]["settings"]["target_mb"] == 8.0
+    monkeypatch.setattr(obs_config, "SCENE_COLLECTION_JSON", str(tmp_path / "missing.json"))
+    assert obs_config.migrate_discord_target_size() is False

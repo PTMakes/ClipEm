@@ -142,6 +142,33 @@ def find_script_entry(data, script_name):
     return None
 
 
+# Discord's free upload limit, in decimal MB (it was 10 MB until ClipEm
+# 1.3.7). Must match Scripts/clip_reexport.py's DEFAULT_TARGET_MB.
+DISCORD_TARGET_MB = 20
+OLD_DISCORD_TARGET_MB = 10
+DISCORD_MIGRATED_KEY = "clipem_discord_20mb"
+
+
+def migrate_discord_target_size():
+    """Moves a smaller-copy target still at the old Discord limit (10 MB) to
+    the new one, once - a 10 set again afterwards is the user's choice.
+    Returns True if it changed anything. Must run while OBS is closed (OBS
+    rewrites the scene collection on exit)."""
+    data = load_scene_collection()
+    entry = find_script_entry(data, "clip_reexport.py")
+    if not entry:
+        return False
+    settings = entry.setdefault("settings", {})
+    if settings.get(DISCORD_MIGRATED_KEY):
+        return False
+    changed = settings.get("target_mb") == OLD_DISCORD_TARGET_MB
+    if changed:
+        settings["target_mb"] = float(DISCORD_TARGET_MB)
+    settings[DISCORD_MIGRATED_KEY] = True
+    save_scene_collection(data)
+    return changed
+
+
 # ---------------------------------------------------------------------------
 # obs-websocket
 # ---------------------------------------------------------------------------

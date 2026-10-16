@@ -701,6 +701,12 @@ def main():
                 log.info(f"Applied queued OBS settings: {', '.join(sorted(applied))}")
             except Exception as exc:
                 log.warning(f"Could not apply queued OBS settings: {exc}")
+    if not obs_process.obs_running():
+        try:
+            if obs_config.migrate_discord_target_size():
+                log.info(f"Smaller-copy target moved to Discord's new {obs_config.DISCORD_TARGET_MB} MB limit.")
+        except Exception as exc:
+            log.warning(f"Could not update the smaller-copy target size: {exc}")
     boot = "--boot" in sys.argv[1:]
     config = load_run_config() if boot else dict(DEFAULT_RUN_CONFIG)
     system = platform.system()

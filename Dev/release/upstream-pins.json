@@ -22,7 +22,5 @@
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip": "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1",
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-macOS-Apple.dmg": "920d6f26703d2df6e4085bd3c1cbed30488325084136c7a6e9e37021fbd6aaf7",
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-macOS-Intel.dmg": "f8d8afe3dffdc86efa0698c02ff0c997866bac3e6208ddaf56d37108baacf197",
-  "https://github.com/dimtpap/obs-pipewire-audio-capture/archive/refs/tags/1.2.1.tar.gz": "70107cafd2020437fc0b663fdf6a94598b474942a0582b24719a0e76a9f73a50",
-  "https://github.com/mifi/lossless-cut/releases/download/v3.69.0/LosslessCut-win-x64.7z": "baf7106576999e1460f918054e3ad4ae38a95469892cc6a1a97b4131f02818e4",
-  "https://github.com/mifi/lossless-cut/releases/download/v3.69.0/LosslessCut-linux-x64.tar.bz2": "cd69d7dda64b2978cead468c56703c1d58077e7a9c2379948a5d08816726a2e5"
+  "https://github.com/dimtpap/obs-pipewire-audio-capture/archive/refs/tags/1.2.1.tar.gz": "70107cafd2020437fc0b663fdf6a94598b474942a0582b24719a0e76a9f73a50"
 }

@@ -7,7 +7,7 @@ import setup
 
 def test_bitrate_math_round_trips():
     kbps = setup.compute_video_bitrate_for_filesize(10, 60)
-    assert kbps == int(10 * 8192 / 60 - setup.AUDIO_BITRATE_KBPS)
+    assert kbps == int(10 * 8000 / 60 - setup.AUDIO_BITRATE_KBPS)
     assert setup.compute_filesize_for_bitrate(kbps, 60) == pytest.approx(10, rel=0.01)
     assert setup.compute_video_bitrate_for_filesize(1, 600) == setup.MIN_VIDEO_BITRATE_KBPS
 

@@ -25,7 +25,6 @@ import zipfile
 # imports below fail before anything runs.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import autostart  # noqa: E402
-import editor_install  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
@@ -94,8 +93,6 @@ WINDOWS_OBS_VERSION = "32.2.2"
 # import.c) only loads Python 3.6-3.12, so this can't move past 3.12.
 # 3.12.10 is the last 3.12 release with Windows binaries.
 WINDOWS_PYTHON_VERSION = "3.12.10"
-# The Clip Browser's editor (downloaded on request - Installer/editor_install.py).
-LOSSLESSCUT_VERSION = "3.69.0"
 
 
 # ---------------------------------------------------------------------------
@@ -299,8 +296,9 @@ COMMON_RESOLUTIONS = [
     (3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (854, 480),
 ]
 AUDIO_BITRATE_KBPS = 160
+KBIT_PER_MB = 8000  # Must match Scripts/clip_reexport.py's.
 MIN_VIDEO_BITRATE_KBPS = 500
-DEFAULT_TARGET_FILESIZE_MB = 10  # Discord's free-tier upload limit.
+DEFAULT_TARGET_FILESIZE_MB = obs_config.DISCORD_TARGET_MB  # Discord's free-tier upload limit.
 REPLAY_BUFFER_MIN_SECONDS = 15
 REPLAY_BUFFER_MAX_SECONDS = 600  # RecRBSize (512MB) caps how much of this is reachable in practice.
 REPLAY_BUFFER_STEP_SECONDS = 15
@@ -976,10 +974,11 @@ def save_replay_buffer_seconds(seconds):
 
 def compute_video_bitrate_for_filesize(target_mb, duration_sec, audio_kbps=AUDIO_BITRATE_KBPS):
     """kbps such that `duration_sec` seconds of video+audio lands near
-    `target_mb` MB (1 MB = 8192 kbit). Muxing/container overhead is small
-    (~1-2%) and ignored - this is a planning estimate, not an exact target."""
+    `target_mb` MB (decimal, as Discord counts them: 1 MB = 8000 kbit).
+    Muxing/container overhead is small (~1-2%) and ignored - this is a
+    planning estimate, not an exact target."""
     duration_sec = max(1, duration_sec)
-    video_kbps = (target_mb * 8192 / duration_sec) - audio_kbps
+    video_kbps = (target_mb * KBIT_PER_MB / duration_sec) - audio_kbps
     return max(MIN_VIDEO_BITRATE_KBPS, int(video_kbps))
 
 
@@ -1007,7 +1006,7 @@ def compute_filesize_for_bitrate(video_kbps, duration_sec, audio_kbps=AUDIO_BITR
     `duration_sec` seconds of video+audio at a given (directly-chosen)
     video bitrate."""
     duration_sec = max(1, duration_sec)
-    return (video_kbps + audio_kbps) * duration_sec / 8192
+    return (video_kbps + audio_kbps) * duration_sec / KBIT_PER_MB
 
 
 def load_recording_bitrate():
@@ -1635,7 +1634,7 @@ def ensure_ffmpeg():
     archive = os.path.join(platform_dir, "ffmpeg-download" + (".zip" if system == "Windows" else ".tar.gz"))
     try:
         print("Fetching ffmpeg (used to save smaller copies of clips)...")
-        _fetch_verified(platform_key, "ffmpeg", archive)
+        entry = _fetch_verified(platform_key, "ffmpeg", archive)
         if archive.endswith(".zip"):
             with zipfile.ZipFile(archive) as zf:
                 updater.validate_zip(zf, root="ffmpeg")
@@ -1646,6 +1645,7 @@ def ensure_ffmpeg():
             with tarfile.open(archive) as tf:
                 tf.extractall(platform_dir, filter="data")
         os.chmod(exe, 0o755)
+        obs_install.record_installed_sha256("ffmpeg", entry)
         record_local_checksums([os.path.dirname(os.path.dirname(exe))], "ffmpeg")
         print("ffmpeg installed.")
     except Exception as exc:
@@ -2227,10 +2227,6 @@ def try_launch_gui(system):
         "set_app_slot_pinned": set_app_slot_pinned,
         "reset_app_tracks": reset_app_tracks,
         "app_slot_source_id": app_slot_source_id,
-        "losslesscut_supported": editor_install.losslesscut_supported,
-        "losslesscut_installed": lambda: bool(editor_install.find_losslesscut()),
-        "losslesscut_download_mb": editor_install.LOSSLESSCUT_DOWNLOAD_MB.get(platform.system()),
-        "install_losslesscut": editor_install.install_losslesscut,
         "load_obs_websocket_settings": load_obs_websocket_settings,
         "save_obs_websocket_settings": save_obs_websocket_settings,
         "generate_obs_websocket_password": generate_obs_websocket_password,

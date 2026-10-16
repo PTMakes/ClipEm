@@ -54,10 +54,8 @@ __pycache__/
 /App/App/Shared/tray-widget/.settings.lock
 /App/App/Shared/tray-widget/.clip_browser.lock
 /App/App/Shared/tray-widget/.clip_browser.url
-# Clip Browser thumbnails and its browser profile; LosslessCut, downloaded on request.
+# Clip Browser thumbnails and its browser profile.
 /App/App/cache/
-/App/App/Windows/LosslessCut/
-/App/App/Linux/LosslessCut/
 # Settings changed while OBS was running, waiting to be applied (obs_config).
 /App/App/Shared/pending_obs_settings.json
 # Which app owns which split audio track (tray-widget/app_audio.py).

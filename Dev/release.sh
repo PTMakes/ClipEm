@@ -85,7 +85,6 @@ read_setup_constant() {
 WINDOWS_OBS_VERSION="$(read_setup_constant WINDOWS_OBS_VERSION)"
 WINDOWS_PYTHON_VERSION="$(read_setup_constant WINDOWS_PYTHON_VERSION)"
 MACOS_OBS_VERSION="$(read_setup_constant MACOS_OBS_VERSION)"
-LOSSLESSCUT_VERSION="$(read_setup_constant LOSSLESSCUT_VERSION)"
 # pip wheel the Windows embeddable Python bootstraps itself with (pinned in
 # the manifest with PyPI's own sha256). Must support WINDOWS_PYTHON_VERSION.
 WINDOWS_PIP_VERSION="26.2.1"
@@ -268,6 +267,7 @@ echo "Wrote $LINUX_OBS_TAR"
 step "ffmpeg for clip re-export (see build/build-ffmpeg.sh; reused once built)"
 "$SCRIPT_DIR/build/build-ffmpeg.sh"
 FFMPEG_VERSION="$(grep -oP '(?<=^FFMPEG_TAG="n)[^"]+' "$SCRIPT_DIR/build/build-ffmpeg.sh")"
+FFMPEG_VERSION="$FFMPEG_VERSION-$(grep -oP '(?<=^BUILD_REV=")[^"]+' "$SCRIPT_DIR/build/build-ffmpeg.sh")"
 for f in linux-x86_64.tar.gz windows-x86_64.zip source.tar.gz; do
   cp "$DIST_DIR/ffmpeg/ffmpeg-$FFMPEG_VERSION-$f" "$RELEASE_DIR/"
 done
@@ -294,8 +294,7 @@ python3 "$SCRIPT_DIR/release/generate_install_manifest.py" \
   --windows-obs-version "$WINDOWS_OBS_VERSION" \
   --windows-python-version "$WINDOWS_PYTHON_VERSION" \
   --windows-pip-version "$WINDOWS_PIP_VERSION" \
-  --macos-obs-version "$MACOS_OBS_VERSION" \
-  --losslesscut-version "$LOSSLESSCUT_VERSION"
+  --macos-obs-version "$MACOS_OBS_VERSION"
 
 # Legacy update feed, only read by pre-1.0.22 installs.
 python3 "$SCRIPT_DIR/release/generate_checksums.py" "$APP_DIR/App/Shared" --skip-checksums \

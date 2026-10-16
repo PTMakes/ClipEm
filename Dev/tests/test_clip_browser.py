@@ -1,6 +1,6 @@
-"""The tray's Clip Browser (tray-widget/clip_browser.py): its local server -
+"""The tray's clip editor (tray-widget/clip_browser.py): its local server -
 clip listing, Range requests for the video player, path checks, token -
-plus how it picks a window and opens editors (Installer/editor_install.py)."""
+plus how it picks a window and opens the editor (Installer/editor_install.py)."""
 
 import json
 import os
@@ -150,13 +150,135 @@ def test_every_request_needs_the_token(server):
         urllib.request.urlopen(f"http://127.0.0.1:{port}/wrong/api/clips", timeout=5)
 
 
+def test_launch_page_and_icon_need_no_token_and_never_leak_it(server):
+    port = server.server_address[1]
+    assert server.launch_url == f"http://127.0.0.1:{port}/clipem-editor/#tok"
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/clipem-editor/", timeout=5) as res:
+        page = res.read()
+    assert b'location.replace("/" + token + "/")' in page and b"/tok/" not in page and b"#tok" not in page
+    with urllib.request.urlopen(f"http://127.0.0.1:{port}/clipem-editor/icon.png", timeout=5) as res:
+        assert res.headers["Content-Type"] == "image/png" and res.read(8) == b"\x89PNG\r\n\x1a\n"
+    with pytest.raises(urllib.error.HTTPError):
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/clipem-editor/../tok/api/clips", timeout=5)
+    with pytest.raises(urllib.error.HTTPError):
+        urllib.request.urlopen(f"http://127.0.0.1:{port}/clipem-editor/api/clips", timeout=5)
+
+
+def test_app_id_matches_what_chromium_browsers_name_the_window():
+    assert clip_browser.app_id("/usr/bin/chromium") == "chrome-127.0.0.1__clipem-editor_-Default"
+    assert clip_browser.app_id("/usr/bin/brave") == "brave-127.0.0.1__clipem-editor_-Default"
+    assert clip_browser.app_id(r"C:\Edge\msedge.exe") is None
+    assert clip_browser.app_id("/usr/bin/firefox") is None
+
+
+def test_desktop_entry_gives_the_window_clipem_icon(tmp_path):
+    path = clip_browser.ensure_app_desktop_entry("/usr/bin/chromium", directory=str(tmp_path))
+    assert os.path.basename(path) == "chrome-127.0.0.1__clipem-editor_-Default.desktop"
+    text = open(path, encoding="utf-8").read()
+    assert "StartupWMClass=chrome-127.0.0.1__clipem-editor_-Default" in text
+    assert "NoDisplay=true" in text and text.count("Icon=") == 1 and "ClipEm.png" in text
+    mtime = os.path.getmtime(path)
+    assert clip_browser.ensure_app_desktop_entry("/usr/bin/chromium", directory=str(tmp_path)) == path
+    assert os.path.getmtime(path) == mtime  # unchanged - not rewritten
+    assert clip_browser.ensure_app_desktop_entry("/usr/bin/firefox", directory=str(tmp_path)) is None
+
+
 def test_page_and_clip_list(server):
     status, headers, body = _get(server, "")
-    assert status == 200 and headers["Content-Type"].startswith("text/html") and b"app.js" in body
+    assert status == 200 and headers["Content-Type"].startswith("text/html") and b"editor.js" in body
     status, _headers, body = _get(server, "api/clips")
     data = json.loads(body)
     assert [c["name"] for c in data["clips"]] == ["a.mp4"]
     assert data["clips"][0]["tracks_file"] == "a-tracks.mkv" and data["clips"][0]["duration"] == 12.0
+
+
+SPLIT_PROBE = """  Duration: 00:00:12.00, start: 0.000000, bitrate: 2000 kb/s
+  Stream #0:0: Video: h264 (High), yuv420p(progressive), 1920x1080, 60 fps, 60 tbr, 1k tbn
+  Stream #0:1: Audio: aac (LC), 48000 Hz, stereo, fltp (default)
+      Metadata:
+        title           : Mix
+  Stream #0:2: Audio: aac (LC), 48000 Hz, stereo, fltp
+      Metadata:
+        title           : Mic
+  Stream #0:3: Audio: aac (LC), 48000 Hz, stereo, fltp
+      Metadata:
+        title           : Desktop
+"""
+
+
+@pytest.fixture
+def editor(server, tmp_path, monkeypatch):
+    """The server's editor, probing the fake clips as a 12 s split-tracks clip."""
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"))
+    probed = []
+
+    def info(source):
+        probed.append(os.path.basename(source))
+        return clip_browser.clip_edit.parse_probe(SPLIT_PROBE)
+
+    monkeypatch.setattr(editor, "info", info)
+    editor._missing = []
+    server.editor = editor
+    editor.probed = probed
+    return editor
+
+
+def _post(server, path, body):
+    return _get(server, path, {"Content-Type": "application/json"}, json.dumps(body).encode())
+
+
+def test_project_is_loaded_from_the_tracks_copy_and_saved(server, editor):
+    status, _h, body = _get(server, "api/project?name=a.mp4")
+    data = json.loads(body)
+    assert status == 200 and data["source"] == "a-tracks.mkv" and editor.probed == ["a-tracks.mkv"]
+    assert data["info"]["split"] and [t["title"] for t in data["info"]["tracks"]] == ["Mix", "Mic", "Desktop"]
+    assert data["project"]["keep"] == [[0.0, 12.0]] and data["missing"] == []
+    assert data["discord"]["target_mb"] == 20
+
+    project = data["project"]
+    project["keep"] = [[1, 4], [6, 20]]
+    project["tracks"][1]["regions"] = [{"start": 2, "end": 3, "db": 6}]
+    status, _h, body = _post(server, "api/project", {"name": "a.mp4", "project": project})
+    assert status == 200 and json.loads(body)["project"]["keep"] == [[1.0, 4.0], [6.0, 12.0]]
+    _status, _h, body = _get(server, "api/project?name=a.mp4")
+    saved = json.loads(body)["project"]
+    assert saved["keep"] == [[1.0, 4.0], [6.0, 12.0]]
+    assert saved["tracks"][1]["regions"] == [{"start": 2.0, "end": 3.0, "db": 6.0}]
+
+
+def test_project_of_a_missing_clip(server, editor):
+    assert _get(server, "api/project?name=nope.mp4")[0] == 404
+    assert _get(server, "api/project?name=..%2Fa.mp4")[0] == 404
+    assert _post(server, "api/project", {"name": "nope.mp4", "project": {}})[0] == 404
+
+
+def test_export_needs_a_new_enough_ffmpeg(server, editor):
+    editor._missing = ["concat", "matroska"]
+    status, _h, body = _post(server, "api/export", {"name": "a.mp4", "preset": "full"})
+    assert status == 409 and "update ClipEm" in json.loads(body)["error"]
+    assert json.loads(_get(server, "api/project?name=a.mp4")[2])["missing"] == ["concat", "matroska"]
+
+
+def test_export_starts_the_job_with_safe_names(server, editor, monkeypatch):
+    started = []
+    monkeypatch.setattr(editor.export_job, "start",
+                        lambda steps, outputs, total, cleanup=(): started.append((steps, outputs, total)))
+    clips = server.folder_fn()
+    open(os.path.join(clips, "a-edit.mp4"), "w").close()
+    status, _h, _body = _post(server, "api/export", {"name": "a.mp4", "preset": "full"})
+    assert status == 200
+    steps, outputs, total = started[0]
+    assert sorted(os.path.basename(p) for p in outputs.values()) == ["a-edit-2-tracks.mkv", "a-edit-2.mp4"]
+    assert all(os.path.basename(p).startswith(".") for p in outputs)  # hidden until done
+    assert total == 12.0 and steps[0][0][steps[0][0].index("-i") + 1].endswith("a-tracks.mkv")
+    _post(server, "api/export", {"name": "a.mp4", "preset": "discord"})
+    assert [os.path.basename(p) for p in started[1][1].values()] == ["a-discord.mp4"]
+
+
+def test_track_routes_check_the_track_number(server, editor):
+    assert _get(server, "track/9/a.mp4")[0] == 404
+    assert _get(server, "peaks/x/a.mp4")[0] == 404
+    assert _get(server, "track/0/missing.mp4")[0] == 404
 
 
 def test_media_supports_ranges(server):
@@ -177,37 +299,18 @@ def test_media_refuses_paths_outside_the_folder(server):
 
 def test_opening_an_editor(server, monkeypatch):
     opened = []
-    monkeypatch.setattr(clip_browser.editor_install, "find_losslesscut", lambda: "/opt/LosslessCut/losslesscut")
-    monkeypatch.setattr(clip_browser.editor_install, "custom_editor_path", lambda: None)
+    editor = None
+    monkeypatch.setattr(clip_browser.editor_install, "custom_editor_path", lambda: editor)
     monkeypatch.setattr(clip_browser.editor_install, "open_in_editor",
                         lambda editor, path, log=None: opened.append((editor, os.path.basename(path))))
-    body = json.dumps({"name": "a.mp4", "editor": "losslesscut"}).encode()
-    status, _h, response = _get(server, "api/open", {"Content-Type": "application/json"}, body)
-    assert status == 200 and json.loads(response)["file"] == "a-tracks.mkv"
-    assert opened == [("/opt/LosslessCut/losslesscut", "a-tracks.mkv")]
-
-    body = json.dumps({"name": "a.mp4", "editor": "custom"}).encode()
+    body = json.dumps({"name": "a.mp4"}).encode()
     status, _h, response = _get(server, "api/open", {"Content-Type": "application/json"}, body)
     assert status == 400 and "Settings" in json.loads(response)["error"]
 
-
-def test_install_job_reports_progress_and_errors():
-    done = threading.Event()
-
-    def fake_install(log):
-        log("Downloading LosslessCut...")
-        done.wait(5)
-        raise RuntimeError("network down")
-
-    job = clip_browser.InstallJob(install=fake_install)
-    job.start()
-    job.start()  # a second click while it runs does nothing
-    done.set()
-    for _ in range(100):
-        if job.status["state"] != "running":
-            break
-        threading.Event().wait(0.02)
-    assert job.status["state"] == "error" and "network down" in job.status["message"]
+    editor = "/usr/bin/kdenlive"
+    status, _h, response = _get(server, "api/open", {"Content-Type": "application/json"}, body)
+    assert status == 200 and json.loads(response)["file"] == "a-tracks.mkv"
+    assert opened == [("/usr/bin/kdenlive", "a-tracks.mkv")]
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
@@ -255,59 +358,9 @@ def _fake_editor(tmp_path, script):
     return str(exe)
 
 
-def test_open_in_editor_retries_without_sandbox_on_linux(tmp_path, monkeypatch):
-    monkeypatch.setattr(editor_install, "EDITOR_LOG_PATH", str(tmp_path / "editor.log"))
-    marker = tmp_path / "args"
-    exe = _fake_editor(tmp_path, f'''if [ "$1" = "--no-sandbox" ]; then echo "$@" > "{marker}"; exit 0; fi
-echo "The SUID sandbox helper binary was found, but is not configured correctly" >&2
-exit 1
-''')
-    logs = []
-    editor_install.open_in_editor(exe, "/clips/a.mkv", log=logs.append, system="Linux")
-    for _ in range(100):
-        if marker.exists():
-            break
-        threading.Event().wait(0.02)
-    assert marker.read_text().strip() == "--no-sandbox /clips/a.mkv"
-    assert "--no-sandbox" in logs[0]
-
-
 def test_open_in_editor_reports_an_editor_that_dies(tmp_path, monkeypatch):
     monkeypatch.setattr(editor_install, "EDITOR_LOG_PATH", str(tmp_path / "editor.log"))
     exe = _fake_editor(tmp_path, 'echo "cannot open display" >&2\nexit 2\n')
     with pytest.raises(editor_install.EditorError, match="cannot open display"):
         editor_install.open_in_editor(exe, "/clips/a.mkv", system="Linux")
 
-
-def test_find_losslesscut_inside_its_wrapper_folder(tmp_path, monkeypatch):
-    monkeypatch.setattr(editor_install, "APP_DIR", str(tmp_path))
-    assert editor_install.find_losslesscut("Linux") is None
-    exe = tmp_path / "Linux" / "LosslessCut" / "LosslessCut-linux-x64" / "losslesscut"
-    exe.parent.mkdir(parents=True)
-    exe.write_text("")
-    assert editor_install.find_losslesscut("Linux") == str(exe)
-
-
-def test_install_losslesscut_unpacks_into_place(tmp_path, monkeypatch):
-    import tarfile
-
-    import obs_install
-
-    monkeypatch.setattr(editor_install, "APP_DIR", str(tmp_path))
-    monkeypatch.setattr(obs_install, "INSTALLED_VERSIONS_PATH", str(tmp_path / "installed_versions.json"))
-    source = tmp_path / "src" / "LosslessCut-linux-x64"
-    source.mkdir(parents=True)
-    (source / "losslesscut").write_text("#!/bin/sh\n")
-
-    def fake_fetch(platform_key, artifact, dest, log=print):
-        assert (platform_key, artifact) == ("linux", "losslesscut")
-        with tarfile.open(dest, "w:bz2") as tf:
-            tf.add(source, arcname="LosslessCut-linux-x64")
-        return {"url": "https://github.com/mifi/lossless-cut/releases/download/v3.69.0/LosslessCut-linux-x64.tar.bz2"}
-
-    monkeypatch.setattr(obs_install, "fetch_verified", fake_fetch)
-    exe = editor_install.install_losslesscut(log=lambda m: None, system="Linux")
-    assert exe == str(tmp_path / "Linux" / "LosslessCut" / "LosslessCut-linux-x64" / "losslesscut")
-    assert os.access(exe, os.X_OK)
-    assert sorted(os.listdir(tmp_path / "Linux")) == ["LosslessCut"]  # no staging folder or archive left
-    assert json.loads((tmp_path / "installed_versions.json").read_text()) == {"losslesscut": "3.69.0"}

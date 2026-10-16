@@ -9,7 +9,7 @@ Post-processes every saved replay-buffer clip, in a background thread:
    same everywhere.
 2. Smaller copy (reexport_enabled): the last `crop_seconds` of the clip,
    re-encoded to H.264/AAC MP4 at the bitrate that lands it near
-   `target_mb` - sized for upload limits (e.g. Discord's 10 MB). The
+   `target_mb` - sized for upload limits (e.g. Discord's 20 MB). The
    full-quality clip is never re-encoded.
 
 Settings (set by ClipEm's setup wizard, editable in OBS's Tools > Scripts):
@@ -31,6 +31,8 @@ import obspython as obs
 
 # Must match setup.py's AUDIO_BITRATE_KBPS / compute_video_bitrate_for_filesize.
 AUDIO_BITRATE_KBPS = 160
+# Decimal MB, as upload limits like Discord's count them.
+KBIT_PER_MB = 8000
 MIN_VIDEO_BITRATE_KBPS = 500
 # Container/muxing overhead and encoder overshoot - aim a little under target.
 SIZE_HEADROOM = 0.95
@@ -44,7 +46,8 @@ APP_SLOT_SOURCE_NAMES = ("ClipEm App A", "ClipEm App B", "ClipEm App C")
 APP_SLOT_LABEL_KEY = "clipem_label"
 FIRST_APP_TRACK = len(FIXED_TRACK_TITLES) + 1
 
-DEFAULT_TARGET_MB = 10.0
+# Discord's free upload limit - must match obs_config.DISCORD_TARGET_MB.
+DEFAULT_TARGET_MB = 20.0
 DEFAULT_CROP_SECONDS = 30
 
 _SYSTEM = platform.system()
@@ -61,7 +64,7 @@ crop_seconds = DEFAULT_CROP_SECONDS
 
 def video_bitrate_kbps(target_mb, duration_seconds):
     duration_seconds = max(1, duration_seconds)
-    total_kbps = target_mb * 8192 * SIZE_HEADROOM / duration_seconds
+    total_kbps = target_mb * KBIT_PER_MB * SIZE_HEADROOM / duration_seconds
     return max(MIN_VIDEO_BITRATE_KBPS, int(total_kbps - AUDIO_BITRATE_KBPS))
 
 

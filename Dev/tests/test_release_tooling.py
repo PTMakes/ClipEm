@@ -83,8 +83,7 @@ def manifest(tmp_path, monkeypatch):
     for arg, path in files.items():
         argv += [arg, path]
     argv += ["--windows-obs-version", "32.2.2", "--windows-python-version", "3.12.10",
-             "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2",
-             "--losslesscut-version", "3.69.0"]
+             "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2"]
     generate_install_manifest.main(argv)
     return out, files
 
@@ -101,9 +100,6 @@ def test_manifest_layout(manifest):
         assert python["sha256"] == hashlib.sha256(f.read()).hexdigest()
     assert data["sources"]["ffmpeg"]["url"].endswith("ffmpeg-9.0.2-source.tar.gz")
     assert data["windows"]["obs"]["url"].endswith("OBS-Studio-32.2.2-Windows-x64.zip")
-    assert data["windows"]["losslesscut"]["url"] == \
-        "https://github.com/mifi/lossless-cut/releases/download/v3.69.0/LosslessCut-win-x64.7z"
-    assert data["linux"]["losslesscut"]["url"].endswith("/v3.69.0/LosslessCut-linux-x64.tar.bz2")
 
 
 def test_windows_obs_asset_was_renamed_in_32():
