@@ -217,15 +217,51 @@ def main():
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
     px = UiScale(root).px
     root.title("ClipEm Settings")
-    root.resizable(False, False)
     # Opened from the tray menu - make sure it isn't hidden behind whatever
     # window had focus.
     root.lift()
     root.attributes("-topmost", True)
     root.after(500, lambda: root.attributes("-topmost", False))
 
-    frame = tk.Frame(root, padx=px(16), pady=px(12))
-    frame.pack()
+    # Status line and Save/Cancel sit in a footer packed first, so resizing
+    # the window shrinks the scrolling settings area above it, never them.
+    footer = tk.Frame(root, padx=px(16), pady=px(10))
+    footer.pack(side="bottom", fill="x")
+    ttk.Separator(root, orient="horizontal").pack(side="bottom", fill="x")
+    scroll_area = tk.Frame(root)
+    scroll_area.pack(side="top", fill="both", expand=True)
+    canvas = tk.Canvas(scroll_area, highlightthickness=0, borderwidth=0)
+    scrollbar = ttk.Scrollbar(scroll_area, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
+    frame = tk.Frame(canvas, padx=px(16), pady=px(12))
+    frame_window = canvas.create_window(0, 0, window=frame, anchor="nw")
+    frame.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.bind(
+        "<Configure>",
+        lambda event: canvas.itemconfigure(frame_window, width=max(event.width, frame.winfo_reqwidth())),
+    )
+
+    def on_mouse_wheel(event):
+        # bind_all also fires for other windows (dialogs) and for comboboxes,
+        # which use the wheel to change their value - only scroll for the
+        # settings area itself.
+        if not str(event.widget).startswith(str(canvas)) or isinstance(event.widget, ttk.Combobox):
+            return
+        if event.num == 4:
+            step = -1
+        elif event.num == 5:
+            step = 1
+        elif sys.platform == "darwin":
+            step = -event.delta
+        else:
+            step = -event.delta // 120
+        canvas.yview_scroll(step, "units")
+
+    for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
+        root.bind_all(sequence, on_mouse_wheel, add="+")
     # Rows spanning both columns (checkboxes, update text) are wider than
     # Port/Password; give that extra width to the field column so the labels
     # and fields stay flush left instead of being spread apart.
@@ -901,15 +937,23 @@ def main():
         root.destroy()
 
     status_var = tk.StringVar(value="")
-    tk.Label(frame, textvariable=status_var, fg="gray40").grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(10), 0)
-    )
-    next_row += 1
+    tk.Label(footer, textvariable=status_var, fg="gray40").pack(side="left")
 
-    button_frame = tk.Frame(frame)
-    button_frame.grid(row=next_row, column=0, columnspan=2, pady=(px(14), 0), sticky="e")
+    button_frame = tk.Frame(footer)
+    button_frame.pack(side="right")
     tk.Button(button_frame, text="Cancel", command=on_cancel, width=10).pack(side="left", padx=px(4))
     tk.Button(button_frame, text="Save", command=on_save, width=10).pack(side="left", padx=px(4))
+
+    # Size to fit the settings' width, but only a limited height - the rest
+    # scrolls. Never taller than the screen, so the footer stays on it.
+    root.update_idletasks()
+    width = frame.winfo_reqwidth() + scrollbar.winfo_reqwidth()
+    content_height = frame.winfo_reqheight() + footer.winfo_reqheight() + px(2)
+    max_height = root.winfo_screenheight() - px(80)
+    height = min(content_height, px(520), max_height)
+    root.geometry(f"{width}x{height}")
+    root.minsize(width, min(footer.winfo_reqheight() + px(120), max_height))
+    root.maxsize(root.winfo_screenwidth(), content_height)
 
     root.mainloop()
 
