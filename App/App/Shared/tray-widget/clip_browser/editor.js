@@ -235,6 +235,19 @@ function select(name) {
   renderDetails();
 }
 
+// Stops showing the selected clip and lets go of its files (before it's deleted).
+function closeClip() {
+  if (ed.name && ed.saveTimer) flushSave();
+  ed.loadToken++;
+  ed.name = null;
+  ed.info = null;
+  teardownAudio();
+  player.pause();
+  state.selected = null;
+  for (const li of list.children) li.classList.remove("selected");
+  renderDetails();
+}
+
 async function loadEditor(name) {
   const token = ++ed.loadToken;
   $("out-name").value = name.replace(/\.[^.]+$/, "");

@@ -96,7 +96,18 @@ function clipItem(clip) {
   badges.className = "badges";
   text.append(when, size, badges);
 
-  li.append(thumb, text);
+  const remove = document.createElement("button");
+  remove.className = "clip-delete";
+  remove.title = `Move to the ${TRASH_NAME}`;
+  remove.setAttribute("aria-label", `Delete clip`);
+  remove.innerHTML = TRASH_ICON;
+  remove.addEventListener("click", (e) => {
+    e.stopPropagation();
+    deleteClip(clip.name);
+  });
+  remove.addEventListener("keydown", (e) => e.stopPropagation());
+
+  li.append(thumb, text, remove);
   li.addEventListener("click", () => select(clip.name));
   li.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(clip.name); }
@@ -124,6 +135,29 @@ function updateItem(li, clip) {
     }
   }
   li.classList.toggle("selected", clip.name === state.selected);
+}
+
+const TRASH_NAME = /Windows/.test(navigator.userAgent) ? "Recycle Bin" : "Trash";
+const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
+
+async function deleteClip(name) {
+  const clip = state.clips.find((c) => c.name === name);
+  if (!clip) return;
+  const copies = [clip.tracks_file, clip.small_file].filter(Boolean);
+  const also = copies.length ? `\n\nIts ${copies.length === 1 ? "copy" : "copies"} go too: ${copies.join(", ")}` : "";
+  if (!window.confirm(`Move ${name} to the ${TRASH_NAME}?${also}`)) return;
+  if (state.hovering) stopHover(state.hovering.thumb);
+  hoverVideo.removeAttribute("src");
+  hoverVideo.load();
+  if (state.selected === name) closeClip(); // lets go of the file first
+  try {
+    await api("api/delete", { name });
+    await loadClips();
+    setStatus(`Moved ${name} to the ${TRASH_NAME}.`);
+  } catch (err) {
+    await loadClips();
+    window.alert(`Couldn't delete ${name}: ${err.message}`);
+  }
 }
 
 function renderList() {

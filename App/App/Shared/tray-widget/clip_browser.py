@@ -38,6 +38,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -392,6 +393,121 @@ def project_payload(clip, source, info, project, missing):
     }
 
 
+# ---------------------------------------------------------------------------
+# Deleting: to the Recycle Bin / Trash, never for good
+# ---------------------------------------------------------------------------
+
+def _trash_windows(path):
+    import ctypes
+    from ctypes import wintypes
+
+    class SHFILEOPSTRUCTW(ctypes.Structure):
+        _fields_ = [("hwnd", wintypes.HWND), ("wFunc", ctypes.c_uint), ("pFrom", ctypes.c_wchar_p),
+                    ("pTo", ctypes.c_wchar_p), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                    ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", ctypes.c_wchar_p)]
+
+    FO_DELETE = 3
+    FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 0x4, 0x10, 0x40, 0x400
+    op = SHFILEOPSTRUCTW(wFunc=FO_DELETE, pFrom=os.path.abspath(path) + "\0",
+                         fFlags=FOF_SILENT | FOF_NOCONFIRMATION | FOF_ALLOWUNDO | FOF_NOERRORUI)
+    result = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    if result or op.fAnyOperationsAborted:
+        raise OSError(f"Windows couldn't move it to the Recycle Bin (error {result:#x}) - is it open somewhere?")
+
+
+def _trash_macos(path, run=subprocess.run):
+    script = ["-e", "on run argv", "-e", 'tell application "Finder" to delete (POSIX file (item 1 of argv))',
+              "-e", "end run"]
+    result = run(["osascript", *script, os.path.abspath(path)], capture_output=True, text=True)
+    if result.returncode != 0:
+        raise OSError(f"Couldn't move it to the Trash: {result.stderr.strip()}")
+
+
+def _linux_trash_dir(path):
+    """The freedesktop.org trash for path: the home trash if it's on the
+    same filesystem, else $topdir/.Trash-$uid on path's own."""
+    home_trash = os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"), "Trash")
+    os.makedirs(home_trash, exist_ok=True)
+    if os.stat(home_trash).st_dev == os.stat(path).st_dev:
+        return home_trash
+    top = os.path.dirname(os.path.abspath(path))
+    while os.path.dirname(top) != top and os.stat(os.path.dirname(top)).st_dev == os.stat(path).st_dev:
+        top = os.path.dirname(top)
+    return os.path.join(top, f".Trash-{os.getuid()}")
+
+
+def _trash_linux(path, now=None):
+    path = os.path.abspath(path)
+    trash = _linux_trash_dir(path)
+    files, info = os.path.join(trash, "files"), os.path.join(trash, "info")
+    os.makedirs(files, mode=0o700, exist_ok=True)
+    os.makedirs(info, mode=0o700, exist_ok=True)
+    stem, ext = os.path.splitext(os.path.basename(path))
+    number = 1
+    while True:
+        name = os.path.basename(path) if number == 1 else f"{stem}.{number}{ext}"
+        info_path = os.path.join(info, name + ".trashinfo")
+        try:
+            fd = os.open(info_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+            break
+        except FileExistsError:
+            number += 1
+    when = (now or time.localtime)()
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(f"[Trash Info]\nPath={urllib.parse.quote(path)}\n"
+                f"DeletionDate={time.strftime('%Y-%m-%dT%H:%M:%S', when)}\n")
+    try:
+        os.rename(path, os.path.join(files, name))
+    except OSError:
+        os.remove(info_path)
+        raise
+
+
+def move_to_trash(path, system=None):
+    system = system or _SYSTEM
+    if system == "Windows":
+        _trash_windows(path)
+    elif system == "Darwin":
+        _trash_macos(path)
+    else:
+        _trash_linux(path)
+
+
+def clip_files(folder, name):
+    """The clip `name` and the copies listed with it (-tracks.mkv, -small)."""
+    clip = next((c for c in list_clips(folder) if c["name"] == name), None)
+    if not clip:
+        return []
+    names = [name] + [clip[key] for key in COPY_SUFFIXES.values() if clip[key]]
+    return [path for n in names if (path := resolve_clip(folder, n))]
+
+
+def delete_clip(folder, name, editor, trash=None, attempts=10):
+    """Moves the clip and its copies to the Recycle Bin / Trash, and drops
+    its saved edit. Retries for a moment: on Windows, the page that was
+    just showing it may still have it open. Returns the file names moved."""
+    trash = trash or move_to_trash
+    paths = clip_files(folder, name)
+    if not paths:
+        raise FileNotFoundError("That clip isn't there any more.")
+    try:
+        os.remove(editor.project_path(paths[0]))
+    except OSError:
+        pass
+    moved = []
+    for path in paths:
+        for attempt in range(attempts):
+            try:
+                trash(path)
+                break
+            except PermissionError:
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.2)
+        moved.append(os.path.basename(path))
+    return moved
+
+
 def reveal_in_file_manager(path):
     if _SYSTEM == "Windows":
         subprocess.Popen(["explorer", f"/select,{path}"])
@@ -605,6 +721,17 @@ class Handler(BaseHTTPRequestHandler):
             elif route == "api/export-cancel":
                 self.server.editor.export_job.cancel()
                 self._json(self.server.editor.export_job.status)
+            elif route == "api/delete":
+                if self.server.editor.export_job.running():
+                    self._json({"error": "An export is running - wait for it to finish first."}, 409)
+                    return
+                try:
+                    moved = delete_clip(folder, body.get("name"), self.server.editor)
+                except FileNotFoundError as exc:
+                    self._json({"error": str(exc)}, 404)
+                    return
+                log.info(f"Moved to the trash: {', '.join(moved)}")
+                self._json({"files": moved})
             elif route == "api/reveal":
                 path = resolve_clip(folder, body.get("name"))
                 if not path:

@@ -4,11 +4,14 @@ plus how it picks a window and opens the editor (Installer/editor_install.py).""
 
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import pytest
@@ -393,3 +396,39 @@ def test_quit_closes_the_window_and_cancels_the_export(server, monkeypatch):
     assert window.wait(timeout=5) is not None and cancelled == [True]
     assert clip_browser._quitting.is_set()
     assert _get(server, "../api/quit")[0] == 404  # needs the token like every API
+
+
+def test_delete_moves_the_clip_and_its_copies_to_the_trash(server, editor, monkeypatch):
+    clips = server.folder_fn()
+    _touch(pathlib.Path(clips), "a-small.mp4", b"small", mtime=102)
+    project = editor.project_path(os.path.join(clips, "a.mp4"))
+    os.makedirs(os.path.dirname(project), exist_ok=True)
+    open(project, "w").close()
+    trashed = []
+    monkeypatch.setattr(clip_browser, "move_to_trash", lambda path, system=None: trashed.append(path) or os.remove(path))
+    status, _h, body = _post(server, "api/delete", {"name": "a.mp4"})
+    assert status == 200
+    assert sorted(json.loads(body)["files"]) == ["a-small.mp4", "a-tracks.mkv", "a.mp4"]
+    assert sorted(os.path.basename(p) for p in trashed) == ["a-small.mp4", "a-tracks.mkv", "a.mp4"]
+    assert not os.path.exists(project)
+    assert _post(server, "api/delete", {"name": "a.mp4"})[0] == 404
+    assert _post(server, "api/delete", {"name": "../a.mp4"})[0] == 404
+
+
+def test_delete_waits_for_an_export(server, editor, monkeypatch):
+    monkeypatch.setattr(editor.export_job, "running", lambda: True)
+    assert _post(server, "api/delete", {"name": "a.mp4"})[0] == 409
+    assert os.path.exists(os.path.join(server.folder_fn(), "a.mp4"))
+
+
+def test_linux_trash_follows_the_freedesktop_layout(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    for _ in range(2):
+        clip = tmp_path / "my clip.mp4"
+        clip.write_bytes(b"video")
+        clip_browser._trash_linux(str(clip), now=lambda: time.struct_time((2026, 10, 17, 15, 0, 0, 5, 290, 0)))
+        assert not clip.exists()
+    trash = tmp_path / "data" / "Trash"
+    assert sorted(p.name for p in (trash / "files").iterdir()) == ["my clip.2.mp4", "my clip.mp4"]
+    info = (trash / "info" / "my clip.mp4.trashinfo").read_text()
+    assert info == f"[Trash Info]\nPath={urllib.parse.quote(str(tmp_path / 'my clip.mp4'))}\nDeletionDate=2026-10-17T15:00:00\n"
