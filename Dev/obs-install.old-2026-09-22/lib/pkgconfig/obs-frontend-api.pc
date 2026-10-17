@@ -1,0 +1,13 @@
+prefix=/home/pt/Development/PTMClipEm/Dev/obs-install
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: obs-frontend-api
+Description: OBS Studio frontend API library
+Version: 32.2.2
+
+Requires:
+Libs: -L${libdir} -lobs-frontend-api -lobs
+Libs.private: -lobs -lm -pthread
+Cflags: -I${includedir} -std=gnu17 -fPIC -fvisibility=hidden -fopenmp-simd -Werror

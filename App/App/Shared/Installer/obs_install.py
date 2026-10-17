@@ -62,8 +62,9 @@ def record_installed_version(component, entry):
 
 def record_installed_sha256(component, entry):
     """For downloads whose version doesn't change when they're rebuilt
-    (ClipEm's ffmpeg: same FFmpeg release, new build flags) - the manifest's
-    sha256 is what tells them apart."""
+    (ClipEm's ffmpeg: same FFmpeg release, new build flags; ClipEm's Linux
+    OBS: same OBS release, new plugins) - the manifest's sha256 is what
+    tells them apart."""
     versions = load_json(INSTALLED_VERSIONS_PATH, {}) or {}
     versions[f"{component}_sha256"] = entry["sha256"].lower()
     write_json_atomic(INSTALLED_VERSIONS_PATH, versions)
@@ -181,6 +182,7 @@ def install_obs(system, log=print):
         os.chmod(exe, 0o755)
 
     record_installed_version("obs", entry)
+    record_installed_sha256("obs", entry)
     record_local_checksums([os.path.join(dest, name) for name in checksum_dirs], f"{folder} OBS", log=log)
     log("OBS installed.")
     if system == "Windows":

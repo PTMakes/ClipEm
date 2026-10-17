@@ -85,7 +85,7 @@ def get_clipem_version():
 # Setup itself never downloads by these directly: it takes the URL and
 # sha256 from the signed manifest (see _fetch_verified below).
 # All three platforms run the same OBS as the Linux build
-# (Dev/build-obs-from-source-for-linux.sh).
+# (Dev/build/build-obs-from-source-for-linux.sh).
 MACOS_OBS_VERSION = "32.2.2"
 WINDOWS_OBS_VERSION = "32.2.2"
 # Windows' Python is also the one OBS runs ClipEm's scripts with, and OBS
@@ -162,15 +162,11 @@ def offer_to_clear_other_autostarts():
 def configure_autostart():
     offer_to_clear_other_autostarts()
     config = load_run_config()
-    config["autostart_obs"] = ask_yes_no(
-        "Automatically start OBS with PC boot?", default=config["autostart_obs"]
+    # The tray widget is required, so it always starts at boot alongside OBS.
+    enabled = ask_yes_no(
+        "Start ClipEm (OBS and the tray icon) when the PC boots?", default=config["autostart_obs"]
     )
-    if config["autostart_obs"]:
-        config["autostart_tray"] = ask_yes_no(
-            "Also automatically start the tray widget at boot?", default=config["autostart_tray"]
-        )
-    else:
-        config["autostart_tray"] = False
+    config["autostart_obs"] = config["autostart_tray"] = enabled
     save_run_config(config)
     apply_boot_autostart(config["autostart_obs"])
 
@@ -1215,15 +1211,12 @@ def install_tray_widget():
     print("Tray widget ready - Run will start it alongside OBS automatically.")
 
 
-def offer_tray_widget_setup():
-    if not ask_yes_no("Set up the optional system tray icon (save clips, replay buffer/recording toggles, quick settings)?", default=True):
-        return
-
+def set_up_tray_widget():
+    """The tray widget is required - without a tray host it's installed
+    anyway (it shows up once one is running), with a warning."""
     ok, warning = check_tray_prereqs()
     if not ok:
         print(warning)
-        return
-
     install_tray_widget()
 
 
@@ -1430,7 +1423,7 @@ SPLIT_TRACKS_MIXERS = {"DesktopAudioDevice1": 0b101, "AuxAudioDevice1": 0b011}  
 SHIPPED_MIXERS = 255
 # Per-platform app capture: Windows' own (Windows 10 2004+), and on Linux
 # the obs-pipewire-audio-capture plugin built into ClipEm's OBS (see
-# Dev/build-obs-from-source-for-linux.sh). macOS gets the mic/desktop
+# Dev/build/build-obs-from-source-for-linux.sh). macOS gets the mic/desktop
 # tracks only.
 APP_SLOT_SOURCE_IDS = {
     "Windows": "wasapi_process_output_capture",
@@ -1725,6 +1718,7 @@ def configure_obs_websocket():
 LOCAL_CHECKSUMS_PATH = obs_install.LOCAL_CHECKSUMS_PATH
 # Also called by ClipEmSetupLinux.sh after it fetches OBS.
 record_local_checksums = obs_install.record_local_checksums
+record_installed_sha256 = obs_install.record_installed_sha256
 
 
 def _load_checksum_manifest(path):
@@ -2268,7 +2262,7 @@ def main_cli(system):
     configure_clip_sound()
     configure_clip_reexport()
     configure_obs_websocket()
-    offer_tray_widget_setup()
+    set_up_tray_widget()
     configure_autostart()
     declutter_and_create_shortcut()
 

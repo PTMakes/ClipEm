@@ -328,7 +328,7 @@ def run_macos(config):
 
 def run_linux(config):
     platform_dir = obs_install.platform_dir("Linux")
-    # Only ever ClipEm's own build (Dev/build-obs-from-source-for-linux.sh:
+    # Only ever ClipEm's own build (Dev/build/build-obs-from-source-for-linux.sh:
     # ENABLE_RELOCATABLE + ENABLE_PORTABLE_CONFIG), never a system-wide OBS.
     exe = _ensure_obs("Linux")
     obs_install_dir = os.path.dirname(os.path.dirname(exe))

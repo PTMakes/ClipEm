@@ -43,17 +43,18 @@ set -euo pipefail
 OBS_PINNED_REF="32.2.2"
 OBS_PINNED_COMMIT="ba2f32bdf791005443988a4955e963663e16b1ed"
 OBS_REF="${1:-$OBS_PINNED_REF}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SRC_DIR="${SCRIPT_DIR}/obs-src"
+# Lives in Dev/build/, but builds into Dev/ - where release.sh packages obs-install from.
+DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SRC_DIR="${DEV_DIR}/obs-src"
 BUILD_DIR="${SRC_DIR}/build_ubuntu"
-INSTALL_DIR="${SCRIPT_DIR}/obs-install"
+INSTALL_DIR="${DEV_DIR}/obs-install"
 # Per-app audio capture on Linux ("Split audio tracks" in Setup) - OBS has
 # no built-in PipeWire application audio source, so this third-party plugin
 # is built against the OBS above and ships inside the same obs-install tree.
 PW_AUDIO_VERSION="1.2.1"
 PW_AUDIO_URL="https://github.com/dimtpap/obs-pipewire-audio-capture/archive/refs/tags/${PW_AUDIO_VERSION}.tar.gz"
 PW_AUDIO_SHA256="70107cafd2020437fc0b663fdf6a94598b474942a0582b24719a0e76a9f73a50"
-PW_AUDIO_DIR="${SCRIPT_DIR}/.pipewire-audio-work"
+PW_AUDIO_DIR="${DEV_DIR}/.pipewire-audio-work"
 
 if ! command -v pacman >/dev/null 2>&1; then
     echo "This script is written for Arch/CachyOS (pacman). For other distros," >&2

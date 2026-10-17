@@ -93,7 +93,7 @@ WINDOWS_PIP_VERSION="26.2.1"
 # (build-obs-from-source-for-linux.sh's OBS_REF), not Windows' pin.
 LIBOBS_CMAKE_VERSION="$SCRIPT_DIR/obs-install/lib/cmake/libobs/libobsConfigVersion.cmake"
 LINUX_OBS_VERSION="$(grep -oP '(?<=^set\(PACKAGE_VERSION ")[0-9.]+(?="\))' "$LIBOBS_CMAKE_VERSION" 2>/dev/null || true)"
-[[ -n "$LINUX_OBS_VERSION" ]] || die "Could not read the Linux OBS version from $LIBOBS_CMAKE_VERSION - run Dev/build-obs-from-source-for-linux.sh first"
+[[ -n "$LINUX_OBS_VERSION" ]] || die "Could not read the Linux OBS version from $LIBOBS_CMAKE_VERSION - run Dev/build/build-obs-from-source-for-linux.sh first"
 
 # The Linux portable Python (python-build-standalone, Xft-repacked by
 # build/repack-linux-python-xft.sh). Bump both together when moving to a new PBS

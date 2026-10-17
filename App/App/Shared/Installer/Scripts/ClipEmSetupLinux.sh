@@ -256,7 +256,9 @@ import os, sys
 sys.path.insert(0, os.path.join(sys.argv[1], "Shared", "Installer"))
 import setup
 setup.record_local_checksums([os.path.join(sys.argv[1], "Linux", "obs-install")], "Linux OBS")
-' "$APP_DIR"
+# Which build this is - the updater compares it with the manifest (components.check).
+setup.record_installed_sha256("obs", {"sha256": sys.argv[2]})
+' "$APP_DIR" "$(manifest_field obs sha256)"
 fi
 
 # --- 6. Hand off to the real cross-platform setup logic -------------------

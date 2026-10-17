@@ -62,7 +62,6 @@ PAGES = (
     "_show_hotkey",
     "_show_sound",
     "_show_obs_websocket",
-    "_show_tray_widget",
     "_show_auto_update",
     "_show_autostart",
     "_show_finish",
@@ -281,8 +280,8 @@ def format_report(problems_by_page):
 )
 class GuiLayoutTest(unittest.TestCase):
     """tray_ok=False so the stub data includes the real (long) no-tray-host
-    warning from setup.py - realistic content the wizard actually shows on
-    plain Linux desktops, not synthetic stress data."""
+    warning from setup.py - realistic content the wizard actually prints to
+    the finish page's log on plain Linux desktops, not synthetic stress data."""
 
     def setUp(self):
         self.controller = make_stub_controller(tray_ok=False)

@@ -35,6 +35,10 @@ def record_local_checksums(root_dirs, label):
     with open(os.path.join(HERE, "checksums-recorded"), "w") as f:
         f.write(label)
 
+def record_installed_sha256(component, entry):
+    with open(os.path.join(HERE, component + "-sha256-recorded"), "w") as f:
+        f.write(entry["sha256"])
+
 if __name__ == "__main__":
     with open(os.path.join(HERE, "setup-ran"), "w") as f:
         f.write(os.environ.get("CLIPEM_FAKE_PORTABLE_PYTHON", "system python"))
@@ -140,6 +144,9 @@ def test_fresh_install_uses_the_portable_python_and_bundled_obs(tmp_path, releas
     # setup.py ran under the portable Python even though a system python3 exists.
     assert (installer / "setup-ran").read_text() == "1"
     assert (installer / "checksums-recorded").read_text() == "Linux OBS"
+    # So the updater can tell a rebuilt OBS (same version) from this one.
+    obs_sha256 = hashlib.sha256((tmp_path / "www" / "obs.tar.gz").read_bytes()).hexdigest()
+    assert (installer / "obs-sha256-recorded").read_text() == obs_sha256
     assert "release signature OK" in result.stdout
 
 

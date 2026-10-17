@@ -312,14 +312,26 @@ def check(manifest, system=None):
         return {}
     key = _platform_key(system)
     found = {}
+    local_versions = {}
     for name, installed in (("obs", installed_obs_version), ("python", installed_python_version)):
         entry = manifest.get(key, {}).get(name)
         if not entry:
             continue
         remote = updater.artifact_version(entry)
-        local = installed(system)
+        local = local_versions[name] = installed(system)
         if updater.is_newer(remote, local):
             found[name] = (local, remote)
+    # Linux's OBS is ClipEm's own build, and a rebuild (e.g. with the
+    # PipeWire app audio plugin added) keeps OBS's version - like ffmpeg, its
+    # sha256 tells builds apart. Installs from before obs_sha256 was recorded
+    # get the current build once. Windows' OBS is the upstream zip: version only.
+    obs = manifest.get(key, {}).get("obs")
+    if (system == "Linux" and obs and "obs" not in found and os.path.isfile(obs_install.obs_exe(system))
+            and obs_install.installed_sha256("obs") != obs["sha256"].lower()):
+        remote = updater.artifact_version(obs)
+        local = local_versions.get("obs")
+        if not updater.is_newer(local, remote):  # never a downgrade
+            found["obs"] = (local, remote)
     ffmpeg = manifest.get(key, {}).get("ffmpeg")
     if ffmpeg and os.path.isfile(ffmpeg_exe(system)):
         local = obs_install.installed_sha256("ffmpeg")
@@ -335,7 +347,8 @@ def check(manifest, system=None):
 def describe(plan):
     lines = []
     if "obs" in plan:
-        lines.append("OBS {} -> {}".format(*plan["obs"]))
+        local, remote = plan["obs"]
+        lines.append(f"OBS {remote} (new build)" if local == remote else f"OBS {local} -> {remote}")
     if "python" in plan:
         lines.append("ClipEm's Python {} -> {}".format(*plan["python"]))
     if "ffmpeg" in plan:
@@ -414,6 +427,7 @@ def install_obs(manifest, system, log):
             os.remove(archive)
         _clean(staging, backup)
     obs_install.record_installed_version("obs", entry)
+    obs_install.record_installed_sha256("obs", entry)
     obs_install.record_local_checksums([os.path.join(dest, name) for name in program_dirs], f"{folder} OBS", log=log)
     log(f"OBS updated to {updater.artifact_version(entry)}.")
 

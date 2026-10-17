@@ -406,39 +406,18 @@ def main():
     )
     next_row += 1
 
-    autostart_obs_var = tk.BooleanVar(value=run_config["autostart_obs"])
-    autostart_tray_var = tk.BooleanVar(value=run_config["autostart_tray"])
+    # One choice for both: the tray widget is required, so it always starts
+    # at boot alongside OBS.
+    autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
     tk.Label(frame, text="Autostart with PC boot", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )
     next_row += 1
 
-    obs_check = tk.Checkbutton(
-        frame, text="Automatically start OBS with PC boot", variable=autostart_obs_var
-    )
-    obs_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    tk.Checkbutton(
+        frame, text="Start ClipEm (OBS and the tray icon) when the PC boots", variable=autostart_var
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
-
-    tray_check = tk.Checkbutton(
-        frame, text="Also start the tray widget at boot", variable=autostart_tray_var
-    )
-    tray_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
-
-    def on_obs_autostart_toggle():
-        # Same constraint as Setup's own wizard: the boot entry always
-        # runs both flags off of a single "run.py --boot" launch, and
-        # apply_boot_autostart() removes that entry entirely when OBS's
-        # flag is off - so the tray flag would be inert (no boot entry
-        # left to consult it) rather than actually starting anything.
-        if autostart_obs_var.get():
-            tray_check.config(state="normal")
-        else:
-            autostart_tray_var.set(False)
-            tray_check.config(state="disabled")
-
-    obs_check.config(command=on_obs_autostart_toggle)
-    on_obs_autostart_toggle()
 
     # Install/Uninstall act straight away (no Save needed) on the OS's
     # autostart entry itself - including ones left by another ClipEm folder.
@@ -458,15 +437,11 @@ def main():
 
     def save_autostart_flags():
         config = load_run_config()
-        config["autostart_obs"] = bool(autostart_obs_var.get())
-        config["autostart_tray"] = bool(autostart_tray_var.get())
+        config["autostart_obs"] = config["autostart_tray"] = bool(autostart_var.get())
         save_run_config(config)
 
     def on_install_autostart():
-        if not autostart_obs_var.get():
-            autostart_obs_var.set(True)
-            autostart_tray_var.set(True)
-            on_obs_autostart_toggle()
+        autostart_var.set(True)
         try:
             save_autostart_flags()
             apply_boot_autostart(True)
@@ -491,8 +466,7 @@ def main():
             parent=root,
         ):
             to_remove += others
-        autostart_obs_var.set(False)
-        on_obs_autostart_toggle()
+        autostart_var.set(False)
         try:
             save_autostart_flags()
             remove_autostart_entries(to_remove)
@@ -880,8 +854,7 @@ def main():
             # Fresh copy: the tray widget writes to this file too (see
             # obs_config.set_capture_display_user_changed).
             run_config = load_run_config()
-            run_config["autostart_obs"] = autostart_obs_var.get()
-            run_config["autostart_tray"] = autostart_tray_var.get()
+            run_config["autostart_obs"] = run_config["autostart_tray"] = bool(autostart_var.get())
             # Read by the tray widget before each check - see stuck_screen.py.
             run_config["stuck_check_enabled"] = bool(stuck_var.get())
             run_config["black_check_enabled"] = bool(black_var.get())

@@ -30,7 +30,7 @@ PAD = 16
 # actual width, so text fills the window the same way on every page.
 WRAP_WIDTH = 520
 
-# The pages after Welcome, in order - numbered "Step N of 14" in the bottom bar.
+# The pages after Welcome, in order - numbered "Step N of 13" in the bottom bar.
 STEP_PAGES = (
     "_show_provisioning",
     "_show_clip_folder",
@@ -42,7 +42,6 @@ STEP_PAGES = (
     "_show_hotkey",
     "_show_sound",
     "_show_obs_websocket",
-    "_show_tray_widget",
     "_show_auto_update",
     "_show_autostart",
     "_show_finish",
@@ -97,9 +96,7 @@ class Wizard(tk.Tk):
         self.title(WINDOW_TITLE)
         # Tall enough for the OBS Websocket page (the tallest ordinary page,
         # ~522px of real content - see test_gui_layout.py), with a little
-        # margin. The tray-widget page's much longer no-tray-host warning is
-        # handled separately with its own scrollable box (_show_tray_widget)
-        # rather than by growing the window further.
+        # margin.
         self.geometry(f"{self.px(640)}x{self.px(560)}")
         self.minsize(self.px(560), self.px(560))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -115,7 +112,6 @@ class Wizard(tk.Tk):
         self.queue = queue.Queue()
         self.clip_folder_var = tk.StringVar(value="")
         self.clip_folder_chosen = False
-        self.tray_var = tk.BooleanVar(value=True)
 
         # Display/audio detection shells out (PowerShell on Windows, which
         # compiles C# on the fly) and can take several seconds - done in the
@@ -146,8 +142,9 @@ class Wizard(tk.Tk):
         self.target_filesize_var = tk.StringVar(value=f"{reexport['target_mb']:g}")
         self.bitrate_preview_var = tk.StringVar(value="")
         run_config = controller["load_run_config"]()
-        self.autostart_obs_var = tk.BooleanVar(value=run_config["autostart_obs"])
-        self.autostart_tray_var = tk.BooleanVar(value=run_config["autostart_tray"])
+        # One choice for both: the tray widget is required, so it always
+        # starts at boot alongside OBS.
+        self.autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
         self.check_updates_var = tk.BooleanVar(value=controller["load_update_config"]()["check_for_updates"])
 
         ctrl0, alt0, shift0, key0 = controller["load_clip_hotkey"]()
@@ -1299,47 +1296,7 @@ class Wizard(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Setup", f"Could not save the OBS websocket settings:\n{exc}")
             return
-        self._show_tray_widget()
-
-    def _show_tray_widget(self):
-        self._clear()
-        ttk.Label(self.container, text="System tray widget", font=("", 13, "bold")).pack(
-            anchor="w"
-        )
-        ttk.Label(
-            self.container,
-            text=(
-                "Optional tray icon that runs alongside OBS: save a clip, start/stop "
-                "the replay buffer or a recording, open your clips folder and "
-                "change settings, without opening OBS."
-            ),
-            justify="left", wraplength=self.px(WRAP_WIDTH),
-        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
-
-        ok, warning = self.controller["check_tray_prereqs"]()
-        if not ok:
-            self.tray_var.set(False)
-            # A scrollable box rather than a plain label: this message is
-            # long enough (several install commands) that wrapping it in a
-            # fixed-height label would either overflow the window or force
-            # the whole wizard taller just for this one rare case.
-            warning_frame = ttk.Frame(self.container)
-            warning_frame.pack(fill="x", pady=(0, self.px(PAD)))
-            warning_text = tk.Text(
-                warning_frame, width=1, height=6, wrap="word", fg="#b00",
-                borderwidth=1, relief="solid",
-            )
-            warning_scroll = ttk.Scrollbar(warning_frame, command=warning_text.yview)
-            warning_text.configure(yscrollcommand=warning_scroll.set)
-            warning_text.insert("1.0", warning)
-            warning_text.configure(state="disabled")
-            warning_text.pack(side="left", fill="both", expand=True)
-            warning_scroll.pack(side="right", fill="y")
-
-        self._make_toggle(self.container, self.tray_var, "Set up the tray widget", enabled=ok)
-
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_obs_websocket)
-        ttk.Button(bar, text="Continue", command=self._show_auto_update).pack(side="right")
+        self._show_auto_update()
 
     def _show_auto_update(self):
         self._clear()
@@ -1362,7 +1319,7 @@ class Wizard(tk.Tk):
             "Allow checking for updates",
         )
 
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_tray_widget)
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_obs_websocket)
         ttk.Button(bar, text="Continue", command=self._show_autostart).pack(side="right")
 
     def _show_autostart(self):
@@ -1380,37 +1337,11 @@ class Wizard(tk.Tk):
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
 
-        def on_obs_toggle():
-            if not self.autostart_obs_var.get():
-                self.autostart_tray_var.set(False)
-            self._show_autostart()
-
         self._make_toggle(
             self.container,
-            self.autostart_obs_var,
-            "Automatically start OBS with PC boot",
-            on_toggle=on_obs_toggle,
+            self.autostart_var,
+            "Start ClipEm (OBS and the tray icon) when the PC boots",
         )
-
-        tray_enabled = self.autostart_obs_var.get() and self.tray_var.get()
-        if not tray_enabled:
-            self.autostart_tray_var.set(False)
-        self._make_toggle(
-            self.container,
-            self.autostart_tray_var,
-            "Also start the tray widget at boot",
-            enabled=tray_enabled,
-        )
-        if not self.tray_var.get():
-            note = "(Tray widget isn't being set up, so it won't autostart.)"
-        elif not self.autostart_obs_var.get():
-            note = "(OBS boot autostart is off, so the tray widget can't autostart either.)"
-        else:
-            note = None
-        if note:
-            ttk.Label(self.container, text=note, foreground="gray", font=("", 9)).pack(
-                anchor="w", pady=(0, self.px(PAD // 2))
-            )
 
         if self.other_autostarts is None:
             try:
@@ -1459,17 +1390,19 @@ class Wizard(tk.Tk):
 
         def work():
             self.controller["save_run_config"]({
-                "autostart_obs": self.autostart_obs_var.get(),
-                "autostart_tray": self.autostart_tray_var.get(),
+                "autostart_obs": self.autostart_var.get(),
+                "autostart_tray": self.autostart_var.get(),
             })
             self.controller["change_update_config"](check_for_updates=self.check_updates_var.get())
             # Before this install's own entry is written - one of these may
             # sit at the same path.
             if self.other_autostarts and self.clear_other_autostarts_var.get():
                 self.controller["remove_autostart_entries"](self.other_autostarts)
-            self.controller["apply_boot_autostart"](self.autostart_obs_var.get())
-            if self.tray_var.get():
-                self.controller["install_tray"]()
+            self.controller["apply_boot_autostart"](self.autostart_var.get())
+            ok, warning = self.controller["check_tray_prereqs"]()
+            if not ok:
+                print(warning)
+            self.controller["install_tray"]()
             self.controller["finalize"]()
             return True
 

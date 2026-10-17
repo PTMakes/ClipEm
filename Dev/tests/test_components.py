@@ -170,6 +170,36 @@ def test_obs_version_falls_back_to_the_recorded_one(app, monkeypatch):
     assert components.installed_obs_version("Linux") == "31.0.0"
 
 
+def test_linux_obs_is_outdated_when_its_build_hash_changes(app, monkeypatch):
+    app_dir, _archives, _downloads = app
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: "32.2.2")
+    manifest = _manifest(linux_obs="https://x.invalid/linux-obs-install-32.2.2.tar.gz")
+    assert components.check(manifest, "Linux") == {}  # not installed - nothing to update
+    exe = app_dir / "Linux" / "obs-install" / "bin" / "obs"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    # Installed before obs_sha256 was recorded: gets the current build once.
+    assert components.check(manifest, "Linux") == {"obs": ("32.2.2", "32.2.2")}
+    obs_install.record_installed_sha256("obs", {"sha256": "X"})
+    assert components.check(manifest, "Linux") == {}
+    manifest["linux"]["obs"]["sha256"] = "y"
+    assert components.check(manifest, "Linux") == {"obs": ("32.2.2", "32.2.2")}
+    manifest["linux"]["obs"]["url"] = "https://x.invalid/linux-obs-install-32.0.0.tar.gz"
+    assert components.check(manifest, "Linux") == {}  # never a downgrade
+    assert components.describe({"obs": ("32.2.2", "32.2.2")}) == ["OBS 32.2.2 (new build)"]
+
+
+def test_windows_obs_ignores_the_build_hash(app, monkeypatch):
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: "32.2.2")
+    monkeypatch.setattr(obs_install, "obs_exe", lambda system: __file__)
+    manifest = _manifest(windows_obs="https://x.invalid/OBS-Studio-32.2.2-Windows-x64.zip")
+    assert components.check(manifest, "Windows") == {}
+
+
 # --- Installing OBS ---------------------------------------------------------
 
 def test_linux_obs_update_replaces_obs_and_never_touches_obs_config(app):
@@ -194,7 +224,7 @@ def test_linux_obs_update_replaces_obs_and_never_touches_obs_config(app):
     assert not (old / "lib" / "old-plugin.so").exists()
     assert (app_dir / "Shared" / "OBS-Config" / "global.ini").read_text() == "user settings"
     assert sorted(p.name for p in linux.iterdir()) == ["obs-install"]  # no staging/backup left
-    assert json.loads((app_dir / "installed_versions.json").read_text()) == {"obs": "32.3.0"}
+    assert json.loads((app_dir / "installed_versions.json").read_text()) == {"obs": "32.3.0", "obs_sha256": "x"}
 
 
 def test_windows_obs_update_keeps_the_vc_runtime_and_links(app):
