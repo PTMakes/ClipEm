@@ -4,9 +4,8 @@ and waveforms, and turning an edit project into an export.
 
 An edit project (JSON, saved per clip by clip_browser.py) is:
 
-    {"version": 1,
+    {"version": 2,
      "keep": [[start, end], ...],     # seconds of the clip to keep, in order
-     "mix_source": "mix",             # split clips: "mix" or "tracks" - see below
      "tracks": [{"index": n,          # the n-th audio stream of the source
                  "volume_db": 0,      # whole-track gain
                  "offset": 0.0,       # seconds to shift the track (+ later)
@@ -18,10 +17,10 @@ timeline (before cuts), so a region keeps its place when a cut is added.
 
 With "Split audio tracks" on, the source is the clip's "-tracks.mkv": track
 1 is the full mix, which OBS records as exactly Mic (2) + Desktop (3), and
-4-6 are single apps that are also part of Desktop. The export's mix is one
-or the other, never both: mix_source "mix" is track 1 with its own edits,
-"tracks" rebuilds it from the edited Mic and Desktop (track 1 unused). The
-app tracks' edits only change their own track in the MKV either way.
+4-6 are single apps that are also part of Desktop. The export's mix is
+what the editor plays: every unmuted track whose containing tracks are all
+muted (see mix_inputs()) - Mix; or with Mix muted, Mic + Desktop; or with
+Desktop muted too, Mic + each app. Every track is also its own MKV track.
 """
 
 import array
@@ -35,8 +34,7 @@ import threading
 
 from obs_config import DISCORD_TARGET_MB
 
-PROJECT_VERSION = 1
-MIX_SOURCES = ("mix", "tracks")
+PROJECT_VERSION = 2
 SUB_MIX = (1, 2)  # what a split clip's Mix is recorded from: Mic + Desktop
 SPLIT_TITLES = ("Mix", "Mic", "Desktop")
 
@@ -162,7 +160,6 @@ def default_project(info):
     return {
         "version": PROJECT_VERSION,
         "keep": [[0.0, round(info["duration"], 3)]],
-        "mix_source": "mix",
         "tracks": [
             {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "regions": []}
             for track in info["audio"]
@@ -236,13 +233,37 @@ def normalize_project(project, info):
             "muted": bool(given.get("muted", False)),
             "regions": regions,
         })
-    mix_source = project.get("mix_source")
-    if mix_source not in MIX_SOURCES:
-        # Saved before there was a choice, when the mix was always rebuilt
-        # from Mic + Desktop: keep that if they were edited.
-        sub_edited = any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)
-        mix_source = "tracks" if sub_edited and is_split_layout(info) else "mix"
-    return {"version": PROJECT_VERSION, "keep": keep, "mix_source": mix_source, "tracks": tracks}
+    if _number(project.get("version"), PROJECT_VERSION) < 2 and is_split_layout(info):
+        # Version 1 rebuilt the mix from Mic + Desktop ("mix_source":
+        # "tracks", or before that choice whenever they were edited) - now
+        # that's what muting the Mix does.
+        source = project.get("mix_source")
+        if source == "tracks" or (source is None and any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)):
+            tracks[0]["muted"] = True
+    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks}
+
+
+def _containers(index):
+    """The tracks a split clip's track is recorded inside, nearest first."""
+    if index == 0:
+        return []
+    return [0] if index in SUB_MIX else [2, 0]  # an app is in Desktop, which is in the Mix
+
+
+def mix_inputs(project, info):
+    """The track indexes the export's mix is made of - what the editor
+    plays: the soloed tracks (project["solo"], sent with an export), else
+    every unmuted track whose containers are all muted, so nothing's heard
+    twice. A plain clip's mix is its first track."""
+    by_index = {track["index"]: track for track in project["tracks"]}
+    solo = sorted(index for index in set(project.get("solo") or []) if index in by_index)
+    if solo:
+        return solo
+    if not is_split_layout(info):
+        return [0]
+    heard = [index for index in sorted(by_index) if not by_index[index]["muted"]
+             and all(by_index[c]["muted"] for c in _containers(index))]
+    return heard or [0]  # all muted: the (muted, so silent) Mix
 
 
 def _is_edited(track):
@@ -378,14 +399,14 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
         return graph.text(), vout, []
 
     tracks = project["tracks"]
-    rebuild = is_split_layout(info) and project.get("mix_source") == "tracks"
+    inputs = mix_inputs(project, info)
+    rebuild = inputs != [0]
     want_tracks = audio == "tracks"
     # How often each edited track is used: in the mix, and as its own track.
     uses = {}
     for track in tracks:
         index = track["index"]
-        in_mix = index in SUB_MIX if rebuild else index == 0
-        uses[index] = int(in_mix) + int(want_tracks and index != 0)
+        uses[index] = int(index in inputs) + int(want_tracks and index != 0)
     edited = {}
     for track in tracks:
         if uses[track["index"]]:  # never for a rebuilt clip's Mix - it isn't used
@@ -395,9 +416,12 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
 
     outputs = []
     if rebuild:
-        mixed = graph.label("m")
-        graph.add([edited[1].pop(), edited[2].pop()],
-                  ["amix=inputs=2:normalize=0:duration=longest:dropout_transition=0"], [mixed])
+        sources = [edited[index].pop() for index in inputs]
+        mixed = sources[0]
+        if len(sources) > 1:
+            mixed = graph.label("m")
+            graph.add(sources, [f"amix=inputs={len(sources)}:normalize=0:duration=longest:dropout_transition=0"],
+                      [mixed])
         outputs.append(_cut(graph, mixed, keep, audio=True))
     for track in tracks:
         if edited.get(track["index"]):

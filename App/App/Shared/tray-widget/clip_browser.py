@@ -338,13 +338,17 @@ class Editor:
         path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}.json")
         return clip_edit.track_peaks(self.ffmpeg, source, index, path)
 
-    def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None):
+    def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None, solo=None):
         """Starts exporting next to the clip. Returns the job's status.
         custom: {"height", "fps", "video_kbps"} for the "custom" preset.
         out_name: the name typed on the page - used as is when it isn't the
-        clip's own name; otherwise the export gets a suffix (-edit, -discord...)."""
+        clip's own name; otherwise the export gets a suffix (-edit, -discord...).
+        solo: the track indexes soloed on the page - the mix is just those,
+        as it's heard there (solo isn't saved with the project)."""
         info = self.info(source)
         project = self.load_project(clip_path, info)
+        if isinstance(solo, list):
+            project["solo"] = [index for index in solo if isinstance(index, int) and not isinstance(index, bool)]
         stem = os.path.splitext(os.path.basename(clip_path))[0]
         name = clip_edit.clean_name(out_name)
         exact = name if name and name != stem else None
@@ -776,7 +780,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             status = editor.start_export(folder, clip, source, body.get("preset"), body.get("custom"),
-                                         body.get("out_name"))
+                                         body.get("out_name"), body.get("solo"))
         except ValueError as exc:
             self._json({"error": str(exc)}, 400)
             return

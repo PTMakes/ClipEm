@@ -7,9 +7,9 @@
 //
 // Preview: the video plays muted and each audio track plays from its own
 // extracted .m4a through Web Audio, kept in step with the video, so track
-// edits are heard as they'll be exported. With split tracks the mix is
-// either the recorded Mix track or Mic + Desktop (what OBS records it from),
-// picked on the Mix lane - the other one is left out.
+// edits are heard as they'll be exported. What plays is what's exported
+// (mixInputs()): with split tracks that's the Mix; with it muted, Mic +
+// Desktop; with Desktop muted too, Mic + each app - or just the soloed tracks.
 
 const MIN_SLIDER_DB = -30; // the slider's left end means "muted"
 const MUTE_DB = -60;
@@ -27,7 +27,6 @@ const ed = {
   trim: [0, 0],
   cuts: [], // removed [start, end] ranges inside the trim
   tracks: [], // the project's tracks
-  mixSource: "mix", // split clips: "mix" (the Mix track) or "tracks" (Mic + Desktop)
   peaks: {}, // track index -> {per_second, peaks}
   showUnused: false, // lanes for app slots nothing was recorded on
   selection: null, // {start, end, track} - track null: the video lane
@@ -124,7 +123,7 @@ function loadKeep(keep) {
 }
 
 function project() {
-  return { version: 1, keep: keepRanges(), mix_source: ed.mixSource, tracks: ed.tracks };
+  return { version: 2, keep: keepRanges(), tracks: ed.tracks };
 }
 
 function keptLength() {
@@ -132,14 +131,13 @@ function keptLength() {
 }
 
 function snapshot() {
-  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, mixSource: ed.mixSource, tracks: ed.tracks });
+  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks });
 }
 
 function restore(snap) {
   const data = JSON.parse(snap);
   ed.trim = data.trim;
   ed.cuts = data.cuts;
-  ed.mixSource = data.mixSource;
   ed.tracks = data.tracks;
   ed.region = null;
 }
@@ -272,7 +270,6 @@ async function loadEditor(name) {
   ed.name = name;
   ed.info = data.info;
   ed.tracks = data.project.tracks;
-  ed.mixSource = data.project.mix_source || "mix";
   loadKeep(data.project.keep);
   ed.discord = data.discord;
   ed.custom = data.custom;
@@ -337,15 +334,13 @@ function isUnedited(index) {
   const plain = (t) => !t.volume_db && !t.offset && !t.muted && !t.regions.length;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
-  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.mixSource === "mix" &&
-    ed.tracks.every(plain);
+  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.tracks.every(plain);
 }
 
 function resetEdits() {
   change(() => {
     ed.trim = [0, duration()];
     ed.cuts = [];
-    ed.mixSource = "mix";
     ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, regions: [] }));
     ed.selection = null;
   });
@@ -501,25 +496,41 @@ function isMaster(index) {
 
 const SUB_MIX = [1, 2]; // a split clip's Mix is recorded from Mic + Desktop
 
-// Left out of the mix by the Mix lane's choice (it's still its own .mkv track).
-function outOfMix(index) {
-  if (!ed.info.split) return false;
-  return ed.mixSource === "tracks" ? index === 0 : SUB_MIX.includes(index);
+// The tracks a split clip's track is recorded inside: Mic and Desktop are
+// in the Mix, an app is in Desktop (and so in the Mix).
+function containers(index) {
+  if (index === 0) return [];
+  return SUB_MIX.includes(index) ? [0] : [2, 0];
 }
 
-// The Mix lane's choice of what the export's mix is: the recorded Mix
-// track, or one rebuilt from the separately edited Mic and Desktop.
+// What plays, and so what's exported - clip_edit.mix_inputs(): the soloed
+// tracks, else every unmuted track whose containers are all muted (nothing
+// is heard twice). A plain clip's mix is its first track.
+function mixInputs() {
+  if (ed.solo.size) return [...ed.solo].sort((a, b) => a - b);
+  if (!ed.info.split) return ed.info.tracks.length ? [ed.info.tracks[0].index] : [];
+  const heard = ed.tracks.filter((t) => !t.muted && containers(t.index).every((c) => trackOf(c).muted));
+  return heard.length ? heard.map((t) => t.index) : [0];
+}
+
+// Not heard - and not exported - right now (it's still its own .mkv track).
+function outOfMix(index) {
+  return !mixInputs().includes(index);
+}
+
+// The Mix lane's mute, as a choice: the recorded Mix track, or the
+// separately edited Mic and Desktop (or their apps - see mixInputs()).
 function mixSourceLine() {
   const line = el("div", "shift-line");
   line.append(el("span", "small muted", "Use"));
   for (const [value, label, title] of [
-    ["mix", "Mix track", "Use the recorded Mix track - Mic and Desktop are left out"],
-    ["tracks", "Sub-tracks", "Build the mix from Mic + Desktop (the app tracks are already in Desktop) - the Mix track is left out"],
+    [false, "Mix track", "Play and export the recorded Mix track - Mic, Desktop and the apps are left out"],
+    [true, "Sub-tracks", "Play and export Mic + Desktop - or, with Desktop muted, Mic + each app. The Mix track is left out."],
   ]) {
     const button = el("button", "toggle", label);
     button.title = title;
-    button.setAttribute("aria-pressed", String(ed.mixSource === value));
-    button.addEventListener("click", () => change(() => { ed.mixSource = value; }));
+    button.setAttribute("aria-pressed", String(trackOf(0).muted === value));
+    button.addEventListener("click", () => change(() => { trackOf(0).muted = value; }));
     line.append(button);
   }
   return line;
@@ -535,28 +546,26 @@ function audioRow(index) {
   titleLine.append(title);
   if (isMaster(index)) {
     head.title = "Mic + Desktop, as recorded.";
-    if (outOfMix(index)) titleLine.append(el("span", "muted small", "not used"));
-  } else if (outOfMix(index)) {
-    head.title = "Not in the mix - the Mix track is used. Changes here only affect this track in the .mkv export.";
-    titleLine.append(el("span", "muted small", "not in mix"));
-  } else if (ed.info.split && index >= 3) {
-    head.title = "This app is also in Desktop - changes here only affect this track in the .mkv export.";
-    titleLine.append(el("span", "muted small", ".mkv only"));
+  } else if (outOfMix(index) && !track.muted && !ed.solo.size) {
+    const container = index >= 3 && !trackOf(0).muted ? "Mix" : index >= 3 ? "Desktop" : "Mix";
+    head.title = `Not heard or exported while ${container} is on - it's already in it. ` +
+      "Changes here still apply to this track in the .mkv export.";
   }
   const mute = el("button", "toggle", "M");
   mute.title = "Mute this track";
   mute.setAttribute("aria-pressed", String(track.muted));
   mute.addEventListener("click", () => change(() => { track.muted = !track.muted; }));
   const solo = el("button", "toggle", "S");
-  solo.title = "Listen to only this track (preview only)";
+  solo.title = "Play - and export - only the soloed tracks";
   solo.setAttribute("aria-pressed", String(ed.solo.has(index)));
   solo.addEventListener("click", () => {
     if (ed.solo.has(index)) ed.solo.delete(index);
     else ed.solo.add(index);
     renderTimeline();
+    renderExportBar();
   });
-  titleLine.append(mute);
-  if (!isMaster(index)) titleLine.append(solo); // the Mix lane picks its source instead
+  // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo.
+  if (!isMaster(index)) titleLine.append(mute, solo);
 
   const volume = el("label", "slider-line");
   const slider = el("input");
@@ -937,11 +946,8 @@ function gainAt(track, t) {
   return gain;
 }
 
-// Which tracks to hear: the export's mix sources, or just the soloed ones.
 function audibleTracks() {
-  if (ed.solo.size) return new Set(ed.solo);
-  if (ed.info.split && ed.mixSource === "tracks") return new Set(SUB_MIX);
-  return new Set(ed.info.tracks.length ? [ed.info.tracks[0].index] : []);
+  return new Set(mixInputs());
 }
 
 function setupAudio(name) {
@@ -1148,9 +1154,12 @@ function renderExportBar() {
     return;
   }
   $("export-discord").textContent = `Export for Discord (${d.target_mb} MB)`;
-  // Only a warning - the button already says the size, so the bar fits one line.
-  note.textContent = d.too_long ? `Too long for ${d.target_mb} MB - trim it for a sharper video.` : "";
-  note.classList.toggle("warn", d.too_long);
+  // Only warnings - the button already says the size, so the bar fits one line.
+  const warnings = [];
+  if (ed.solo.size) warnings.push("Solo is on - only the soloed tracks are exported.");
+  if (d.too_long) warnings.push(`Too long for ${d.target_mb} MB - trim it for a sharper video.`);
+  note.textContent = warnings.join(" ");
+  note.classList.toggle("warn", warnings.length > 0);
 }
 
 // The custom export's dropdowns: the clip's options, keeping what was
@@ -1204,6 +1213,7 @@ async function startExport(preset) {
     await flushSave();
     const body = { name: ed.name, preset, out_name: $("out-name").value };
     if (preset === "custom") body.custom = customSettings();
+    body.solo = [...ed.solo]; // what's heard is what's exported
     showExportProgress(await api("api/export", body));
     pollExport();
   } catch (err) {

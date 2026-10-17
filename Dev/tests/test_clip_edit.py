@@ -105,10 +105,17 @@ def test_normalize_cleans_up_whatever_the_page_sends():
     assert mic["regions"] == [{"start": 1.0, "end": 3.0, "db": 0.0}, {"start": 2.0, "end": 4.0, "db": -60.0}]
     assert [t["index"] for t in clean["tracks"]] == [0, 1, 2, 3]  # no track 42
     assert clip_edit.kept_duration(clean) == pytest.approx(5.0)
-    # Saved before the choice existed with Mic edited: still rebuilt from Mic + Desktop.
-    assert clean["mix_source"] == "tracks"
-    assert clip_edit.normalize_project({"mix_source": "junk"}, _info())["mix_source"] == "mix"
-    assert clip_edit.normalize_project({**project, "mix_source": "mix"}, _info())["mix_source"] == "mix"
+    assert clean["version"] == clip_edit.PROJECT_VERSION and "mix_source" not in clean
+
+
+def test_version_1_projects_that_rebuilt_the_mix_now_mute_it():
+    info = _info()
+    edited_mic = {"version": 1, "tracks": [{"index": 1, "volume_db": 3}]}
+    assert clip_edit.normalize_project(edited_mic, info)["tracks"][0]["muted"]  # always rebuilt then
+    assert clip_edit.normalize_project({**edited_mic, "mix_source": "tracks"}, info)["tracks"][0]["muted"]
+    assert not clip_edit.normalize_project({**edited_mic, "mix_source": "mix"}, info)["tracks"][0]["muted"]
+    assert not clip_edit.normalize_project({"version": 1}, info)["tracks"][0]["muted"]
+    assert not clip_edit.normalize_project({**edited_mic, "version": 2}, info)["tracks"][0]["muted"]
 
 
 def test_unique_path_never_overwrites(tmp_path):
@@ -136,8 +143,8 @@ def test_cuts_gain_and_offset_in_a_split_clip():
     info = _info()
     project = clip_edit.default_project(info)
     project["keep"] = [[0.0, 3.0], [5.0, 10.0]]
-    project["mix_source"] = "tracks"
-    project["tracks"][0]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0}]  # unused: the mix is rebuilt
+    project["tracks"][0]["muted"] = True  # the mix is rebuilt from Mic + Desktop
+    project["tracks"][0]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0}]
     project["tracks"][1]["offset"] = 0.5
     project["tracks"][1]["regions"] = [{"start": 6.0, "end": 8.0, "db": 6.0}]
     project["tracks"][2]["offset"] = -0.25
@@ -158,11 +165,12 @@ def test_cuts_gain_and_offset_in_a_split_clip():
     assert len(mix_only) == 1
 
 
-def test_split_clip_mix_source_mix_uses_the_recorded_mix():
+def test_split_clip_with_the_mix_on_uses_the_recorded_mix():
     info = _info()
     project = clip_edit.default_project(info)
-    project["tracks"][0]["muted"] = True
     project["tracks"][1]["regions"] = [{"start": 6.0, "end": 8.0, "db": 6.0}]
+    project["tracks"][0]["volume_db"] = -60.0  # silent, but the Mix is still what's used
+    assert clip_edit.mix_inputs(project, info) == [0]
     graph, _vout, audio = clip_edit.build_graph(project, info, audio="mix")
     assert "[0:a:0]" in graph and "[0:a:1]" not in graph and "amix" not in graph
     assert "volume=0" in graph and len(audio) == 1
@@ -171,12 +179,48 @@ def test_split_clip_mix_source_mix_uses_the_recorded_mix():
     assert len(audio) == 4
 
 
+def test_split_clip_with_desktop_muted_mixes_each_app():
+    info = _info()
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    project["tracks"][2]["muted"] = True
+    assert clip_edit.mix_inputs(project, info) == [1, 3]  # Mic + Firefox
+    graph, _vout, audio = clip_edit.build_graph(project, info, audio="mix")
+    assert "[0:a:0]" not in graph and "[0:a:2]" not in graph
+    assert "[0:a:1]" in graph and "[0:a:3]" in graph and "amix=inputs=2" in graph
+    assert len(audio) == 1
+    _graph, _vout, audio = clip_edit.build_graph(project, info, audio="tracks")
+    assert len(audio) == 4  # the mix, then Mic, Desktop (muted) and Firefox
+    project["tracks"][0]["muted"] = False
+    assert clip_edit.mix_inputs(project, info) == [0]  # the Mix already has the apps in it
+
+
+def test_what_is_heard_is_what_is_mixed():
+    info = _info()
+    project = clip_edit.default_project(info)
+    tracks = project["tracks"]
+    tracks[0]["muted"] = True
+    assert clip_edit.mix_inputs(project, info) == [1, 2]
+    tracks[1]["muted"] = True
+    assert clip_edit.mix_inputs(project, info) == [2]
+    graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
+    assert "amix" not in graph and "[0:a:2]" in graph
+    tracks[2]["muted"] = tracks[3]["muted"] = True
+    assert clip_edit.mix_inputs(project, info) == [0]  # nothing on: the muted Mix, silence
+    tracks[0]["muted"] = tracks[1]["muted"] = False
+    assert clip_edit.mix_inputs({**project, "solo": [3, 1, 3, 99]}, info) == [1, 3]  # solo, as played
+    plain = clip_edit.default_project(_info(PROBE_PLAIN))
+    assert clip_edit.mix_inputs(plain, _info(PROBE_PLAIN)) == [0]
+
+
 def test_every_filter_output_is_used_exactly_once():
     import re
-    for info, audio, source in [(_info(text), audio, source) for text in (PROBE_SPLIT, PROBE_PLAIN)
-                                for audio in ("tracks", "mix", None) for source in clip_edit.MIX_SOURCES]:
+    for info, audio, muted in [(_info(text), audio, muted) for text in (PROBE_SPLIT, PROBE_PLAIN)
+                               for audio in ("tracks", "mix", None) for muted in ((), (0,), (0, 2))]:
         project = clip_edit.default_project(info)
-        project["mix_source"] = source
+        for index in muted:
+            if index < len(project["tracks"]):
+                project["tracks"][index]["muted"] = True
         project["keep"] = [[0.0, 3.0], [4.0, 6.0], [7.0, 10.0]]
         graph, vout, outs = clip_edit.build_graph(project, info, video_height=720, fps=30, audio=audio)
         produced, consumed = [], []
