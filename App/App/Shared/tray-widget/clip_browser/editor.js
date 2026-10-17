@@ -237,6 +237,7 @@ function select(name) {
 
 async function loadEditor(name) {
   const token = ++ed.loadToken;
+  $("out-name").value = name.replace(/\.[^.]+$/, "");
   ed.name = null;
   ed.info = null;
   teardownAudio();
@@ -258,7 +259,6 @@ async function loadEditor(name) {
   loadKeep(data.project.keep);
   ed.discord = data.discord;
   ed.custom = data.custom;
-  $("out-name").value = name.replace(/\.[^.]+$/, "");
   ed.missing = data.missing || [];
   ed.peaks = {};
   ed.selection = null;
@@ -289,7 +289,7 @@ function renderDetails() {
   const ready = !!(clip && ed.info && ed.name === clip.name);
   $("editor").hidden = !ready;
   $("no-selection").hidden = !!clip;
-  $("clip-title").textContent = clip ? clip.name : "";
+  $("out-name-wrap").hidden = !clip;
   $("clip-meta").textContent = clip
     ? [formatWhen(clip.mtime), formatDuration(clip.duration), formatSize(clip.size)].filter(Boolean).join(" · ")
     : "";
@@ -983,12 +983,9 @@ function renderExportBar() {
     return;
   }
   $("export-discord").textContent = `Export for Discord (${d.target_mb} MB)`;
-  if (d.too_long) {
-    note.textContent = `Long for ${d.target_mb} MB - it'll look rough. Trim it shorter for a sharper video.`;
-    note.classList.add("warn");
-  } else {
-    note.textContent = `Discord copy: ${d.height}p${Math.round(d.fps)}, under ${d.target_mb} MB`;
-  }
+  // Only a warning - the button already says the size, so the bar fits one line.
+  note.textContent = d.too_long ? `Too long for ${d.target_mb} MB - trim it for a sharper video.` : "";
+  note.classList.toggle("warn", d.too_long);
 }
 
 // The custom export's dropdowns: the clip's options, keeping what was

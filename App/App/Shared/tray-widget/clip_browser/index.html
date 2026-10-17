@@ -21,7 +21,10 @@
     <header id="toolbar">
       <button id="toggle-sidebar" title="Show or hide the clip list (Tab)" aria-pressed="true"><span class="arrow" aria-hidden="true">&lsaquo;</span>Clips</button>
       <div class="title-row">
-        <h2 id="clip-title"></h2>
+        <label id="out-name-wrap" title="Name for the exported file - leave it as the clip's name to add -edit, -discord etc.">
+          <input id="out-name" type="text" spellcheck="false" autocomplete="off" aria-label="Export name">
+          <span class="muted small">.mp4</span>
+        </label>
         <span id="clip-meta" class="muted"></span>
       </div>
       <div class="spacer"></div>
@@ -47,11 +50,6 @@
         <button id="toggle-unused" class="link" hidden></button>
       </div>
       <footer id="export-bar">
-        <label id="out-name-wrap" title="Name for the exported file - leave it as the clip's name to add -edit, -discord etc.">
-          <span class="muted small">Name</span>
-          <input id="out-name" type="text" spellcheck="false" autocomplete="off">
-          <span class="muted small">.mp4</span>
-        </label>
         <button id="export-full" class="primary">Export full quality</button>
         <button id="export-discord" class="primary">Export for Discord</button>
         <span id="discord-note" class="muted"></span>

@@ -184,8 +184,7 @@ body.dragging { cursor: ew-resize; user-select: none; }
   border-bottom: 1px solid var(--line);
 }
 
-#toolbar .title-row { min-width: 0; }
-#toolbar h2 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#toolbar .title-row { flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; }
 #toggle-sidebar[aria-pressed="true"] { background: var(--selected); }
 #toggle-sidebar { display: inline-flex; align-items: center; gap: 6px; }
 #toggle-sidebar .arrow { font-size: 18px; line-height: 1; transition: transform 0.15s; }
@@ -433,17 +432,25 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 
 #export-bar { margin-top: 10px; }
 #discord-note { font-size: 12px; }
-#out-name-wrap { display: flex; align-items: center; gap: 6px; }
+#out-name-wrap { display: flex; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 120px; }
 
 #out-name {
   font: inherit;
-  width: 220px;
-  padding: 5px 8px;
+  font-size: 15px;
+  font-weight: 600;
+  width: 340px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
   border-radius: 6px;
-  border: 1px solid var(--line);
-  background: var(--panel);
+  border: 1px solid transparent;
+  background: transparent;
   color: var(--text);
 }
+
+#out-name:hover { border-color: var(--line); }
+#out-name:focus { border-color: var(--accent); background: var(--panel); outline: none; }
+#toolbar #clip-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
 #custom-export { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
