@@ -18,6 +18,7 @@ import subprocess
 import sys
 import threading
 import tkinter as tk
+import webbrowser
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -710,13 +711,94 @@ def main():
         check_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
         next_row += 1
 
-    # --- Troubleshooting: a bug report zip, and a clean reinstall.
+    # --- Troubleshooting: a bug report (sent, or saved as a zip), and a clean reinstall.
     tk.Label(frame, text="Troubleshooting", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )
     next_row += 1
 
     def on_bug_report():
+        dialog = tk.Toplevel(root)
+        dialog.title("Send Bug Report")
+        dialog.resizable(False, False)
+        dialog.transient(root)
+        body = tk.Frame(dialog, padx=px(16), pady=px(12))
+        body.pack()
+        tk.Label(
+            body, justify="left", wraplength=px(380),
+            text="What happened? What were you doing when it went wrong?",
+        ).pack(anchor="w")
+        description_text = tk.Text(body, width=52, height=8, wrap="word")
+        description_text.pack(anchor="w", fill="x", pady=(px(6), 0))
+        tk.Label(
+            body, fg="gray40", justify="left", wraplength=px(380),
+            text=(
+                "Your description is posted publicly as a GitHub issue. ClipEm's and OBS's logs and "
+                "a summary of this install (versions, settings and folder paths) are uploaded "
+                "privately, for the developer only - the websocket password is left out."
+            ),
+        ).pack(anchor="w", pady=(px(6), 0))
+
+        def set_sending(sending):
+            state = "disabled" if sending else "normal"
+            for child in dialog_buttons.winfo_children():
+                child.config(state=state)
+            description_text.config(state=state)
+            send_button.config(text="Sending..." if sending else "Send")
+
+        def on_save_instead():
+            dialog.destroy()
+            save_bug_report_to_file()
+
+        def on_send():
+            description = description_text.get("1.0", "end").strip()
+            if not description:
+                messagebox.showwarning("Send Bug Report", "Describe what happened first.", parent=dialog)
+                return
+            set_sending(True)
+            run_in_background(root, lambda: bug_report.send_bug_report(description), on_sent)
+
+        def on_sent(result, error):
+            if error is not None:
+                log.warning(f"Sending the bug report failed: {error}")
+                if not dialog.winfo_exists():
+                    messagebox.showerror("Send Bug Report", f"Couldn't send the bug report:\n{error}", parent=root)
+                    return
+                set_sending(False)
+                if messagebox.askyesno(
+                    "Send Bug Report",
+                    f"Couldn't send the bug report:\n{error}\n\nSave it to a file instead, to attach it "
+                    "to an issue or a message yourself?",
+                    parent=dialog,
+                ):
+                    on_save_instead()
+                return
+            report_id, issue_url = result
+            log.info(f"Bug report sent: {report_id} ({issue_url})")
+            if dialog.winfo_exists():
+                dialog.destroy()
+            if issue_url and messagebox.askyesno(
+                "Send Bug Report",
+                f"Thanks - the bug report was sent (report ID {report_id}).\n\nOpen its GitHub issue?",
+                parent=root,
+            ):
+                webbrowser.open(issue_url)
+            elif not issue_url:
+                messagebox.showinfo("Send Bug Report", f"Thanks - the bug report was sent (report ID {report_id}).",
+                                    parent=root)
+
+        dialog_buttons = tk.Frame(body)
+        dialog_buttons.pack(anchor="e", pady=(px(12), 0))
+        tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
+        tk.Button(dialog_buttons, text="Save to File Instead...", command=on_save_instead).pack(
+            side="left", padx=px(4))
+        send_button = tk.Button(dialog_buttons, text="Send", command=on_send, width=10)
+        send_button.pack(side="left", padx=px(4))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        description_text.focus_set()
+        dialog.grab_set()
+
+    def save_bug_report_to_file():
         path = filedialog.asksaveasfilename(
             parent=root, title="Save Bug Report", initialdir=bug_report.default_save_dir(),
             initialfile=bug_report.default_file_name(), defaultextension=".zip",
@@ -724,14 +806,14 @@ def main():
         )
         if not path:
             return
-        bug_button.config(state="disabled", text="Creating...")
+        bug_button.config(state="disabled")
         run_in_background(
             root, lambda: bug_report.create_bug_report(path),
             lambda count, error: on_bug_report_done(path, count, error),
         )
 
     def on_bug_report_done(path, count, error):
-        bug_button.config(state="normal", text="Create Bug Report...")
+        bug_button.config(state="normal")
         if error is not None:
             log.warning(f"Bug report failed: {error}")
             messagebox.showerror("Bug Report", f"Couldn't create the bug report:\n{error}", parent=root)
@@ -812,7 +894,7 @@ def main():
 
     troubleshooting_row = tk.Frame(frame)
     troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
-    bug_button = tk.Button(troubleshooting_row, text="Create Bug Report...", command=on_bug_report)
+    bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...", command=on_bug_report)
     bug_button.pack(side="left")
     reinstall_button = tk.Button(troubleshooting_row, text="Reinstall ClipEm...", command=on_reinstall)
     reinstall_button.pack(side="left", padx=(px(4), 0))

@@ -395,6 +395,7 @@ function renderTimeline() {
   toggle.textContent = ed.showUnused ? "Hide unused tracks" : `Show ${hidden} unused track${hidden === 1 ? "" : "s"}`;
   updatePlayheads();
   $("kept-length").textContent = `Export length ${formatTime(keptLength())}`;
+  applyEditorHeight(); // the tracks' height may have changed
 }
 
 function removedSpans() {
@@ -1146,7 +1147,16 @@ function applyEditorHeight() {
   // Whatever's above the editor besides the video keeps its room.
   const main = $("main").getBoundingClientRect().height;
   const fixed = ["toolbar", "panel", "splitter"].reduce((sum, id) => sum + $(id).getBoundingClientRect().height, 0);
-  const height = clamp(editorHeight, MIN_EDITOR_PX, Math.max(MIN_EDITOR_PX, main - fixed - MIN_PLAYER_PX));
+  let max = main - fixed - MIN_PLAYER_PX;
+  if (!editor.hidden) {
+    // No taller than it takes to show every track: no empty space below them.
+    const scroll = $("timeline-scroll");
+    const toggle = $("toggle-unused");
+    const content = timeline.offsetHeight + (toggle.hidden ? 0 : toggle.offsetHeight);
+    max = Math.min(max, editor.getBoundingClientRect().height - scroll.clientHeight + content);
+  }
+  const min = Math.min(MIN_EDITOR_PX, max);
+  const height = clamp(editorHeight, min, Math.max(min, max));
   editor.style.maxHeight = "none";
   editor.style.height = `${height}px`;
 }

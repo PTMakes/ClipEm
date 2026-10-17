@@ -1,0 +1,22 @@
+// Cloudflare Worker that files bug reports sent from the tray's Settings as
+// GitHub issues, so users don't need a GitHub account. See README.md.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "clipem-bug-reports",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-01",
+  "routes": [{ "pattern": "bugs.clipem.app", "custom_domain": true }],
+  "vars": {
+    "GITHUB_REPO": "PTMakes/ClipEm"
+  },
+  // GITHUB_TOKEN is a secret: wrangler secret put GITHUB_TOKEN
+  "r2_buckets": [{ "binding": "REPORTS", "bucket_name": "clipem-bug-reports" }],
+  "ratelimits": [
+    {
+      "name": "PER_IP",
+      // Any number unique among this account's rate limit namespaces.
+      "namespace_id": "1001",
+      "simple": { "limit": 2, "period": 60 }
+    }
+  ]
+}

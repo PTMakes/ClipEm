@@ -60,6 +60,7 @@ async function api(path, body) {
 function setStatus(message, isError = false) {
   const status = $("status");
   status.textContent = message || "";
+  status.title = message || "";
   status.classList.toggle("error", isError);
 }
 

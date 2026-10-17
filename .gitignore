@@ -124,3 +124,6 @@ yarn-error.log*
 *.zip
 *.tar.gz
 *.exe
+
+# Wrangler local dev secrets.
+.dev.vars
