@@ -5,7 +5,7 @@ cut tool, per-track audio editing and full-quality/Discord exports (the
 media work is clip_edit.py's). A button also opens the clip in the user's
 own editor, if one is set (see Installer/editor_install.py).
 
-Launched as a separate process from the tray's "Edit Clips..." menu item,
+Launched as a separate process from the tray's "Open Clip Editor" menu item,
 like the settings dialog. The page itself (clip_browser/) is served from a
 local HTTP server on 127.0.0.1, every URL carrying a random token, and shown
 in ClipEm's own window - nothing the user has installed is needed: ClipEm's
@@ -94,7 +94,7 @@ LAUNCH_PAGE = b"""<!doctype html>
   if (/^[A-Za-z0-9_-]+$/.test(token)) location.replace("/" + token + "/");
 </script>
 """
-# The running instance's URL, for a second "Edit Clips..." to reopen.
+# The running instance's URL, for a second "Open Clip Editor" to reopen.
 URL_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.url")
 
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")

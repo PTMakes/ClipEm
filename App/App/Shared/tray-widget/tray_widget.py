@@ -317,7 +317,7 @@ class TrayApp:
                 visible=self._clip_folder_missing,
             ),
             pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip),
-            pystray.MenuItem("Edit Clips...", self._open_clip_editor),
+            pystray.MenuItem("Open Clip Editor", self._open_clip_editor),
             pystray.MenuItem("Open Clips Folder", self._open_clips_folder),
             pystray.MenuItem(self._replay_label, self._toggle_replay_buffer),
             pystray.MenuItem(self._recording_label, self._toggle_recording),
