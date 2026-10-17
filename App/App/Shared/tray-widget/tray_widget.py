@@ -14,6 +14,7 @@ Run it with the same distribution's Python (bundled embeddable Python on
 Windows, system python3 on macOS/Linux - see the platform launch scripts).
 """
 
+import collections
 import logging
 import os
 import subprocess
@@ -281,6 +282,7 @@ class TrayApp:
         self.recording_active = False
         self.connected = False
         self._children = []  # helper processes we started - see stop_children
+        self._stopping_children = False  # their exit codes are ours, not errors, from then on
         self.obs_window = obs_window.ObsWindowState(log)  # for Show OBS / Hide OBS
         self.stuck_screen = StuckScreenMonitor(
             self._notify,
@@ -398,12 +400,7 @@ class TrayApp:
     def _open_clip_editor(self, icon, item):
         if not editor_window.installed():
             self._notify("Setting up the clip editor - downloading its window (about 130 MB)...")
-        try:
-            self._children.append(subprocess.Popen(
-                [sys.executable, CLIP_BROWSER_SCRIPT, "--parent-pid", str(os.getpid())]
-            ))
-        except Exception as exc:
-            log.warning(f"Failed to open the clip editor: {exc}")
+        self._start_helper(CLIP_BROWSER_SCRIPT, "the clip editor")
 
     def _clip_folder_missing(self, item):
         return self.connected and self.clip_folder.missing_dir is not None
@@ -458,18 +455,52 @@ class TrayApp:
         self.icon.update_menu()
 
     def _open_settings(self, icon, item):
+        self._start_helper(SETTINGS_DIALOG_SCRIPT, "settings")
+
+    def _start_helper(self, script, what):
+        """Runs a helper window's script (the clip editor, the settings
+        dialog) and tells the user if it exits with an error. Its stderr is
+        kept for that: under pythonw, a crash before it opens its own log
+        (e.g. a failed import) otherwise leaves no trace anywhere."""
         try:
-            self._children.append(subprocess.Popen(
-                [sys.executable, SETTINGS_DIALOG_SCRIPT, "--parent-pid", str(os.getpid())]
-            ))
+            proc = subprocess.Popen(
+                [sys.executable, script, "--parent-pid", str(os.getpid())], stderr=subprocess.PIPE
+            )
         except Exception as exc:
-            log.warning(f"Failed to open settings: {exc}")
+            log.warning(f"Failed to open {what}: {exc}")
+            self._notify(f"Couldn't open {what} - see logs/tray.log.")
+            return
+        self._children.append(proc)
+        threading.Thread(target=self._watch_helper, args=(proc, what), daemon=True).start()
+
+    def _watch_helper(self, proc, what):
+        tail = collections.deque(maxlen=40)
+
+        def drain():
+            # Read all along so the helper never blocks on a full pipe. Not
+            # waited on to the end: a program it started (e.g. the user's
+            # own video editor) can inherit the pipe and keep it open.
+            for line in proc.stderr:
+                text = line.decode("utf-8", errors="replace").rstrip()
+                tail.append(text)
+                if sys.stderr is not None:
+                    print(text, file=sys.stderr)
+
+        reader = threading.Thread(target=drain, daemon=True)
+        reader.start()
+        code = proc.wait()
+        reader.join(timeout=1)
+        if code == 0 or self._stopping_children:
+            return
+        log.warning(f"{what[0].upper()}{what[1:]} exited with code {code}:\n" + "\n".join(tail))
+        self._notify(f"Couldn't open {what} (it closed with an error) - see logs/tray.log.")
 
     def stop_children(self, timeout_seconds=3):
         """Closes the helper windows (the settings dialog) this tray widget
         opened - they'd otherwise stay open after it quits. Asks first
         (SIGTERM / TerminateProcess), then kills whatever is left. The clip
         editor - ours or one opened from the Start menu - is asked first."""
+        self._stopping_children = True
         stop_clip_editor(timeout_seconds)
         running = [child for child in self._children if child.poll() is None]
         for child in running:

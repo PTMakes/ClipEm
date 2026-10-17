@@ -221,16 +221,14 @@ def main():
     use_windows_app_id("PTMakes.ClipEm.Settings")
     # className: what Linux desktops match the window to (WM_CLASS).
     root = tk.Tk(className="ClipEm")
+    # Hidden until it's built and sized (shown at the end of main) - otherwise
+    # it sits on screen as Tk's blank default-size window meanwhile.
+    root.withdraw()
     # ClipEm logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
     style_app_window(root, log=log.warning)
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
     px = UiScale(root).px
     root.title("ClipEm Settings")
-    # Opened from the tray menu - make sure it isn't hidden behind whatever
-    # window had focus.
-    root.lift()
-    root.attributes("-topmost", True)
-    root.after(500, lambda: root.attributes("-topmost", False))
 
     # Status line and Save/Cancel sit in a footer packed first, so resizing
     # the window shrinks the scrolling settings area above it, never them.
@@ -446,20 +444,29 @@ def main():
         if show_uninstall:
             uninstall_button.pack(side="left", padx=(0, px(4)))
 
-    def show_autostart_status():
-        try:
-            entries = find_autostart_entries()
-        except Exception as exc:
-            autostart_status_var.set(f"Autostart entry: unknown ({exc})")
-            show_autostart_buttons(True, True)
-            return
-        others = sum(1 for entry in entries if not entry["this_install"])
-        ours = len(entries) > others
-        text = "installed" if ours else "not installed"
-        if others:
-            text += f" (+{others} from another ClipEm folder)"
-        autostart_status_var.set(f"Autostart entry: {text}")
-        show_autostart_buttons(not ours, bool(entries))
+    def show_autostart_status(then=None):
+        """Looks the entries up in the background - on Windows that runs
+        PowerShell, which can take seconds to start - then shows them and
+        calls then(entries) if they could be read."""
+        autostart_status_var.set("Autostart entry: checking...")
+        show_autostart_buttons(False, False)
+
+        def on_entries(entries, exc):
+            if exc is not None:
+                autostart_status_var.set(f"Autostart entry: unknown ({exc})")
+                show_autostart_buttons(True, True)
+                return
+            others = sum(1 for entry in entries if not entry["this_install"])
+            ours = len(entries) > others
+            text = "installed" if ours else "not installed"
+            if others:
+                text += f" (+{others} from another ClipEm folder)"
+            autostart_status_var.set(f"Autostart entry: {text}")
+            show_autostart_buttons(not ours, bool(entries))
+            if then:
+                then(entries)
+
+        run_in_background(root, find_autostart_entries, on_entries)
 
     def save_autostart_flags():
         config = load_run_config()
@@ -473,12 +480,15 @@ def main():
             apply_boot_autostart(True)
         except Exception as exc:
             messagebox.showerror("Install Autostart", f"Couldn't install autostart: {exc}", parent=root)
-        show_autostart_status()
-        if not any(entry["this_install"] for entry in find_autostart_entries()):
-            messagebox.showerror(
-                "Install Autostart", "Couldn't create the autostart entry - your system may not support it.",
-                parent=root,
-            )
+
+        def check_installed(entries):
+            if not any(entry["this_install"] for entry in entries):
+                messagebox.showerror(
+                    "Install Autostart", "Couldn't create the autostart entry - your system may not support it.",
+                    parent=root,
+                )
+
+        show_autostart_status(then=check_installed)
 
     def on_uninstall_autostart():
         entries = find_autostart_entries()
@@ -1032,6 +1042,12 @@ def main():
     root.minsize(width, min(footer.winfo_reqheight() + px(120), max_height))
     root.maxsize(root.winfo_screenwidth(), content_height)
 
+    root.deiconify()
+    # Opened from the tray menu - make sure it isn't hidden behind whatever
+    # window had focus.
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(500, lambda: root.attributes("-topmost", False))
     root.mainloop()
 
 

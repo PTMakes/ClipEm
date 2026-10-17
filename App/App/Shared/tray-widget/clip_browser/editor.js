@@ -42,7 +42,7 @@ const ed = {
   loadToken: 0,
 };
 
-const audio = { ctx: null, master: null, nodes: new Map() };
+const audio = { ctx: null, out: null, master: null, nodes: new Map() };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -302,6 +302,7 @@ function renderDetails() {
   const ready = !!(clip && ed.info && ed.name === clip.name);
   $("editor").hidden = !ready;
   $("splitter").hidden = !ready;
+  $("meter").hidden = !ready || !audio.out;
   $("no-selection").hidden = !!clip;
   $("out-name-wrap").hidden = !clip;
   $("clip-meta").textContent = clip
@@ -927,8 +928,9 @@ function setupAudio(name) {
     setStatus("This window can't play the tracks separately - preview is silent.", true);
     return;
   }
+  if (!audio.out) setupOutput();
   audio.master = audio.ctx.createGain();
-  audio.master.connect(audio.ctx.destination);
+  audio.master.connect(audio.out);
   for (const track of ed.info.tracks) {
     if (isMaster(track.index)) continue; // heard through Mic + Desktop
     const media = new Audio();
@@ -938,7 +940,7 @@ function setupAudio(name) {
     const gain = audio.ctx.createGain();
     gain.gain.value = 0;
     source.connect(gain);
-    gain.connect(ed.info.split && (track.index === 1 || track.index === 2) ? audio.master : audio.ctx.destination);
+    gain.connect(ed.info.split && (track.index === 1 || track.index === 2) ? audio.master : audio.out);
     audio.nodes.set(track.index, { media, source, gain });
   }
 }
@@ -987,8 +989,115 @@ function frame() {
     if (!player.paused) skipRemoved();
     updatePlayheads();
     syncAudio();
+    drawMeter();
   }
   requestAnimationFrame(frame);
+}
+
+// ---------------------------------------------------------------------------
+// Level meter: the RMS of what the preview plays, after the track edits
+// ---------------------------------------------------------------------------
+
+const METER_FLOOR_DB = -60;
+const METER_TICKS = [0, -6, -12, -18, -24, -36, -48, -60];
+const METER_WARN_DB = -18; // yellow from here, red from METER_HOT_DB
+const METER_HOT_DB = -6;
+const METER_RELEASE_S = 0.3; // how fast a bar falls back
+const METER_HOLD_S = 1.5; // how long the highest level stays marked
+const meter = { canvas: $("meter"), channels: [], last: 0, colors: null };
+
+// Everything the preview plays goes through one stereo bus, which the meter
+// taps (mono tracks count on both sides, as they're heard).
+function setupOutput() {
+  audio.out = audio.ctx.createGain();
+  audio.out.channelCount = 2;
+  audio.out.channelCountMode = "explicit";
+  audio.out.channelInterpretation = "speakers";
+  audio.out.connect(audio.ctx.destination);
+  const splitter = audio.ctx.createChannelSplitter(2);
+  audio.out.connect(splitter);
+  meter.channels = [0, 1].map((channel) => {
+    const analyser = audio.ctx.createAnalyser();
+    analyser.fftSize = 2048;
+    splitter.connect(analyser, channel);
+    return { analyser, samples: new Float32Array(analyser.fftSize), power: 0, hold: -Infinity, holdAt: 0 };
+  });
+}
+
+function meterColors() {
+  if (!meter.colors) {
+    const css = getComputedStyle(document.documentElement);
+    const color = (name) => css.getPropertyValue(name).trim();
+    meter.colors = { ok: color("--boost"), warn: color("--warn"), hot: color("--cut") };
+  }
+  return meter.colors;
+}
+
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { meter.colors = null; });
+
+// RMS with an instant rise and a smooth fall, like a hardware meter.
+function readLevels() {
+  const now = performance.now() / 1000;
+  const fall = Math.exp(-Math.min(0.1, now - (meter.last || now)) / METER_RELEASE_S);
+  meter.last = now;
+  return meter.channels.map((ch) => {
+    ch.analyser.getFloatTimeDomainData(ch.samples);
+    let sum = 0;
+    for (const sample of ch.samples) sum += sample * sample;
+    ch.power = Math.max(sum / ch.samples.length, ch.power * fall);
+    const db = ch.power > 1e-10 ? 10 * Math.log10(ch.power) : -Infinity;
+    if (db >= ch.hold || now - ch.holdAt > METER_HOLD_S) {
+      ch.hold = db;
+      ch.holdAt = now;
+    }
+    return { db, hold: ch.hold };
+  });
+}
+
+function drawMeter() {
+  const canvas = meter.canvas;
+  if (canvas.hidden) return;
+  const ratio = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.round(canvas.clientWidth * ratio));
+  const height = Math.max(1, Math.round(canvas.clientHeight * ratio));
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+  const w = width / ratio;
+  const top = 12;
+  const bottom = height / ratio - 12;
+  const yOf = (db) => top + (clamp(db, METER_FLOOR_DB, 0) / METER_FLOOR_DB) * (bottom - top);
+  ctx.clearRect(0, 0, w, height / ratio);
+
+  ctx.font = "10px system-ui, sans-serif";
+  ctx.textAlign = "right";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+  for (const db of METER_TICKS) {
+    ctx.fillText(String(db), 22, yOf(db));
+    ctx.fillRect(24, Math.round(yOf(db)) - 0.5, 3, 1);
+  }
+
+  const { ok, warn, hot } = meterColors();
+  const zones = [[METER_FLOOR_DB, METER_WARN_DB, ok], [METER_WARN_DB, METER_HOT_DB, warn], [METER_HOT_DB, 0, hot]];
+  const levels = meter.channels.length ? readLevels() : [{ db: -Infinity, hold: -Infinity }, { db: -Infinity, hold: -Infinity }];
+  levels.forEach(({ db, hold }, i) => {
+    const x = 30 + i * 13;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
+    ctx.fillRect(x, top, 10, bottom - top);
+    for (const [from, to, color] of zones) {
+      if (db <= from) break;
+      ctx.fillStyle = color;
+      ctx.fillRect(x, yOf(Math.min(db, to)), 10, yOf(from) - yOf(Math.min(db, to)));
+    }
+    if (hold > METER_FLOOR_DB) {
+      ctx.fillStyle = (zones.find(([from, to]) => hold <= to) || zones[2])[2];
+      ctx.fillRect(x, yOf(hold) - 1, 10, 2);
+    }
+  });
 }
 
 player.addEventListener("play", () => {
@@ -1150,10 +1259,12 @@ function applyEditorHeight() {
   let max = main - fixed - MIN_PLAYER_PX;
   if (!editor.hidden) {
     // No taller than it takes to show every track: no empty space below them.
-    const scroll = $("timeline-scroll");
+    // Measured from unrounded sizes (and rounded up), so the answer doesn't
+    // depend on the height it's at now - e.g. on how fast the splitter moved.
+    const scroll = $("timeline-scroll").getBoundingClientRect().height;
     const toggle = $("toggle-unused");
-    const content = timeline.offsetHeight + (toggle.hidden ? 0 : toggle.offsetHeight);
-    max = Math.min(max, editor.getBoundingClientRect().height - scroll.clientHeight + content);
+    const content = timeline.getBoundingClientRect().height + (toggle.hidden ? 0 : toggle.getBoundingClientRect().height);
+    max = Math.min(max, Math.ceil(editor.getBoundingClientRect().height - scroll + content));
   }
   const min = Math.min(MIN_EDITOR_PX, max);
   const height = clamp(editorHeight, min, Math.max(min, max));

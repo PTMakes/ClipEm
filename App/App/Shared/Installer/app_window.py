@@ -78,6 +78,45 @@ def set_window_icon(root, log=None):
     except (tk.TclError, OSError) as exc:
         if log:
             log(f"Couldn't set the window icon: {exc}")
+    if sys.platform == "win32" and os.path.exists(ICON_ICO):
+        _set_native_icons_when_mapped(root, log)
+
+
+def _set_native_icons_when_mapped(root, log=None):
+    """Tk only ever gives Windows a 16 and a 32 px icon (tkWinWm.c's
+    GetIcon), so on a scaled display the taskbar stretches the 32 px one
+    into a blur. Once the window has its frame (it's mapped), this loads
+    ClipEm.ico at the sizes Windows uses at this DPI and sets those on it
+    instead. Tk keeps them if it later rebuilds the frame."""
+    import ctypes
+
+    done = []
+
+    def on_map(event):
+        if event.widget is not root or done:
+            return
+        done.append(True)
+        try:
+            user32 = ctypes.windll.user32
+            user32.LoadImageW.restype = ctypes.c_void_p
+            user32.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint,
+                                          ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+            user32.SendMessageW.restype = ctypes.c_void_p
+            user32.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_void_p, ctypes.c_void_p]
+            hwnd = int(root.wm_frame(), 16)
+            image_icon, lr_loadfromfile, wm_seticon = 1, 0x10, 0x80
+            # (ICON_BIG, SM_CXICON), (ICON_SMALL, SM_CXSMICON) - DPI-scaled, as
+            # the process is DPI aware (ui_scale.enable_dpi_awareness).
+            for which, metric in ((1, 11), (0, 49)):
+                size = user32.GetSystemMetrics(metric)
+                icon = user32.LoadImageW(None, ICON_ICO, image_icon, size, size, lr_loadfromfile)
+                if icon:
+                    user32.SendMessageW(hwnd, wm_seticon, which, icon)
+        except Exception as exc:  # best effort, like set_window_icon
+            if log:
+                log(f"Couldn't set the taskbar icon: {exc}")
+
+    root.bind("<Map>", on_map, add="+")
 
 
 class EntryHistory:

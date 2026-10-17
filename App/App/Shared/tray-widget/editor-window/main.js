@@ -3,9 +3,12 @@
 // ClipEm's editor window: run by clip_browser.py with ClipEm's own Electron
 // (Installer/editor_window.py) as
 //   <electron> <this folder> --clipem-url=<editor page> --clipem-profile=<dir> --clipem-icon=<png>
-// It shows that one page - ClipEm's local editor on 127.0.0.1 - in a window
-// with ClipEm's name and icon, and nothing else. A second launch with the
-// same profile just brings the open window to the front.
+//              [--clipem-parent-pid=<pid>]
+// It shows that one page - ClipEm's local editor on 127.0.0.1 - in a
+// maximized window with ClipEm's name and icon, and nothing else. A second
+// launch with the same profile just brings the open window to the front. It
+// closes if clip_browser.py (the parent pid, which serves the page) is gone,
+// so a window whose server has died never stays around to be brought back.
 //
 // package.json's desktopName sets the window's app id on Linux (Wayland),
 // matching the clipem-editor.desktop entry clip_browser.py writes, so the
@@ -22,6 +25,9 @@ function arg(name) {
 const url = arg("url");
 const profile = arg("profile");
 const icon = arg("icon");
+const parentPid = Number(arg("parent-pid")) || null;
+const PARENT_POLL_MS = 2000;
+const FOCUS_CHECK_MS = 200;
 
 if (!url || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
   console.error("ClipEm editor window: --clipem-url must be ClipEm's local editor page.");
@@ -47,11 +53,18 @@ function start() {
 
   let win = null;
   app.on("second-instance", () => {
-    if (!win) return;
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    if (win) bringToFront(win);
   });
+
+  if (parentPid) {
+    setInterval(() => {
+      try {
+        process.kill(parentPid, 0);
+      } catch (err) {
+        if (err.code === "ESRCH") app.quit();
+      }
+    }, PARENT_POLL_MS);
+  }
 
   app.whenReady().then(() => {
     if (process.platform === "darwin" && icon && app.dock) app.dock.setIcon(icon);
@@ -61,6 +74,7 @@ function start() {
       title: "ClipEm Editor",
       icon: icon || undefined,
       autoHideMenuBar: true,
+      show: false, // shown maximized, below
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
     });
     // Only ClipEm's own page: no pop-ups, no navigating anywhere else.
@@ -69,8 +83,29 @@ function start() {
       if (new URL(target).origin !== origin) event.preventDefault();
     });
     win.on("closed", () => { win = null; });
+    win.maximize();
+    win.show();
     win.loadURL(url);
   });
 
   app.on("window-all-closed", () => app.quit());
+}
+
+// Wayland compositors (KWin, Mutter) ignore focus() from an app that has no
+// activation token - and a launch from the tray menu brings none - so the
+// window would only flash in the taskbar. They do activate a newly mapped
+// window, so if focus() didn't take, hide it and show it again. The page
+// itself is untouched.
+function bringToFront(win) {
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  setTimeout(() => {
+    if (win.isDestroyed() || win.isFocused()) return;
+    const maximized = win.isMaximized();
+    win.hide();
+    if (maximized) win.maximize();
+    win.show();
+    win.focus();
+  }, FOCUS_CHECK_MS);
 }

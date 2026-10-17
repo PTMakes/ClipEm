@@ -274,6 +274,17 @@ body.sidebar-hidden #toggle-sidebar .arrow { transform: scaleX(-1); }
 
 #player:not([src]) { display: none; }
 
+/* The level meter: on the right of the video's space, the video beside it. */
+#player-wrap:has(#meter:not([hidden])) { padding-right: 58px; }
+
+#meter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 58px;
+  height: 100%;
+}
+
 #no-selection {
   position: absolute;
 }
@@ -302,6 +313,7 @@ button.link {
 }
 
 button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
+#toggle-unused { display: block; } /* no line box around it - its height is measured */
 
 #transport, #export-bar, #panel, #export-progress {
   display: flex;

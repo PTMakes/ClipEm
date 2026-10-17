@@ -45,7 +45,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHARED_DIR = os.path.dirname(SCRIPT_DIR)
 INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
-sys.path.insert(0, INSTALLER_DIR)
+# Both folders explicitly: Windows' embeddable Python (its ._pth file) doesn't
+# put the script's own folder on sys.path, so clip_edit wouldn't be found.
+sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(1, INSTALLER_DIR)
 import clip_edit  # noqa: E402
 import editor_install  # noqa: E402
 import editor_window  # noqa: E402
@@ -896,7 +899,12 @@ def _start_window(exe, url, wait):
         ensure_app_desktop_entry()
     os.makedirs(EDITOR_PROFILE_DIR, exist_ok=True)
     kwargs = {"creationflags": 0x08000000} if _SYSTEM == "Windows" else {}
-    proc = subprocess.Popen(window_command(exe, url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    cmd = window_command(exe, url)
+    if wait:
+        # The window serving this process's page closes if this process dies
+        # without closing it (killed, or a lost terminal's SIGHUP).
+        cmd.append(f"--clipem-parent-pid={os.getpid()}")
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                             env=window_env(), **kwargs)
     if wait:
         _window["proc"] = proc
@@ -966,21 +974,27 @@ def main():
     if _SYSTEM != "Windows":
         # Terminated (the tray widget's fallback, or exit_with_parent):
         # close the window and stop the export rather than orphaning them.
-        signal.signal(signal.SIGTERM, lambda _sig, _frame: threading.Thread(
-            target=quit_editor, args=(server,), daemon=True).start())
+        for signum in (signal.SIGTERM, signal.SIGHUP):
+            signal.signal(signum, lambda _sig, _frame: threading.Thread(
+                target=quit_editor, args=(server,), daemon=True).start())
     threading.Thread(target=server.serve_forever, daemon=True).start()
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:
-        open_window(server.launch_url)
+        opened = open_window(server.launch_url)
     finally:
         server.editor.export_job.cancel()  # its ffmpeg would outlive us
         server.shutdown()
         try:
-            os.remove(URL_PATH)
+            with open(URL_PATH, "r", encoding="utf-8") as f:
+                ours = f.read().strip() == server.launch_url
+            if ours:  # not a newer editor's, after this one was slow to close
+                os.remove(URL_PATH)
         except OSError:
             pass
         release_instance_lock(LOCK_PATH)
+    if not opened:
+        sys.exit(1)  # the tray widget tells the user
 
 
 if __name__ == "__main__":
