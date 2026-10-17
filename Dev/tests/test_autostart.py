@@ -123,3 +123,32 @@ def test_macos_plist_with_escaped_path_is_recognised(tmp_path, monkeypatch):
     assert [(os.path.basename(e["path"]), e["this_install"]) for e in autostart.find_autostart_entries()] == [
         (plist.name, True)
     ]
+
+
+# --- Linux application menu entry ------------------------------------------
+
+@pytest.fixture
+def menu_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setattr(autostart, "_refresh_linux_menus", lambda _dir: None)
+    return tmp_path / "applications"
+
+
+def test_linux_menu_entry_is_listed_in_menus(menu_dir):
+    autostart.create_linux_menu_entry("/usr/bin/python3", "/x/ClipEm.png")
+    entry = (menu_dir / "clipem.desktop").read_text()
+    assert f'Exec="/usr/bin/python3" "{autostart.RUN_PY}"\n' in entry
+    assert "Categories=" in entry
+    assert "StartupWMClass=ClipEm\n" in entry
+    assert "NoDisplay" not in entry
+
+
+def test_remove_linux_menu_entry_only_removes_this_install(menu_dir):
+    autostart.create_linux_menu_entry("/usr/bin/python3", None)
+    autostart.remove_start_menu_shortcut()
+    assert not (menu_dir / "clipem.desktop").exists()
+
+    other = _write(menu_dir, "clipem.desktop", '[Desktop Entry]\nExec="/py" "/elsewhere/run.py"\n')
+    autostart.remove_start_menu_shortcut()
+    assert os.path.exists(other)
