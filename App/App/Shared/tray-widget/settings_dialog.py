@@ -735,7 +735,7 @@ def main():
             text=(
                 "Your description is posted publicly as a GitHub issue. ClipEm's and OBS's logs and "
                 "a summary of this install (versions, settings and folder paths) are uploaded "
-                "privately, for the developer only - the websocket password is left out."
+                "privately."
             ),
         ).pack(anchor="w", pady=(px(6), 0))
 
@@ -779,7 +779,7 @@ def main():
                 dialog.destroy()
             if issue_url and messagebox.askyesno(
                 "Send Bug Report",
-                f"Thanks - the bug report was sent (report ID {report_id}).\n\nOpen its GitHub issue?",
+                f"Thanks - the bug report was sent (report ID {report_id}).\n\nOpen the GitHub issue in your browser?",
                 parent=root,
             ):
                 webbrowser.open(issue_url)
