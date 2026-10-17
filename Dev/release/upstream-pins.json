@@ -22,5 +22,9 @@
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip": "4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1",
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-macOS-Apple.dmg": "920d6f26703d2df6e4085bd3c1cbed30488325084136c7a6e9e37021fbd6aaf7",
   "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-macOS-Intel.dmg": "f8d8afe3dffdc86efa0698c02ff0c997866bac3e6208ddaf56d37108baacf197",
-  "https://github.com/dimtpap/obs-pipewire-audio-capture/archive/refs/tags/1.2.1.tar.gz": "70107cafd2020437fc0b663fdf6a94598b474942a0582b24719a0e76a9f73a50"
+  "https://github.com/dimtpap/obs-pipewire-audio-capture/archive/refs/tags/1.2.1.tar.gz": "70107cafd2020437fc0b663fdf6a94598b474942a0582b24719a0e76a9f73a50",
+  "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-linux-x64.zip": "5bcd217611d6843ececd6c9e9c1fcd1da3ab066c43d8b1a9e4b44689a1fba6f5",
+  "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-win32-x64.zip": "9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db",
+  "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-arm64.zip": "1d75703019bb16461ae65f3081d7e6f5c0b11e901d0ccb5c343bcf7bcdd6435c",
+  "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-x64.zip": "e567d13833d0e161d7749727355b98643461df3395b537cfa7bdddf8a8bfedff"
 }

@@ -279,7 +279,10 @@ def exit_with_parent(parent_pid):
 
 def outlive_parent():
     """Undoes exit_with_parent - for a helper that's about to stop its parent
-    on purpose (the settings dialog restarting ClipEm after an update)."""
+    on purpose (the settings dialog restarting ClipEm after an update).
+    Call it on the thread that called exit_with_parent (the main thread):
+    the parent-death signal is per thread on Linux, so clearing it on
+    another one leaves the process to be killed anyway."""
     if sys.platform.startswith("linux"):
         try:
             _set_parent_death_signal(0)

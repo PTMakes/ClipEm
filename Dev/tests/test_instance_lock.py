@@ -89,12 +89,16 @@ print(child.pid, flush=True)
 time.sleep(60)
 """
 _CHILD = r"""
-import sys, time
+import sys, threading, time
 sys.path.insert(0, sys.argv[1])
 from clipem_common import exit_with_parent, outlive_parent
 exit_with_parent(int(sys.argv[2]))
 if sys.argv[3] == "outlive":
     outlive_parent()
+elif sys.argv[3] == "outlive-on-a-worker-thread":
+    worker = threading.Thread(target=outlive_parent)
+    worker.start()
+    worker.join()
 time.sleep(60)
 """
 
@@ -137,6 +141,16 @@ def test_helper_that_opted_out_survives_the_tray_widget():
         assert not _wait_gone(child_pid, seconds=1)
     finally:
         os.kill(child_pid, 9)
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="PR_SET_PDEATHSIG is Linux-only")
+def test_outliving_from_a_worker_thread_doesnt_count():
+    # Why settings_dialog.restart_clipem_in_background calls outlive_parent
+    # on the Tk thread: the signal is per thread, the main thread's stays.
+    parent, child_pid = _spawn_family("outlive-on-a-worker-thread")
+    parent.kill()
+    parent.wait()
+    assert _wait_gone(child_pid)
 
 
 class _Log:

@@ -38,6 +38,7 @@ else:
     import pystray
 
 import autostart  # noqa: E402 - from App/Shared/Installer, see sys.path above
+import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import obs_window  # noqa: E402
@@ -395,6 +396,8 @@ class TrayApp:
             self._notify(f"Failed to save clip: {exc}")
 
     def _open_clip_editor(self, icon, item):
+        if not editor_window.installed():
+            self._notify("Setting up the clip editor - downloading its window (about 130 MB)...")
         try:
             self._children.append(subprocess.Popen(
                 [sys.executable, CLIP_BROWSER_SCRIPT, "--parent-pid", str(os.getpid())]

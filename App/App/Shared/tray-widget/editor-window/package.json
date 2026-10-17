@@ -1,0 +1,8 @@
+{
+  "name": "clipem-editor",
+  "productName": "ClipEm Editor",
+  "desktopName": "clipem-editor.desktop",
+  "version": "1.0.0",
+  "private": true,
+  "main": "main.js"
+}

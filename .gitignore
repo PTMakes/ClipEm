@@ -35,6 +35,10 @@ __pycache__/
 /App/App/Windows/obs-plugins/
 /App/App/Linux/python/
 /App/App/Linux/obs-install/
+# The clip editor's window (Electron - Installer/editor_window.py), same deal.
+/App/App/Windows/editor-window/
+/App/App/Linux/editor-window/
+/App/App/*/.editor-window.update-*/
 
 # Per-machine checksum baseline recorded after a fresh OBS/Python fetch -
 # see record_local_checksums() in App/Shared/Installer/setup.py.

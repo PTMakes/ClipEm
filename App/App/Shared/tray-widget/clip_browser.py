@@ -8,21 +8,17 @@ own editor, if one is set (see Installer/editor_install.py).
 Launched as a separate process from the tray's "Edit Clips..." menu item,
 like the settings dialog. The page itself (clip_browser/) is served from a
 local HTTP server on 127.0.0.1, every URL carrying a random token, and shown
-in an app-style window:
+in ClipEm's own window - nothing the user has installed is needed: ClipEm's
+pinned Electron (Installer/editor_window.py, installed by Setup or on first
+open) runs the small app in editor-window/, which shows this page with
+ClipEm's name and icon and plays clips' H.264/AAC itself. The window closing
+ends this process.
 
 The window opens at a fixed launch page (LAUNCH_PATH, the token after its
-"#", which never reaches the server) that hands over to the token URL: a
-Chromium --app window's app_id comes from the URL it opened with, and a
-fixed one lets the desktop entry written by ensure_app_desktop_entry() give
-it ClipEm's icon in the taskbar on Linux. The page's favicon (the logo)
-covers Windows and X11.
-
-- pywebview, if it happens to be installed;
-- otherwise a Chromium-family browser in --app mode (Edge ships with every
-  Windows 10/11; Chromium/Chrome/Brave/Vivaldi on Linux and macOS) with its
-  own profile, so the window closing ends this process, and with autoplay
-  allowed, so hover sound works without clicking first;
-- otherwise the default browser, served until the tray widget exits.
+"#", which never reaches the server) that hands over to the token URL. On
+Linux the window's app id is "clipem-editor" (editor-window/package.json),
+and ensure_app_desktop_entry() writes the matching desktop entry, so the
+taskbar shows ClipEm's icon.
 
 Quitting the tray widget closes the editor too, however it was opened
 (the tray menu or the Start menu entry): it POSTs api/quit to the URL in
@@ -43,7 +39,6 @@ import subprocess
 import sys
 import threading
 import urllib.parse
-import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -52,13 +47,14 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 sys.path.insert(0, INSTALLER_DIR)
 import clip_edit  # noqa: E402
 import editor_install  # noqa: E402
+import editor_window  # noqa: E402
 import obs_config  # noqa: E402
+import obs_install  # noqa: E402
 from autostart import desktop_exec_arg  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
     acquire_instance_lock,
     exit_with_parent,
-    pid_alive,
     release_instance_lock,
     setup_logging,
     write_text_atomic,
@@ -80,7 +76,6 @@ EDITS_DIR = os.path.join(CACHE_DIR, "edits")
 TRACK_AUDIO_DIR = os.path.join(CACHE_DIR, "track-audio")
 PEAKS_DIR = os.path.join(CACHE_DIR, "peaks")
 PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
-BROWSER_PROFILE_DIR = os.path.join(CACHE_DIR, "clip-browser-profile")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.lock")
 LAUNCH_PATH = "clipem-editor"
 # Public (no token): the launch page and the logo it and the editor use.
@@ -95,12 +90,6 @@ LAUNCH_PAGE = b"""<!doctype html>
   if (/^[A-Za-z0-9_-]+$/.test(token)) location.replace("/" + token + "/");
 </script>
 """
-# Which app_id prefix each Chromium-family browser gives --app windows.
-APP_ID_PREFIXES = {
-    "chromium": "chrome", "chromium-browser": "chrome", "google-chrome": "chrome", "google-chrome-stable": "chrome",
-    "brave": "brave", "brave-browser": "brave", "microsoft-edge": "msedge", "microsoft-edge-stable": "msedge",
-    "vivaldi": "vivaldi", "vivaldi-stable": "vivaldi",
-}
 # The running instance's URL, for a second "Edit Clips..." to reopen.
 URL_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.url")
 
@@ -110,7 +99,6 @@ COPY_SUFFIXES = {"-small": "small_file", "-tracks": "tracks_file"}
 THUMB_WIDTH = 320
 MAX_THUMBNAIL_JOBS = 2
 CHUNK_BYTES = 1024 * 1024
-PARENT_CHECK_SECONDS = 5
 
 _SYSTEM = platform.system()
 
@@ -682,53 +670,10 @@ class Handler(BaseHTTPRequestHandler):
 # Window
 # ---------------------------------------------------------------------------
 
-def _windows_browser_paths():
-    roots = [os.environ.get(k) for k in ("PROGRAMFILES(X86)", "PROGRAMFILES", "LOCALAPPDATA")]
-    relative = (
-        r"Microsoft\Edge\Application\msedge.exe",
-        r"Google\Chrome\Application\chrome.exe",
-        r"BraveSoftware\Brave-Browser\Application\brave.exe",
-    )
-    return [os.path.join(root, rel) for rel in relative for root in roots if root]
-
-
-MACOS_BROWSER_PATHS = (
-    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
-    "/Applications/Chromium.app/Contents/MacOS/Chromium",
-)
-LINUX_BROWSER_NAMES = (
-    "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "brave", "brave-browser",
-    "microsoft-edge", "microsoft-edge-stable", "vivaldi", "vivaldi-stable",
-)
-
-
-def find_app_browser(system=None, which=shutil.which, isfile=os.path.isfile):
-    """A Chromium-family browser that can show the page as an app window."""
-    system = system or _SYSTEM
-    if system == "Windows":
-        return next((p for p in _windows_browser_paths() if isfile(p)), None)
-    if system == "Darwin":
-        return next((p for p in MACOS_BROWSER_PATHS if isfile(p)), None)
-    return next((found for name in LINUX_BROWSER_NAMES if (found := which(name))), None)
-
-
-def app_browser_command(browser, url, profile_dir=BROWSER_PROFILE_DIR):
-    return [
-        browser, f"--app={url}", f"--user-data-dir={profile_dir}",
-        # Hover-to-play has sound from the first hover, no click needed.
-        "--autoplay-policy=no-user-gesture-required",
-        "--no-first-run", "--no-default-browser-check", "--window-size=1440,900",
-    ]
-
-
-def app_id(browser):
-    """The Wayland app_id (X11: WM_CLASS) of the --app window `browser`
-    opens at the launch page, or None for a browser not in APP_ID_PREFIXES."""
-    name = os.path.basename(browser).lower().removesuffix(".exe")
-    prefix = APP_ID_PREFIXES.get(name)
-    return f"{prefix}-127.0.0.1__{LAUNCH_PATH}_-Default" if prefix else None
+EDITOR_APP_DIR = os.path.join(SCRIPT_DIR, "editor-window")
+EDITOR_PROFILE_DIR = os.path.join(CACHE_DIR, "editor-window-profile")
+# The window's app id on Linux - package.json's desktopName in EDITOR_APP_DIR.
+DESKTOP_ID = "clipem-editor"
 
 
 def applications_dir():
@@ -736,29 +681,33 @@ def applications_dir():
     return os.path.join(data_home, "applications")
 
 
-def app_desktop_entry(window_id):
+def app_desktop_entry():
     return "\n".join([
         "[Desktop Entry]",
         "Type=Application",
         "Name=ClipEm Editor",
         f"Exec={desktop_exec_arg(sys.executable)} {desktop_exec_arg(os.path.abspath(__file__))}",
         f"Icon={os.path.join(SCRIPT_DIR, 'ClipEm.png')}",
-        f"StartupWMClass={window_id}",
+        f"StartupWMClass={DESKTOP_ID}",
         "NoDisplay=true",
         "Terminal=false",
     ]) + "\n"
 
 
-def ensure_app_desktop_entry(browser, directory=None):
-    """Linux taskbars pick a window's icon from the desktop entry named after
-    its app_id - without one, the editor shows the browser's icon. Hidden
-    from menus (NoDisplay), and rewritten if this install has moved."""
-    window_id = app_id(browser)
-    if not window_id:
-        return None
+def ensure_app_desktop_entry(directory=None):
+    """Linux taskbars take a window's icon from the desktop entry named after
+    its app id. Hidden from menus (NoDisplay), rewritten if this install has
+    moved, and the entries older versions wrote for browser --app windows
+    (chrome-127.0.0.1__clipem-editor_-Default.desktop...) are removed."""
     directory = directory or applications_dir()
-    path = os.path.join(directory, window_id + ".desktop")
-    content = app_desktop_entry(window_id)
+    path = os.path.join(directory, DESKTOP_ID + ".desktop")
+    try:
+        for name in os.listdir(directory):
+            if name.endswith(f"-127.0.0.1__{LAUNCH_PATH}_-Default.desktop"):
+                os.remove(os.path.join(directory, name))
+    except OSError:
+        pass
+    content = app_desktop_entry()
     try:
         with open(path, "r", encoding="utf-8") as f:
             if f.read() == content:
@@ -774,20 +723,56 @@ def ensure_app_desktop_entry(browser, directory=None):
     return path
 
 
-# The window this process is showing, so quit_editor() can close it: the
-# --app browser it started, or True for a pywebview window.
-_window = {"browser": None, "webview": False}
+def window_command(exe, url, system=None):
+    """ClipEm's Electron running its editor-window app at url."""
+    system = system or _SYSTEM
+    icon = LAUNCH_FILES["icon.ico" if system == "Windows" else "icon.png"]
+    cmd = [exe, EDITOR_APP_DIR, f"--clipem-url={url}", f"--clipem-profile={EDITOR_PROFILE_DIR}",
+           f"--clipem-icon={icon}"]
+    if system == "Linux" and editor_window.linux_needs_no_sandbox(os.path.dirname(exe)):
+        cmd.append("--no-sandbox")
+    return cmd
+
+
+def window_env():
+    env = dict(os.environ)
+    # Set when started from inside another Electron app (e.g. a VS Code
+    # terminal) - it would run Electron as plain Node, with no window.
+    env.pop("ELECTRON_RUN_AS_NODE", None)
+    return env
+
+
+def ensure_window_runtime():
+    """The editor window's executable, downloading it first (a pinned,
+    signed-manifest-verified Electron - see Installer/editor_window.py) if
+    Setup didn't install it. None if that fails."""
+    if editor_window.installed():
+        return editor_window.exe_path()
+    log.info("The editor window isn't installed - downloading it now.")
+    try:
+        entry = editor_window.install(obs_install.fetch_verified, log=log.info)
+        obs_install.record_installed_sha256(editor_window.SHA256_COMPONENT, entry)
+        obs_install.record_local_checksums([editor_window.runtime_dir()], "editor window", log=log.info)
+    except Exception as exc:
+        log.error(f"Couldn't install the editor window: {exc}")
+        return None
+    return editor_window.exe_path()
+
+
+# The window this process is showing, so quit_editor() can close it.
+_window = {"proc": None}
 _quitting = threading.Event()
 
 
-def _open_app_browser(browser, url, wait):
+def _start_window(exe, url, wait):
     if _SYSTEM == "Linux":
-        ensure_app_desktop_entry(browser)
-    os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
-    cmd = app_browser_command(browser, url)
-    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        ensure_app_desktop_entry()
+    os.makedirs(EDITOR_PROFILE_DIR, exist_ok=True)
+    kwargs = {"creationflags": 0x08000000} if _SYSTEM == "Windows" else {}
+    proc = subprocess.Popen(window_command(exe, url), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            env=window_env(), **kwargs)
     if wait:
-        _window["browser"] = proc
+        _window["proc"] = proc
         if _quitting.is_set():  # quit while it was starting
             proc.terminate()
         proc.wait()
@@ -800,64 +785,36 @@ def quit_editor(server):
     _quitting.set()
     log.info("Closing the clip editor (ClipEm is quitting).")
     server.editor.export_job.cancel()
-    proc = _window["browser"]
+    proc = _window["proc"]
     if proc and proc.poll() is None:
         proc.terminate()
         try:
             proc.wait(timeout=3)
         except subprocess.TimeoutExpired:
             proc.kill()
-    if _window["webview"]:
-        try:
-            import webview
-
-            for window in list(webview.windows):
-                window.destroy()
-        except Exception as exc:
-            log.warning(f"Couldn't close the pywebview window: {exc}")
 
 
 def open_window(url):
-    """Shows url. Returns True once the window has closed, False if it went
-    to the default browser (no way to know when that tab closes)."""
-    try:
-        import webview
-    except ImportError:
-        webview = None
-    if webview is not None:
-        try:
-            webview.create_window("ClipEm Editor", url, width=1440, height=900)
-            _window["webview"] = True
-            try:
-                webview.start(icon=LAUNCH_FILES["icon.png"])
-            except TypeError:  # pywebview without icon support
-                webview.start()
-            return True
-        except Exception as exc:
-            log.warning(f"pywebview couldn't open a window ({exc}) - trying a browser.")
-    browser = find_app_browser()
-    if browser:
-        log.info(f"Opening the clip editor in {browser} (app mode).")
-        _open_app_browser(browser, url, wait=True)
-        return True
-    log.info("No Chromium-family browser found - opening the clip editor in the default browser.")
-    webbrowser.open(url)
-    return False
+    """Shows url in ClipEm's own editor window until it's closed. Returns
+    False if the window can't be shown (its runtime couldn't be installed)."""
+    exe = ensure_window_runtime()
+    if not exe:
+        return False
+    log.info("Opening the clip editor window.")
+    _start_window(exe, url, wait=True)
+    return True
 
 
 def reopen_existing():
-    """Another clip editor is running: show its page again."""
+    """Another clip editor is running: bring its window to the front (the
+    window's own single-instance lock hands this launch over to it)."""
     try:
         with open(URL_PATH, "r", encoding="utf-8") as f:
             url = f.read().strip()
     except OSError:
         return
-    browser = find_app_browser()
-    if browser:
-        # Same profile: Chromium hands this to the running window's process.
-        _open_app_browser(browser, url, wait=False)
-    else:
-        webbrowser.open(url)
+    if editor_window.installed():
+        _start_window(editor_window.exe_path(), url, wait=False)
 
 
 def parent_pid_from_args(argv):
@@ -888,9 +845,7 @@ def main():
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:
-        if not open_window(server.launch_url):
-            while not _quitting.wait(PARENT_CHECK_SECONDS) and (parent_pid is None or pid_alive(parent_pid)):
-                pass
+        open_window(server.launch_url)
     finally:
         server.editor.export_job.cancel()  # its ffmpeg would outlive us
         server.shutdown()

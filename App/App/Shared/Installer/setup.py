@@ -25,6 +25,7 @@ import zipfile
 # imports below fail before anything runs.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import autostart  # noqa: E402
+import editor_window  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
@@ -1649,6 +1650,23 @@ def ensure_ffmpeg():
             os.remove(archive)
 
 
+def ensure_editor_window():
+    """Installs the clip editor's window (editor_window.py: a pinned
+    Electron) into App/<platform>/editor-window if it isn't there yet.
+    Best-effort: only the clip editor needs it."""
+    if editor_window.installed():
+        return
+    try:
+        print("Fetching the clip editor's window (about 130 MB)...")
+        entry = editor_window.install(_fetch_verified)
+        obs_install.record_installed_sha256(editor_window.SHA256_COMPONENT, entry)
+        record_local_checksums([editor_window.runtime_dir()], "editor window")
+        print("Clip editor window installed.")
+    except Exception as exc:
+        print(f"Could not install the clip editor's window ({exc}) - the clip editor won't open until "
+              "Setup is re-run.", file=sys.stderr)
+
+
 def configure_clip_reexport():
     current = load_clip_reexport()
     enabled = ask_yes_no(
@@ -2119,11 +2137,13 @@ def run_provisioning():
         setup_windows()
         ensure_windows_capture_monitor()
         ensure_ffmpeg()
+        ensure_editor_window()
         report_checksums()
         return True
     if system == "Darwin":
         setup_macos()
         ensure_ffmpeg()
+        ensure_editor_window()
         report_checksums()
         return True
     if system == "Linux":
@@ -2132,6 +2152,7 @@ def run_provisioning():
             ensure_linux_capture_source()
             ensure_linux_audio_source_ids()
             ensure_ffmpeg()
+            ensure_editor_window()
             report_checksums()
         return ok
     return True
@@ -2254,6 +2275,7 @@ def main_cli(system):
         ensure_linux_audio_source_ids()
 
     ensure_ffmpeg()
+    ensure_editor_window()
     report_checksums()
     configure_clip_folder()
     configure_video_quality()

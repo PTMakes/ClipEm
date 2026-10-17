@@ -111,12 +111,20 @@ def restart_clipem(pending_message=UPDATE_PENDING_MESSAGE):
         return f"OBS didn't close (it may be showing a dialog). {pending_message}"
     if obs_config.load_pending_obs_settings():
         obs_config.apply_pending_obs_settings()
-    # This dialog closes with the tray widget (exit_with_parent) - opt out
-    # first, or stopping it would take this process down before run.py starts.
-    outlive_parent()
     stop_tray_widget(log)
     start_run_py()
     return None
+
+
+def restart_clipem_in_background(root, on_done, pending_message=UPDATE_PENDING_MESSAGE):
+    """restart_clipem() on a worker thread, on_done(error_message, exc) back
+    on the Tk thread. This dialog closes with the tray widget
+    (exit_with_parent), which restart_clipem stops - so it opts out first,
+    here on the Tk thread: Linux keeps the parent-death signal per thread,
+    and clearing it on the worker left the main thread's in place, so the
+    dialog died with the tray before it could start run.py."""
+    outlive_parent()
+    run_in_background(root, lambda: restart_clipem(pending_message), on_done)
 
 
 def reveal_file(path):
@@ -673,7 +681,7 @@ def main():
                     messagebox.showerror("Check for Updates", f"Couldn't save the update choice:\n{exc}")
                     return
                 check_button.config(state="disabled", text="Restarting...")
-                run_in_background(root, restart_clipem, on_clipem_restarted)
+                restart_clipem_in_background(root, on_clipem_restarted)
 
         def on_clipem_restarted(error_message, exc):
             if exc is not None:
@@ -771,7 +779,7 @@ def main():
                 child.config(state="disabled")
             reinstall_button.config(state="disabled")
             status_var.set("Restarting ClipEm to reinstall...")
-            run_in_background(root, lambda: restart_clipem(REINSTALL_PENDING_MESSAGE), on_reinstall_restarted)
+            restart_clipem_in_background(root, on_reinstall_restarted, REINSTALL_PENDING_MESSAGE)
 
         dialog_buttons = tk.Frame(body)
         dialog_buttons.pack(anchor="e", pady=(px(12), 0))

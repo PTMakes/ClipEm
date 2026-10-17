@@ -164,23 +164,24 @@ def test_launch_page_and_icon_need_no_token_and_never_leak_it(server):
         urllib.request.urlopen(f"http://127.0.0.1:{port}/clipem-editor/api/clips", timeout=5)
 
 
-def test_app_id_matches_what_chromium_browsers_name_the_window():
-    assert clip_browser.app_id("/usr/bin/chromium") == "chrome-127.0.0.1__clipem-editor_-Default"
-    assert clip_browser.app_id("/usr/bin/brave") == "brave-127.0.0.1__clipem-editor_-Default"
-    assert clip_browser.app_id(r"C:\Edge\msedge.exe") is None
-    assert clip_browser.app_id("/usr/bin/firefox") is None
-
-
 def test_desktop_entry_gives_the_window_clipem_icon(tmp_path):
-    path = clip_browser.ensure_app_desktop_entry("/usr/bin/chromium", directory=str(tmp_path))
-    assert os.path.basename(path) == "chrome-127.0.0.1__clipem-editor_-Default.desktop"
+    stale = tmp_path / "chrome-127.0.0.1__clipem-editor_-Default.desktop"
+    stale.write_text("old browser window entry")
+    path = clip_browser.ensure_app_desktop_entry(directory=str(tmp_path))
+    assert os.path.basename(path) == "clipem-editor.desktop" and not stale.exists()
     text = open(path, encoding="utf-8").read()
-    assert "StartupWMClass=chrome-127.0.0.1__clipem-editor_-Default" in text
+    assert "StartupWMClass=clipem-editor" in text
     assert "NoDisplay=true" in text and text.count("Icon=") == 1 and "ClipEm.png" in text
     mtime = os.path.getmtime(path)
-    assert clip_browser.ensure_app_desktop_entry("/usr/bin/chromium", directory=str(tmp_path)) == path
+    assert clip_browser.ensure_app_desktop_entry(directory=str(tmp_path)) == path
     assert os.path.getmtime(path) == mtime  # unchanged - not rewritten
-    assert clip_browser.ensure_app_desktop_entry("/usr/bin/firefox", directory=str(tmp_path)) is None
+
+
+def test_window_app_id_matches_the_desktop_entry():
+    with open(os.path.join(clip_browser.EDITOR_APP_DIR, "package.json"), encoding="utf-8") as f:
+        package = json.load(f)
+    assert package["desktopName"] == clip_browser.DESKTOP_ID + ".desktop"
+    assert os.path.isfile(os.path.join(clip_browser.EDITOR_APP_DIR, package["main"]))
 
 
 def test_page_and_clip_list(server):
@@ -338,16 +339,22 @@ def test_real_thumbnail_and_duration(tmp_path):
 # Window and editors
 # ---------------------------------------------------------------------------
 
-def test_app_browser_on_linux_prefers_chromium_family():
-    on_path = {"brave-browser": "/usr/bin/brave-browser"}
-    assert clip_browser.find_app_browser("Linux", which=on_path.get) == "/usr/bin/brave-browser"
-    assert clip_browser.find_app_browser("Linux", which=lambda name: None) is None
+def test_window_command_runs_clipems_own_window_app(monkeypatch):
+    monkeypatch.setattr(clip_browser.editor_window, "linux_needs_no_sandbox", lambda root: False)
+    cmd = clip_browser.window_command("/app/editor-window/clipem-editor", "http://127.0.0.1:1/x/#t", "Linux")
+    assert cmd[:3] == ["/app/editor-window/clipem-editor", clip_browser.EDITOR_APP_DIR,
+                       "--clipem-url=http://127.0.0.1:1/x/#t"]
+    assert f"--clipem-profile={clip_browser.EDITOR_PROFILE_DIR}" in cmd and "--no-sandbox" not in cmd
+    assert any(arg.startswith("--clipem-icon=") and arg.endswith("ClipEm.png") for arg in cmd)
+    monkeypatch.setattr(clip_browser.editor_window, "linux_needs_no_sandbox", lambda root: True)
+    assert "--no-sandbox" in clip_browser.window_command("/x/clipem-editor", "http://127.0.0.1:1/", "Linux")
+    windows = clip_browser.window_command("C:/x/ClipEm Editor.exe", "http://127.0.0.1:1/", "Windows")
+    assert windows[-1].endswith("ClipEm.ico") and "--no-sandbox" not in windows
 
 
-def test_app_browser_command_has_own_profile_and_allows_hover_sound():
-    cmd = clip_browser.app_browser_command("/usr/bin/chromium", "http://127.0.0.1:1/t/", "/tmp/profile")
-    assert cmd[:3] == ["/usr/bin/chromium", "--app=http://127.0.0.1:1/t/", "--user-data-dir=/tmp/profile"]
-    assert "--autoplay-policy=no-user-gesture-required" in cmd
+def test_window_runs_as_electron_not_node(monkeypatch):
+    monkeypatch.setenv("ELECTRON_RUN_AS_NODE", "1")
+    assert "ELECTRON_RUN_AS_NODE" not in clip_browser.window_env()
 
 
 def test_editor_label_and_command():
@@ -376,7 +383,7 @@ def test_open_in_editor_reports_an_editor_that_dies(tmp_path, monkeypatch):
 
 def test_quit_closes_the_window_and_cancels_the_export(server, monkeypatch):
     window = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
-    monkeypatch.setitem(clip_browser._window, "browser", window)
+    monkeypatch.setitem(clip_browser._window, "proc", window)
     monkeypatch.setattr(clip_browser, "_quitting", threading.Event())
     cancelled = []
     monkeypatch.setattr(server.editor.export_job, "cancel", lambda: cancelled.append(True))

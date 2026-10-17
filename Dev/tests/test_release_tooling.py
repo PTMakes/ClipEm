@@ -83,7 +83,8 @@ def manifest(tmp_path, monkeypatch):
     for arg, path in files.items():
         argv += [arg, path]
     argv += ["--windows-obs-version", "32.2.2", "--windows-python-version", "3.12.10",
-             "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2"]
+             "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2",
+             "--electron-version", "44.5.1"]
     generate_install_manifest.main(argv)
     return out, files
 
@@ -100,6 +101,11 @@ def test_manifest_layout(manifest):
         assert python["sha256"] == hashlib.sha256(f.read()).hexdigest()
     assert data["sources"]["ffmpeg"]["url"].endswith("ffmpeg-9.0.2-source.tar.gz")
     assert data["windows"]["obs"]["url"].endswith("OBS-Studio-32.2.2-Windows-x64.zip")
+    electron = "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-"
+    assert data["linux"]["editor_window"]["url"] == electron + "linux-x64.zip"
+    assert data["windows"]["editor_window"]["url"] == electron + "win32-x64.zip"
+    assert data["macos"]["editor_window_arm64"]["url"] == electron + "darwin-arm64.zip"
+    assert data["macos"]["editor_window_x86_64"]["url"] == electron + "darwin-x64.zip"
 
 
 def test_windows_obs_asset_was_renamed_in_32():

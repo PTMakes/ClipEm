@@ -85,6 +85,9 @@ read_setup_constant() {
 WINDOWS_OBS_VERSION="$(read_setup_constant WINDOWS_OBS_VERSION)"
 WINDOWS_PYTHON_VERSION="$(read_setup_constant WINDOWS_PYTHON_VERSION)"
 MACOS_OBS_VERSION="$(read_setup_constant MACOS_OBS_VERSION)"
+# Electron for the clip editor's window - Installer/editor_window.py is its source of truth.
+ELECTRON_VERSION="$(grep -oP '(?<=^ELECTRON_VERSION = ")[^"]+' "$APP_DIR/App/Shared/Installer/editor_window.py" || true)"
+[[ -n "$ELECTRON_VERSION" ]] || die "Could not read ELECTRON_VERSION from Installer/editor_window.py"
 # pip wheel the Windows embeddable Python bootstraps itself with (pinned in
 # the manifest with PyPI's own sha256). Must support WINDOWS_PYTHON_VERSION.
 WINDOWS_PIP_VERSION="26.2.1"
@@ -294,7 +297,8 @@ python3 "$SCRIPT_DIR/release/generate_install_manifest.py" \
   --windows-obs-version "$WINDOWS_OBS_VERSION" \
   --windows-python-version "$WINDOWS_PYTHON_VERSION" \
   --windows-pip-version "$WINDOWS_PIP_VERSION" \
-  --macos-obs-version "$MACOS_OBS_VERSION"
+  --macos-obs-version "$MACOS_OBS_VERSION" \
+  --electron-version "$ELECTRON_VERSION"
 
 # Legacy update feed, only read by pre-1.0.22 installs.
 python3 "$SCRIPT_DIR/release/generate_checksums.py" "$APP_DIR/App/Shared" --skip-checksums \

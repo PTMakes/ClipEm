@@ -11,6 +11,9 @@ check() compares each with the signed install manifest:
 - ffmpeg: the manifest entry's sha256 vs. the one recorded when it was
   installed (a rebuild with new features keeps FFmpeg's version) - only
   if ClipEm's ffmpeg is installed at all.
+- Editor window (editor_window.py's Electron): the manifest entry's sha256
+  vs. the one recorded when it was installed - installed if it's missing
+  (installs from before the clip editor had its own window).
 - Packages: the exact pins in requirements.txt vs. what's installed - only
   for sets that were installed at all (the tray widget is optional).
 Only ever upgrades, never downgrades.
@@ -39,6 +42,7 @@ import subprocess
 import sys
 import zipfile
 
+import editor_window
 import obs_install
 import updater
 import windows_python
@@ -338,6 +342,11 @@ def check(manifest, system=None):
         if local != ffmpeg["sha256"].lower():
             name = os.path.basename(ffmpeg.get("url", "")).removesuffix(".tar.gz").removesuffix(".zip")
             found["ffmpeg"] = (local, name)
+    window = manifest.get(key, {}).get("editor_window")
+    if window:
+        local = obs_install.installed_sha256(editor_window.SHA256_COMPONENT) if editor_window.installed(system) else None
+        if local != window["sha256"].lower():
+            found["editor_window"] = (local, updater.artifact_version(window))
     packages = outdated_package_sets(system)
     if packages:
         found["packages"] = packages
@@ -353,6 +362,9 @@ def describe(plan):
         lines.append("ClipEm's Python {} -> {}".format(*plan["python"]))
     if "ffmpeg" in plan:
         lines.append(f"ffmpeg (new build: {plan['ffmpeg'][1]})")
+    if "editor_window" in plan:
+        local, remote = plan["editor_window"]
+        lines.append(f"Clip editor window (Electron {remote})" if local else "Clip editor window (new)")
     if "packages" in plan:
         names = ["tray widget" if path == TRAY_REQUIREMENTS else "mic filter" for path in plan["packages"]]
         lines.append(f"Updated {' and '.join(names)} packages")
@@ -471,6 +483,20 @@ def install_ffmpeg(manifest, system, log):
     obs_install.record_installed_sha256("ffmpeg", entry)
     obs_install.record_local_checksums([os.path.join(dest, "ffmpeg")], "ffmpeg", log=log)
     log("ffmpeg updated.")
+
+
+def install_editor_window(manifest, system, log):
+    """Installs (or replaces) the clip editor's window with the manifest's."""
+    def fetch(platform_key, artifact, path):
+        entry = updater.manifest_entry(manifest, platform_key, artifact)
+        log(f"Downloading {entry['url']} ...")
+        updater.download_file(entry["url"], path, entry["sha256"], timeout=600)
+        return entry
+
+    entry = editor_window.install(fetch, system, log=log)
+    obs_install.record_installed_sha256(editor_window.SHA256_COMPONENT, entry)
+    obs_install.record_local_checksums([editor_window.runtime_dir(system)], "editor window", log=log)
+    log("Clip editor window updated.")
 
 
 def _pip_install(python, requirements, log, target=None, force=False):
@@ -654,6 +680,8 @@ def install(manifest, plan, log, run_args=()):
         install_obs(manifest, system, log)
     if "ffmpeg" in plan:
         install_ffmpeg(manifest, system, log)
+    if "editor_window" in plan:
+        install_editor_window(manifest, system, log)
     if "python" in plan:
         # Reinstalls every package set for the new Python too.
         if system == "Linux":

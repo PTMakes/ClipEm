@@ -256,6 +256,7 @@ button.icon { width: 40px; padding: 6px 0; }
   display: flex;
   flex-direction: column;
   gap: 4px;
+  padding-right: 7px; /* room for the playhead knob at the very end */
 }
 
 .row {
@@ -314,6 +315,28 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 }
 
 .video-lane { height: 40px; }
+
+.scrub-lane {
+  height: 16px;
+  overflow: visible;
+  background: none;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  cursor: ew-resize;
+}
+
+.lane .scrub-head { bottom: -5px; } /* reaches down to the clip lane */
+
+.scrub-head::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -6px;
+  width: 14px;
+  height: 11px;
+  background: #ff4d6a;
+  clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%);
+}
 
 .lane .wave {
   position: absolute;

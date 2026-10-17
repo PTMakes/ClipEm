@@ -315,6 +315,81 @@ def test_failed_ffmpeg_download_keeps_the_installed_ffmpeg(app):
     assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["ffmpeg"]
 
 
+# --- Editor window ------------------------------------------------------------
+
+ELECTRON_URL = "https://x.invalid/electron-v44.5.1-linux-x64.zip"
+
+
+def _electron_zip(dest, version="new"):
+    with zipfile.ZipFile(dest, "w") as zf:
+        info = zipfile.ZipInfo("electron")
+        info.external_attr = 0o755 << 16
+        zf.writestr(info, version)
+        zf.writestr("resources/default_app.asar", "asar")
+        zf.writestr("LICENSE", "MIT")
+
+
+def test_editor_window_is_installed_when_missing_and_updated_when_its_hash_changes(app, monkeypatch):
+    app_dir, _archives, _downloads = app
+    monkeypatch.setattr(components.editor_window, "APP_DIR", str(app_dir))
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: None)
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    manifest = _manifest(linux_editor_window=ELECTRON_URL)
+    assert components.check(manifest, "Linux") == {"editor_window": (None, "44.5.1")}
+    exe = app_dir / "Linux" / "editor-window" / "clipem-editor"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    obs_install.record_installed_sha256("editor_window", {"sha256": "old"})
+    assert components.check(manifest, "Linux") == {"editor_window": ("old", "44.5.1")}
+    obs_install.record_installed_sha256("editor_window", {"sha256": "X"})
+    assert components.check(manifest, "Linux") == {}
+    assert components.describe({"editor_window": (None, "44.5.1")}) == ["Clip editor window (new)"]
+
+
+def test_editor_window_update_replaces_the_runtime(app, monkeypatch):
+    app_dir, archives, _downloads = app
+    monkeypatch.setattr(components.editor_window, "APP_DIR", str(app_dir))
+    old = app_dir / "Linux" / "editor-window" / "clipem-editor"
+    old.parent.mkdir(parents=True)
+    old.write_text("old")
+    archives["electron-v44.5.1-linux-x64.zip"] = _electron_zip
+    components.install_editor_window(_manifest(linux_editor_window=ELECTRON_URL), "Linux", log=lambda m: None)
+    assert old.read_text() == "new" and os.access(old, os.X_OK)
+    assert not (old.parent / "electron").exists() and (old.parent / "resources" / "default_app.asar").exists()
+    assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["editor-window"]
+    assert obs_install.installed_sha256("editor_window") == "x"
+
+
+def test_failed_editor_window_download_keeps_the_installed_one(app, monkeypatch):
+    app_dir, _archives, _downloads = app
+    monkeypatch.setattr(components.editor_window, "APP_DIR", str(app_dir))
+    old = app_dir / "Linux" / "editor-window" / "clipem-editor"
+    old.parent.mkdir(parents=True)
+    old.write_text("old")
+    with pytest.raises(updater.UpdateError):
+        components.install_editor_window(_manifest(linux_editor_window=ELECTRON_URL), "Linux", log=lambda m: None)
+    assert old.read_text() == "old"
+    assert sorted(p.name for p in (app_dir / "Linux").iterdir()) == ["editor-window"]
+
+
+def test_editor_window_package_with_unsafe_paths_is_refused(tmp_path):
+    archive = tmp_path / "e.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("../evil", "x")
+    with pytest.raises(components.editor_window.ExtractError):
+        components.editor_window.extract(str(archive), str(tmp_path / "out"), "Linux")
+    assert not (tmp_path / "evil").exists()
+
+
+def test_editor_window_manifest_keys():
+    key = components.editor_window.manifest_key
+    assert key("Linux") == ("linux", "editor_window")
+    assert key("Windows") == ("windows", "editor_window")
+    assert key("Darwin", "arm64") == ("macos", "editor_window_arm64")
+    assert key("Darwin", "x86_64") == ("macos", "editor_window_x86_64")
+
+
 # --- Installing Python and packages ----------------------------------------
 
 def _fake_pip(installed):

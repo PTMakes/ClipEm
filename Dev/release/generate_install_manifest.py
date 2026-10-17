@@ -10,7 +10,7 @@ Artifact hosting:
     Python, ffmpeg for Linux/Windows) are assets of the GitHub release (tag v<version>, or
     "dev" for a dev build - release.sh uploads them); their sha256 comes straight from the local files.
   - Upstream artifacts (OBS for Windows/macOS, python.org's Windows Python
-    and installer, the pip wheel) stay at their own URLs. Their sha256 is
+    and installer, the pip wheel, Electron for the clip editor's window) stay at their own URLs. Their sha256 is
     pinned in upstream-pins.json the first time it's seen - taken from the
     digest the publisher itself lists (GitHub release assets, PyPI) where
     one exists, or hashed from a download (python.org) otherwise - and
@@ -36,6 +36,7 @@ from release_common import (
 
 PINS_PATH = SCRIPT_DIR / "upstream-pins.json"
 OBS_REPO = "obsproject/obs-studio"
+ELECTRON_REPO = "electron/electron"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -58,6 +59,7 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--windows-python-version", required=True)
     parser.add_argument("--windows-pip-version", required=True)
     parser.add_argument("--macos-obs-version", required=True)
+    parser.add_argument("--electron-version", required=True, help="Installer/editor_window.py's ELECTRON_VERSION")
     return parser.parse_args(argv)
 
 
@@ -109,6 +111,11 @@ def github_obs_asset(pins: dict, version: str, asset: str) -> dict:
     return github_asset(pins, OBS_REPO, version, asset)
 
 
+def electron_asset(pins: dict, version: str, platform_arch: str) -> dict:
+    """Electron's own release zip - the clip editor's window (editor_window.py)."""
+    return github_asset(pins, ELECTRON_REPO, f"v{version}", f"electron-v{version}-{platform_arch}.zip")
+
+
 def pypi_wheel(pins: dict, package: str, version: str) -> dict:
     release = fetch_json(f"https://pypi.org/pypi/{package}/{version}/json")
     wheel = next(
@@ -145,6 +152,7 @@ def main(argv=None) -> None:
     win_obs = args.windows_obs_version
     win_py = args.windows_python_version
     mac_obs = args.macos_obs_version
+    electron = args.electron_version.removeprefix("v")
     windows = {
         "obs": github_obs_asset(pins, win_obs, windows_obs_asset_name(win_obs)),
         "python": pinned_upstream(
@@ -160,11 +168,14 @@ def main(argv=None) -> None:
         ),
         "pip_wheel": pypi_wheel(pins, "pip", args.windows_pip_version),
         "ffmpeg": windows_ffmpeg,
+        "editor_window": electron_asset(pins, electron, "win32-x64"),
         "shared": shared,
     }
     macos = {
         "obs_arm64": github_obs_asset(pins, mac_obs, f"OBS-Studio-{mac_obs}-macOS-Apple.dmg"),
         "obs_x86_64": github_obs_asset(pins, mac_obs, f"OBS-Studio-{mac_obs}-macOS-Intel.dmg"),
+        "editor_window_arm64": electron_asset(pins, electron, "darwin-arm64"),
+        "editor_window_x86_64": electron_asset(pins, electron, "darwin-x64"),
         "shared": shared,
     }
     write_json_atomic(PINS_PATH, pins)
@@ -177,6 +188,7 @@ def main(argv=None) -> None:
         "windows": windows,
         "linux": {
             "obs": linux_obs, "python": linux_python, "shared": shared, "ffmpeg": linux_ffmpeg,
+            "editor_window": electron_asset(pins, electron, "linux-x64"),
         },
         "macos": macos,
         # Corresponding source for the GPL binaries above (not downloaded by

@@ -373,7 +373,7 @@ function shownTracks() {
 function renderTimeline() {
   if (!ed.info) return;
   const shown = shownTracks();
-  timeline.replaceChildren(videoRow(), ...shown.map((t) => audioRow(t.index)));
+  timeline.replaceChildren(scrubRow(), videoRow(), ...shown.map((t) => audioRow(t.index)));
   for (const track of shown) drawWaveform(track.index);
   const hidden = ed.info.tracks.length - shown.length;
   const toggle = $("toggle-unused");
@@ -423,6 +423,29 @@ function rulerTicks(lane) {
     tick.style.left = pct(t);
     lane.append(tick);
   }
+}
+
+// A thin lane above the clip with a playhead knob: click or drag anywhere
+// on it to move the playhead (playback carries on from where it's let go).
+function scrubRow() {
+  const row = el("div", "row scrub-row");
+  const lane = el("div", "lane scrub-lane");
+  lane.title = "Drag to move the playhead";
+  lane.append(el("div", "playhead scrub-head"));
+  lane.addEventListener("pointerdown", dragPlayhead);
+  row.append(el("div", "row-head"), lane);
+  return row;
+}
+
+function dragPlayhead(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const wasPlaying = !player.paused;
+  if (wasPlaying) player.pause();
+  seek(laneTime(e.clientX));
+  trackPointer(e, (ev) => seek(laneTime(ev.clientX)), () => {
+    if (wasPlaying) togglePlay();
+  });
 }
 
 function videoRow() {
