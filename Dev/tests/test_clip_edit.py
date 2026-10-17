@@ -180,14 +180,31 @@ def test_discord_size_and_resolution():
     short = clip_edit.discord_settings(info, 20)
     total_bytes = (short["video_kbps"] + short["audio_kbps"]) * 1000 / 8 * 20
     assert total_bytes <= 20_000_000 * clip_edit.SIZE_HEADROOM
-    assert short["height"] == 1080 and not short["too_long"]
+    assert short["height"] == 1080 and short["fps"] <= 30 and not short["too_long"]
     medium = clip_edit.discord_settings(info, 90)
-    assert medium["height"] < 1080
+    assert medium["height"] == 1080 and medium["video_kbps"] < short["video_kbps"]
     long = clip_edit.discord_settings(info, 900)
-    assert long["too_long"] and long["height"] == 360
+    assert long["too_long"] and long["height"] == 1080
     assert long["video_kbps"] == clip_edit.DISCORD_MIN_VIDEO_KBPS
     low = clip_edit.discord_settings(_info(PROBE_PLAIN.replace("2560x1440", "854x480")), 20)
     assert low["height"] == 480  # never scaled up
+
+
+def test_custom_settings_only_allow_offered_options():
+    info = _info()
+    options = clip_edit.custom_options(info)
+    assert options["heights"] == [1080, 720, 480]  # never above the source
+    assert all(f <= info["fps"] + 0.5 for f in options["fps"])
+    settings = clip_edit.custom_settings(info, 720, None, 8000)
+    assert settings["height"] == 720 and settings["fps"] == info["fps"] and settings["video_kbps"] == 8000
+    source = clip_edit.custom_settings(info, None, None, 4000)
+    assert source["height"] == info["height"]
+    for bad in [(1440, None, 8000), (None, 7, 8000), (None, None, 1234)]:
+        with pytest.raises(ValueError):
+            clip_edit.custom_settings(info, *bad)
+    steps = clip_edit.two_pass_commands("ffmpeg", "in.mp4", clip_edit.default_project(info), info, settings,
+                                        "out.mp4", "pass")
+    assert "8000k" in steps[1][0] and any("scale=-2:720" in arg for arg in steps[1][0])
 
 
 def test_full_quality_writes_mkv_then_mp4_for_multitrack():

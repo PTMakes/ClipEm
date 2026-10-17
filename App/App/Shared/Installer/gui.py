@@ -1349,7 +1349,7 @@ class Wizard(tk.Tk):
         ttk.Label(
             self.container,
             text=(
-                "ClipEm can check clipem.app for a newer version each time it "
+                "ClipEm can check github.com/PTMakes/ClipEm for a newer version each time it "
                 "launches. Nothing is installed automatically - when an update is "
                 "found, you choose whether to install it now, at the next restart, "
                 "or not at all. Updating never resets the settings from this wizard."

@@ -105,10 +105,42 @@ def test_parse_pactl_sink_inputs():
         {"corked": True, "properties": {"application.process.binary": "firefox", "application.name": "Firefox"}},
         {"corked": False, "properties": {"application.process.binary": "spotify", "application.name": "Spotify"}},
         {"corked": False, "properties": {"application.process.binary": "paplay"}},
-        {"corked": False, "properties": {"application.name": "no binary"}},
+        {"corked": False, "properties": {}},
         {"corked": False, "properties": {"application.process.binary": "Discord"}},
     ])
     assert app_audio.parse_pactl_sink_inputs(text) == [("spotify", "Spotify"), ("Discord", "Discord")]
+
+
+def test_parse_pactl_falls_back_to_the_client_and_app_name(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_audio, "_desktop_names", {})
+    monkeypatch.setattr(app_audio, "DESKTOP_DIRS", [str(tmp_path)])
+    (tmp_path / "com.discordapp.Discord.desktop").write_text(
+        "[Desktop Action new]\nName=New Window\n[Desktop Entry]\nType=Application\nName=Discord\n")
+    text = json.dumps([
+        # Spotify's native PipeWire stream: no binary, its client has one.
+        {"corked": False, "client": "7", "properties": {"application.name": "Spotify", "node.name": "spotify"}},
+        # Discord names its stream after WebRTC; its Flatpak's .desktop has the real name.
+        {"corked": False, "client": "8", "properties": {"application.process.binary": "Discord",
+                                                        "application.name": "WEBRTC VoiceEngine"}},
+        {"corked": False, "properties": {"application.name": "Some Game"}},
+        {"corked": False, "properties": {"application.process.binary": "chrome", "application.name": "Chromium"}},
+    ])
+    clients = json.dumps([
+        {"index": 7, "properties": {"application.process.binary": "spotify",
+                                    "pipewire.access.portal.app_id": "com.spotify.Client"}},
+        {"index": 8, "properties": {"pipewire.access.portal.app_id": "com.discordapp.Discord"}},
+    ])
+    assert app_audio.parse_pactl_sink_inputs(text, clients) == [
+        ("spotify", "Spotify"), ("Discord", "Discord"), ("Some Game", "Some Game"), ("chrome", "chrome"),
+    ]
+
+
+def test_an_owner_with_a_library_label_picks_up_the_real_name():
+    state = fresh()
+    app_audio.assign_slots(state, [("Discord", "WEBRTC VoiceEngine")], 0, BUFFER)
+    assert app_audio.assign_slots(state, [("Discord", "Discord")], 10, BUFFER) == [A]
+    assert state["slots"][A]["label"] == "Discord"
+    assert app_audio.assign_slots(state, [("Discord", "Other")], 20, BUFFER) == []
 
 
 def test_load_app_tracks_tolerates_a_bad_file(tmp_path, monkeypatch):

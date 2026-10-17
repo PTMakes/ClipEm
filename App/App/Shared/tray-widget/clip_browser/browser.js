@@ -115,7 +115,7 @@ function updateItem(li, clip) {
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
   badges.replaceChildren();
-  for (const [key, label] of [["tracks_file", "tracks"], ["small_file", "small"]]) {
+  for (const [key, label] of [["tracks_file", "+tracks"], ["small_file", "+small"]]) {
     if (clip[key]) {
       const badge = document.createElement("span");
       badge.className = "badge";

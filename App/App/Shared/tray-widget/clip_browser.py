@@ -341,19 +341,34 @@ class Editor:
         path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}.json")
         return clip_edit.track_peaks(self.ffmpeg, source, index, path)
 
-    def start_export(self, folder, clip_path, source, preset):
-        """Starts exporting next to the clip. Returns the job's status."""
+    def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None):
+        """Starts exporting next to the clip. Returns the job's status.
+        custom: {"height", "fps", "video_kbps"} for the "custom" preset.
+        out_name: the name typed on the page - used as is when it isn't the
+        clip's own name; otherwise the export gets a suffix (-edit, -discord...)."""
         info = self.info(source)
         project = self.load_project(clip_path, info)
         stem = os.path.splitext(os.path.basename(clip_path))[0]
-        if preset == "discord":
-            mp4 = clip_edit.unique_path(folder, f"{stem}-discord", ".mp4")
+        name = clip_edit.clean_name(out_name)
+        exact = name if name and name != stem else None
+        if preset == "custom":
+            custom = custom or {}
+            settings = clip_edit.custom_settings(info, custom.get("height"), custom.get("fps"),
+                                                 custom.get("video_kbps"))
+            label = f"{settings['height']}p{round(settings['fps']) if settings['fps'] else ''}"
+            mp4 = clip_edit.unique_path(folder, exact or f"{stem}-{label}", ".mp4")
+            partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
+            os.makedirs(CACHE_DIR, exist_ok=True)
+            steps = clip_edit.two_pass_commands(self.ffmpeg, source, project, info, settings, partial, PASSLOG_PATH)
+            outputs, cleanup = {partial: mp4}, [PASSLOG_PATH]
+        elif preset == "discord":
+            mp4 = clip_edit.unique_path(folder, exact or f"{stem}-discord", ".mp4")
             partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
             os.makedirs(CACHE_DIR, exist_ok=True)
             steps = clip_edit.discord_commands(self.ffmpeg, source, project, info, partial, PASSLOG_PATH)
             outputs, cleanup = {partial: mp4}, [PASSLOG_PATH]
         else:
-            mp4 = clip_edit.unique_path(folder, f"{stem}-edit", ".mp4")
+            mp4 = clip_edit.unique_path(folder, exact or f"{stem}-edit", ".mp4")
             mp4_stem = os.path.splitext(os.path.basename(mp4))[0]
             mkv = os.path.join(folder, f"{mp4_stem}-tracks.mkv")
             mp4_partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
@@ -379,6 +394,7 @@ def project_payload(clip, source, info, project, missing):
         },
         "project": project,
         "discord": clip_edit.discord_settings(info, clip_edit.kept_duration(project)),
+        "custom": clip_edit.custom_options(info),
         "missing": missing,
     }
 
@@ -631,7 +647,13 @@ class Handler(BaseHTTPRequestHandler):
         if editor.export_job.running():
             self._json({"error": "An export is already running."}, 409)
             return
-        self._json(editor.start_export(folder, clip, source, body.get("preset")))
+        try:
+            status = editor.start_export(folder, clip, source, body.get("preset"), body.get("custom"),
+                                         body.get("out_name"))
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 400)
+            return
+        self._json(status)
 
     def _open_editor(self, folder, body):
         path = file_to_edit(folder, body.get("name"))

@@ -17,7 +17,7 @@ an app always lands on the same track:
 
 Apps playing sound: on Windows, the active WASAPI sessions on the default
 output device (pycaw); on Linux, PulseAudio/PipeWire sink inputs that aren't
-corked (`pactl`). macOS has no app slots.
+corked (`pactl`), labelled with the Flatpak's .desktop name when there is one. macOS has no app slots.
 """
 
 import json
@@ -55,31 +55,105 @@ def _app_key(exe):
     return name[:-4] if name.endswith(".exe") else name
 
 
-def parse_pactl_sink_inputs(text):
+# What some apps put in application.name - the audio library's or engine's
+# name, not the app's. Never used as a track label. Compared case-insensitively.
+GENERIC_APP_NAMES = {
+    "chromium", "chromium input", "chrome", "webrtc voiceengine", "playback",
+    "alsa plug-in", "pulseaudio", "pipewire", "openal soft", "sdl application",
+    "fmod", "wine", "electron",
+}
+
+DESKTOP_DIRS = [
+    os.path.join(os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share"),
+                 "flatpak", "exports", "share", "applications"),
+    "/var/lib/flatpak/exports/share/applications",
+]
+_desktop_names = {}
+
+
+def desktop_entry_name(app_id, dirs=None):
+    """The Name= of a Flatpak's .desktop file (e.g. "com.discordapp.Discord"
+    -> "Discord"), or None."""
+    if app_id in _desktop_names:
+        return _desktop_names[app_id]
+    name = None
+    for directory in dirs or DESKTOP_DIRS:
+        try:
+            with open(os.path.join(directory, f"{app_id}.desktop"), encoding="utf-8") as f:
+                in_entry = False
+                for line in f:
+                    line = line.strip()
+                    if line.startswith("["):
+                        in_entry = line == "[Desktop Entry]"
+                    elif in_entry and line.startswith("Name="):
+                        name = line[len("Name="):].strip() or None
+                        break
+        except OSError:
+            continue
+        if name:
+            break
+    _desktop_names[app_id] = name
+    return name
+
+
+def _app_label(props, binary):
+    """A track label: the Flatpak's .desktop name, else application.name
+    unless it's a library's name (Discord says "WEBRTC VoiceEngine"), else
+    the binary."""
+    app_id = props.get("pipewire.access.portal.app_id")
+    name = app_id and desktop_entry_name(app_id)
+    if name:
+        return name
+    app_name = props.get("application.name")
+    if app_name and app_name.lower() not in GENERIC_APP_NAMES:
+        return app_name
+    return binary
+
+
+def parse_pactl_sink_inputs(text, clients_text=None):
     """[(binary, label)] for the uncorked sink inputs in `pactl -f json
-    list sink-inputs` output, one entry per app."""
+    list sink-inputs` output, one entry per app. clients_text (`pactl -f
+    json list clients`) fills in what native PipeWire streams leave out:
+    Spotify's has no application.process.binary, its client does.
+
+    The "binary" is what the OBS plugin's TargetName is matched against -
+    it accepts the stream's or its client's binary, application.name or
+    node.name, so falling back to those still targets the app."""
+    clients = {}
+    for client in json.loads(clients_text or "[]"):
+        clients[str(client.get("index"))] = client.get("properties") or {}
     apps = []
     seen = set()
     for sink_input in json.loads(text or "[]"):
         if sink_input.get("corked"):
             continue
-        props = sink_input.get("properties") or {}
-        binary = props.get("application.process.binary")
+        # The stream's own properties win; its client's fill the gaps.
+        props = {**clients.get(str(sink_input.get("client")), {}), **(sink_input.get("properties") or {})}
+        binary = props.get("application.process.binary") or props.get("application.name") or props.get("node.name")
         if not binary or _app_key(binary) in IGNORED_APPS or _app_key(binary) in seen:
             continue
         seen.add(_app_key(binary))
-        apps.append((binary, props.get("application.name") or binary))
+        apps.append((binary, _app_label(props, binary)))
     return apps
 
 
-def _linux_active_apps():
+def _pactl_json(what):
     result = subprocess.run(
-        ["pactl", "-f", "json", "list", "sink-inputs"],
+        ["pactl", "-f", "json", "list", what],
         capture_output=True, text=True, timeout=5,
     )
     if result.returncode != 0:
         raise OSError(result.stderr.strip() or f"pactl exited with {result.returncode}")
-    return parse_pactl_sink_inputs(result.stdout)
+    return result.stdout
+
+
+def _linux_active_apps():
+    sink_inputs = _pactl_json("sink-inputs")
+    try:
+        clients = _pactl_json("clients")
+    except (OSError, subprocess.SubprocessError):
+        clients = None
+    return parse_pactl_sink_inputs(sink_inputs, clients)
 
 
 _com_initialized = threading.local()
@@ -145,15 +219,20 @@ def assign_slots(state, active_apps, now, buffer_seconds):
     slots = state["slots"]
     owned = {_app_key(owner["exe"]): name for name, owner in slots.items() if owner}
     # Owners first, so one heard right now never looks expired below.
+    changed = []
     newcomers = []
     for exe, label in active_apps:
         name = owned.get(_app_key(exe))
         if name:
             slots[name]["last_heard"] = now
+            # Owners saved before labels skipped library names ("WEBRTC
+            # VoiceEngine" for Discord) pick up the app's real name.
+            if slots[name]["label"].lower() in GENERIC_APP_NAMES and label != slots[name]["label"]:
+                slots[name]["label"] = label
+                changed.append(name)
         elif _app_key(exe) not in IGNORED_APPS:
             newcomers.append((exe, label))
 
-    changed = []
     for exe, label in newcomers:
         if _app_key(exe) in owned:  # listed twice
             continue

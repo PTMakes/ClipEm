@@ -46,11 +46,12 @@ KBIT_PER_MB = 8000  # decimal MB, as Discord counts them
 SIZE_HEADROOM = 0.95
 DISCORD_AUDIO_KBPS = 128
 DISCORD_MIN_VIDEO_KBPS = 300
-DISCORD_HEIGHTS = (1080, 720, 480, 360)
-DISCORD_MAX_FPS = 60
-# Below this many bits per pixel per frame, x264 gameplay footage turns to
-# mush - drop to the next resolution down instead.
-MIN_BITS_PER_PIXEL = 0.05
+DISCORD_HEIGHT = 1080
+DISCORD_FPS = 30
+CUSTOM_HEIGHTS = (2160, 1440, 1080, 720, 480)
+CUSTOM_FPS = (120, 60, 30, 24)
+CUSTOM_VIDEO_KBPS = (1000, 2500, 4000, 6000, 8000, 12000, 16000, 25000, 40000, 60000)
+CUSTOM_AUDIO_KBPS = 192
 FULL_CRF = 16
 FULL_PRESET = "medium"
 FULL_AUDIO_KBPS = 256
@@ -235,6 +236,14 @@ def normalize_project(project, info):
 
 def kept_duration(project):
     return sum(end - start for start, end in project["keep"])
+
+
+def clean_name(name):
+    """A user-typed export name as a safe file stem (no folders, no
+    characters Windows refuses, no .mp4/.mkv on the end) - "" if nothing's left."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", str(name or "")).strip()
+    name = re.sub(r"\.(mp4|mkv)$", "", name, flags=re.IGNORECASE)
+    return name.strip(" .")[:150]
 
 
 def unique_path(folder, stem, ext, exists=os.path.exists):
@@ -430,36 +439,53 @@ def full_quality_commands(ffmpeg, source, project, info, out_mkv, out_mp4):
 
 def discord_settings(info, seconds, target_mb=DISCORD_TARGET_MB):
     """{"video_kbps", "height", "fps", "too_long"} so `seconds` of video
-    lands just under target_mb: the biggest standard height (no bigger than
-    the source) that still gets MIN_BITS_PER_PIXEL."""
+    lands just under target_mb, always at 1080p30 (or the source's own size
+    and frame rate, when smaller - never scaled up)."""
     seconds = max(1.0, seconds)
     total_kbps = target_mb * KBIT_PER_MB * SIZE_HEADROOM / seconds
     audio_kbps = DISCORD_AUDIO_KBPS if info["audio"] else 0
     video_kbps = int(total_kbps - audio_kbps)
-    src_w, src_h = info["width"] or 1920, info["height"] or 1080
-    fps = min(info["fps"] or 60, DISCORD_MAX_FPS)
-    candidates = [h for h in DISCORD_HEIGHTS if h <= src_h] or [src_h]
-    if src_h not in candidates and src_h < DISCORD_HEIGHTS[0]:
-        candidates.insert(0, src_h)
-    height = candidates[-1]
-    for candidate in candidates:
-        width = src_w * candidate / src_h
-        if video_kbps * 1000 / (width * candidate * fps) >= MIN_BITS_PER_PIXEL:
-            height = candidate
-            break
     return {
         "video_kbps": max(DISCORD_MIN_VIDEO_KBPS, video_kbps),
         "audio_kbps": audio_kbps,
-        "height": height,
-        "fps": fps,
+        "height": min(DISCORD_HEIGHT, info["height"] or DISCORD_HEIGHT),
+        "fps": min(info["fps"] or DISCORD_FPS, DISCORD_FPS),
         "too_long": video_kbps < DISCORD_MIN_VIDEO_KBPS,
         "target_mb": target_mb,
     }
 
 
-def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
-    """Two-pass H.264 so the size lands just under Discord's limit."""
-    settings = discord_settings(info, kept_duration(project))
+def custom_options(info):
+    """What the custom export's dropdowns offer for this clip: heights and
+    frame rates up to the source's own (None: as recorded), and bitrates."""
+    src_h, src_fps = info["height"] or 0, info["fps"] or 0
+    return {
+        "heights": [h for h in CUSTOM_HEIGHTS if h <= src_h],
+        "fps": [f for f in CUSTOM_FPS if f <= src_fps + 0.5],
+        "video_kbps": list(CUSTOM_VIDEO_KBPS),
+        "audio_kbps": CUSTOM_AUDIO_KBPS if info["audio"] else 0,
+    }
+
+
+def custom_settings(info, height, fps, video_kbps):
+    """Checked settings for a custom export (height/fps None: the source's)."""
+    options = custom_options(info)
+    if height is not None and height not in options["heights"]:
+        raise ValueError(f"Can't export this clip at {height}p.")
+    if fps is not None and fps not in options["fps"]:
+        raise ValueError(f"Can't export this clip at {fps} fps.")
+    if video_kbps not in options["video_kbps"]:
+        raise ValueError(f"Unknown bitrate: {video_kbps}.")
+    return {
+        "video_kbps": video_kbps,
+        "audio_kbps": options["audio_kbps"],
+        "height": height or info["height"],
+        "fps": fps or info["fps"],
+    }
+
+
+def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog):
+    """Two-pass H.264 at settings' bitrate, so the size is predictable."""
     height = settings["height"] if settings["height"] != info["height"] else None
     fps = settings["fps"] if info["fps"] and settings["fps"] < info["fps"] - 0.5 else None
     video_args = ["-c:v", "libx264", "-preset", "medium", "-b:v", f"{settings['video_kbps']}k",
@@ -477,6 +503,12 @@ def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
         pass2 += ["-c:a", "aac", "-b:a", f"{settings['audio_kbps']}k"]
     pass2 += ["-movflags", "+faststart", "-f", "mp4", out_mp4]
     return [(pass1, "Analysing", 0.4), (pass2, "Encoding", 0.6)]
+
+
+def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
+    """Two-pass H.264 so the size lands just under Discord's limit."""
+    settings = discord_settings(info, kept_duration(project))
+    return two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
 
 
 # ---------------------------------------------------------------------------

@@ -37,6 +37,7 @@ const ed = {
   saveTimer: null,
   saving: Promise.resolve(),
   discord: null,
+  custom: null, // the custom export's options: {heights, fps, video_kbps, audio_kbps}
   missing: [],
   loadToken: 0,
 };
@@ -172,6 +173,7 @@ function edited() {
   renderTimeline();
   renderPanel();
   renderToolbar();
+  renderCustomExport();
   scheduleSave();
 }
 
@@ -255,6 +257,8 @@ async function loadEditor(name) {
   ed.tracks = data.project.tracks;
   loadKeep(data.project.keep);
   ed.discord = data.discord;
+  ed.custom = data.custom;
+  $("out-name").value = name.replace(/\.[^.]+$/, "");
   ed.missing = data.missing || [];
   ed.peaks = {};
   ed.selection = null;
@@ -964,6 +968,8 @@ function renderExportBar() {
   const running = $("export-progress").hidden === false;
   $("export-full").disabled = !!missing || running;
   $("export-discord").disabled = !!missing || running;
+  $("export-custom").disabled = !!missing || running || !ed.custom;
+  renderCustomExport();
   const note = $("discord-note");
   note.classList.remove("warn");
   if (missing) {
@@ -985,12 +991,58 @@ function renderExportBar() {
   }
 }
 
+// The custom export's dropdowns: the clip's options, keeping what was
+// picked, with each bitrate's file size for the clip's current length.
+function fillSelect(select, options, fallback) {
+  const previous = select.value;
+  select.replaceChildren(...options.map(([value, label]) => {
+    const option = el("option", null, label);
+    option.value = value;
+    return option;
+  }));
+  const values = options.map(([value]) => value);
+  select.value = values.includes(previous) ? previous : values.includes(fallback) ? fallback : values[0];
+}
+
+function formatMb(mb) {
+  return mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
+}
+
+function renderCustomExport() {
+  const options = ed.custom;
+  $("custom-export").hidden = !options;
+  if (!options) return;
+  const sourceHeight = ed.info && ed.info.height ? ` (${ed.info.height}p)` : "";
+  const sourceFps = ed.info && ed.info.fps ? ` (${Math.round(ed.info.fps)})` : "";
+  fillSelect($("custom-height"), [["", `Source${sourceHeight}`],
+    ...options.heights.map((h) => [String(h), `${h}p`])], "1080");
+  fillSelect($("custom-fps"), [["", `Source fps${sourceFps}`],
+    ...options.fps.map((f) => [String(f), `${f} fps`])], "60");
+  const seconds = keptLength();
+  fillSelect($("custom-bitrate"), options.video_kbps.map((kbps) => {
+    const mb = ((kbps + options.audio_kbps) * seconds) / 8 / 1000;
+    return [String(kbps), `${kbps / 1000} Mbps · ~${formatMb(mb)} MB`];
+  }), "8000");
+}
+
+function customSettings() {
+  const height = $("custom-height").value;
+  const fps = $("custom-fps").value;
+  return {
+    height: height ? Number(height) : null,
+    fps: fps ? Number(fps) : null,
+    video_kbps: Number($("custom-bitrate").value),
+  };
+}
+
 async function startExport(preset) {
   if (!ed.name) return;
   setStatus("");
   try {
     await flushSave();
-    showExportProgress(await api("api/export", { name: ed.name, preset }));
+    const body = { name: ed.name, preset, out_name: $("out-name").value };
+    if (preset === "custom") body.custom = customSettings();
+    showExportProgress(await api("api/export", body));
     pollExport();
   } catch (err) {
     setStatus(err.message, true);
@@ -1035,6 +1087,10 @@ async function pollExport() {
 
 $("export-full").addEventListener("click", () => startExport("full"));
 $("export-discord").addEventListener("click", () => startExport("discord"));
+$("export-custom").addEventListener("click", () => startExport("custom"));
+$("out-name").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === "Escape") e.target.blur();
+});
 $("export-cancel").addEventListener("click", () => api("api/export-cancel", {}).catch(() => {}));
 
 // ---------------------------------------------------------------------------
@@ -1077,6 +1133,29 @@ $("undo").addEventListener("click", undo);
 $("redo").addEventListener("click", redo);
 $("reset").addEventListener("click", resetEdits);
 
+// Space always plays/pauses - even with a button, slider, dropdown or clip
+// focused - except while typing text. Captured first so nothing else sees it.
+function spaceForPlayback(e) {
+  if (e.key !== " " || e.ctrlKey || e.metaKey || e.altKey || !ed.info) return false;
+  const t = e.target;
+  if (t instanceof HTMLTextAreaElement || t.isContentEditable) return false;
+  return !(t instanceof HTMLInputElement) || ["range", "checkbox", "radio", "button"].includes(t.type);
+}
+
+window.addEventListener("keydown", (e) => {
+  if (!spaceForPlayback(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!e.repeat) togglePlay();
+}, { capture: true });
+
+// A focused button would otherwise click on release.
+window.addEventListener("keyup", (e) => {
+  if (!spaceForPlayback(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+}, { capture: true });
+
 document.addEventListener("keydown", (e) => {
   if (!ed.info || e.defaultPrevented || typingIn(e.target)) return;
   const key = e.key.toLowerCase();
@@ -1089,9 +1168,6 @@ document.addEventListener("keydown", (e) => {
     redo();
   } else if (e.ctrlKey || e.metaKey || e.altKey) {
     // leave everything else alone
-  } else if (key === " " && !(e.target instanceof HTMLButtonElement)) {
-    e.preventDefault();
-    togglePlay();
   } else if (key === "i") {
     change(() => { ed.trim[0] = clamp(player.currentTime, 0, ed.trim[1] - MIN_SPAN); });
   } else if (key === "o") {

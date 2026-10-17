@@ -273,6 +273,14 @@ def test_export_starts_the_job_with_safe_names(server, editor, monkeypatch):
     assert total == 12.0 and steps[0][0][steps[0][0].index("-i") + 1].endswith("a-tracks.mkv")
     _post(server, "api/export", {"name": "a.mp4", "preset": "discord"})
     assert [os.path.basename(p) for p in started[1][1].values()] == ["a-discord.mp4"]
+    status, _h, _body = _post(server, "api/export", {"name": "a.mp4", "preset": "custom",
+                                                     "custom": {"height": 2160, "fps": None, "video_kbps": 8000}})
+    assert status == 400 and len(started) == 2
+    _post(server, "api/export", {"name": "a.mp4", "preset": "discord", "out_name": "a"})
+    assert [os.path.basename(p) for p in started[2][1].values()] == ["a-discord.mp4"]  # its own name: suffixed as usual
+    _post(server, "api/export", {"name": "a.mp4", "preset": "full", "out_name": "../My: clip.mp4"})
+    assert sorted(os.path.basename(p) for p in started[3][1].values()) == ["My clip-tracks.mkv", "My clip.mp4"]
+    assert all(os.path.dirname(p) == clips for p in started[3][1].values())
 
 
 def test_track_routes_check_the_track_number(server, editor):
