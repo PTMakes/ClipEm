@@ -361,7 +361,7 @@ def main():
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )
     next_row += 1
-    tk.Label(frame, text="Other editor:").grid(row=next_row, column=0, sticky="w")
+    tk.Label(frame, text="External editor:").grid(row=next_row, column=0, sticky="w")
     editor_row = tk.Frame(frame)
     editor_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     editor_path_var = tk.StringVar(value=run_config.get("custom_editor_path") or "")
@@ -429,19 +429,36 @@ def main():
 
     # Install/Uninstall act straight away (no Save needed) on the OS's
     # autostart entry itself - including ones left by another ClipEm folder.
+    # Only the button that applies is shown: Install when this folder has
+    # no entry, Uninstall when there's one to remove (both only when the
+    # only entries start another ClipEm folder).
     autostart_status_var = tk.StringVar()
+    autostart_row = tk.Frame(frame)
+    install_button = tk.Button(autostart_row, text="Install Autostart")
+    uninstall_button = tk.Button(autostart_row, text="Uninstall Autostart")
+
+    def show_autostart_buttons(show_install, show_uninstall):
+        install_button.pack_forget()
+        uninstall_button.pack_forget()
+        if show_install:
+            install_button.pack(side="left", padx=(0, px(4)))
+        if show_uninstall:
+            uninstall_button.pack(side="left", padx=(0, px(4)))
 
     def show_autostart_status():
         try:
             entries = find_autostart_entries()
         except Exception as exc:
             autostart_status_var.set(f"Autostart entry: unknown ({exc})")
+            show_autostart_buttons(True, True)
             return
         others = sum(1 for entry in entries if not entry["this_install"])
-        text = "installed" if len(entries) > others else "not installed"
+        ours = len(entries) > others
+        text = "installed" if ours else "not installed"
         if others:
             text += f" (+{others} from another ClipEm folder)"
         autostart_status_var.set(f"Autostart entry: {text}")
+        show_autostart_buttons(not ours, bool(entries))
 
     def save_autostart_flags():
         config = load_run_config()
@@ -482,12 +499,9 @@ def main():
             messagebox.showerror("Uninstall Autostart", f"Couldn't uninstall autostart: {exc}", parent=root)
         show_autostart_status()
 
-    autostart_row = tk.Frame(frame)
+    install_button.configure(command=on_install_autostart)
+    uninstall_button.configure(command=on_uninstall_autostart)
     autostart_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
-    tk.Button(autostart_row, text="Install Autostart", command=on_install_autostart).pack(side="left")
-    tk.Button(autostart_row, text="Uninstall Autostart", command=on_uninstall_autostart).pack(
-        side="left", padx=(px(4), 0)
-    )
     next_row += 1
     tk.Label(frame, textvariable=autostart_status_var, fg="gray40").grid(
         row=next_row, column=0, columnspan=2, sticky="w"
