@@ -105,6 +105,10 @@ def test_normalize_cleans_up_whatever_the_page_sends():
     assert mic["regions"] == [{"start": 1.0, "end": 3.0, "db": 0.0}, {"start": 2.0, "end": 4.0, "db": -60.0}]
     assert [t["index"] for t in clean["tracks"]] == [0, 1, 2, 3]  # no track 42
     assert clip_edit.kept_duration(clean) == pytest.approx(5.0)
+    # Saved before the choice existed with Mic edited: still rebuilt from Mic + Desktop.
+    assert clean["mix_source"] == "tracks"
+    assert clip_edit.normalize_project({"mix_source": "junk"}, _info())["mix_source"] == "mix"
+    assert clip_edit.normalize_project({**project, "mix_source": "mix"}, _info())["mix_source"] == "mix"
 
 
 def test_unique_path_never_overwrites(tmp_path):
@@ -132,7 +136,8 @@ def test_cuts_gain_and_offset_in_a_split_clip():
     info = _info()
     project = clip_edit.default_project(info)
     project["keep"] = [[0.0, 3.0], [5.0, 10.0]]
-    project["tracks"][0]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0}]  # master
+    project["mix_source"] = "tracks"
+    project["tracks"][0]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0}]  # unused: the mix is rebuilt
     project["tracks"][1]["offset"] = 0.5
     project["tracks"][1]["regions"] = [{"start": 6.0, "end": 8.0, "db": 6.0}]
     project["tracks"][2]["offset"] = -0.25
@@ -142,7 +147,7 @@ def test_cuts_gain_and_offset_in_a_split_clip():
     assert "adelay=delays=500:all=1" in graph and "atrim=start=0.25" in graph
     assert "volume=enable='between(t,6,8)':volume=6dB" in graph
     assert "amix=inputs=2:normalize=0" in graph
-    assert "volume=enable='between(t,1,2)':volume=-6dB" in graph
+    assert "volume=enable='between(t,1,2)':volume=-6dB" not in graph
     assert "volume=0" in graph  # Firefox muted
     assert graph.count("concat=n=2:v=0:a=1") == 4  # mix, Mic, Desktop, Firefox
     assert graph.count("concat=n=2:v=1:a=0") == 1
@@ -153,11 +158,25 @@ def test_cuts_gain_and_offset_in_a_split_clip():
     assert len(mix_only) == 1
 
 
+def test_split_clip_mix_source_mix_uses_the_recorded_mix():
+    info = _info()
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    project["tracks"][1]["regions"] = [{"start": 6.0, "end": 8.0, "db": 6.0}]
+    graph, _vout, audio = clip_edit.build_graph(project, info, audio="mix")
+    assert "[0:a:0]" in graph and "[0:a:1]" not in graph and "amix" not in graph
+    assert "volume=0" in graph and len(audio) == 1
+    graph, _vout, audio = clip_edit.build_graph(project, info, audio="tracks")
+    assert "amix" not in graph and "volume=enable='between(t,6,8)':volume=6dB" in graph  # Mic's own track
+    assert len(audio) == 4
+
+
 def test_every_filter_output_is_used_exactly_once():
     import re
-    for info, audio in [(_info(text), audio) for text in (PROBE_SPLIT, PROBE_PLAIN)
-                        for audio in ("tracks", "mix", None)]:
+    for info, audio, source in [(_info(text), audio, source) for text in (PROBE_SPLIT, PROBE_PLAIN)
+                                for audio in ("tracks", "mix", None) for source in clip_edit.MIX_SOURCES]:
         project = clip_edit.default_project(info)
+        project["mix_source"] = source
         project["keep"] = [[0.0, 3.0], [4.0, 6.0], [7.0, 10.0]]
         graph, vout, outs = clip_edit.build_graph(project, info, video_height=720, fps=30, audio=audio)
         produced, consumed = [], []

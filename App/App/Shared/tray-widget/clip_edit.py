@@ -6,6 +6,7 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
 
     {"version": 1,
      "keep": [[start, end], ...],     # seconds of the clip to keep, in order
+     "mix_source": "mix",             # split clips: "mix" or "tracks" - see below
      "tracks": [{"index": n,          # the n-th audio stream of the source
                  "volume_db": 0,      # whole-track gain
                  "offset": 0.0,       # seconds to shift the track (+ later)
@@ -17,9 +18,10 @@ timeline (before cuts), so a region keeps its place when a cut is added.
 
 With "Split audio tracks" on, the source is the clip's "-tracks.mkv": track
 1 is the full mix, which OBS records as exactly Mic (2) + Desktop (3), and
-4-6 are single apps that are also part of Desktop. Exports rebuild the mix
-from the edited Mic and Desktop, with track 1's own edits applied on top as
-a master; the app tracks' edits only change their own track in the MKV.
+4-6 are single apps that are also part of Desktop. The export's mix is one
+or the other, never both: mix_source "mix" is track 1 with its own edits,
+"tracks" rebuilds it from the edited Mic and Desktop (track 1 unused). The
+app tracks' edits only change their own track in the MKV either way.
 """
 
 import array
@@ -34,6 +36,8 @@ import threading
 from obs_config import DISCORD_TARGET_MB
 
 PROJECT_VERSION = 1
+MIX_SOURCES = ("mix", "tracks")
+SUB_MIX = (1, 2)  # what a split clip's Mix is recorded from: Mic + Desktop
 SPLIT_TITLES = ("Mix", "Mic", "Desktop")
 
 REQUIRED_FILTERS = (
@@ -158,6 +162,7 @@ def default_project(info):
     return {
         "version": PROJECT_VERSION,
         "keep": [[0.0, round(info["duration"], 3)]],
+        "mix_source": "mix",
         "tracks": [
             {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "regions": []}
             for track in info["audio"]
@@ -231,7 +236,17 @@ def normalize_project(project, info):
             "muted": bool(given.get("muted", False)),
             "regions": regions,
         })
-    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks}
+    mix_source = project.get("mix_source")
+    if mix_source not in MIX_SOURCES:
+        # Saved before there was a choice, when the mix was always rebuilt
+        # from Mic + Desktop: keep that if they were edited.
+        sub_edited = any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)
+        mix_source = "tracks" if sub_edited and is_split_layout(info) else "mix"
+    return {"version": PROJECT_VERSION, "keep": keep, "mix_source": mix_source, "tracks": tracks}
+
+
+def _is_edited(track):
+    return bool(track["volume_db"] or track["offset"] or track["muted"] or track["regions"])
 
 
 def kept_duration(project):
@@ -363,31 +378,26 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
         return graph.text(), vout, []
 
     tracks = project["tracks"]
-    split = is_split_layout(info)
+    rebuild = is_split_layout(info) and project.get("mix_source") == "tracks"
     want_tracks = audio == "tracks"
     # How often each edited track is used: in the mix, and as its own track.
     uses = {}
     for track in tracks:
         index = track["index"]
-        in_mix = index in (1, 2) if split else index == 0
+        in_mix = index in SUB_MIX if rebuild else index == 0
         uses[index] = int(in_mix) + int(want_tracks and index != 0)
     edited = {}
     for track in tracks:
-        if uses[track["index"]]:  # never for a split clip's Mix - it's the master
+        if uses[track["index"]]:  # never for a rebuilt clip's Mix - it isn't used
             label = graph.label("t")
             graph.add([f"0:a:{track['index']}"], _track_chain(track, duration), [label])
             edited[track["index"]] = graph.split(label, uses[track["index"]], audio=True)
 
     outputs = []
-    if split:
+    if rebuild:
         mixed = graph.label("m")
         graph.add([edited[1].pop(), edited[2].pop()],
                   ["amix=inputs=2:normalize=0:duration=longest:dropout_transition=0"], [mixed])
-        master = _gain_filters(tracks[0])
-        if master:
-            out = graph.label("m")
-            graph.add([mixed], master, [out])
-            mixed = out
         outputs.append(_cut(graph, mixed, keep, audio=True))
     for track in tracks:
         if edited.get(track["index"]):

@@ -8,7 +8,8 @@
 // Preview: the video plays muted and each audio track plays from its own
 // extracted .m4a through Web Audio, kept in step with the video, so track
 // edits are heard as they'll be exported. With split tracks the mix is
-// Mic + Desktop (as OBS records it) with the Mix lane's edits on top.
+// either the recorded Mix track or Mic + Desktop (what OBS records it from),
+// picked on the Mix lane - the other one is left out.
 
 const MIN_SLIDER_DB = -30; // the slider's left end means "muted"
 const MUTE_DB = -60;
@@ -26,6 +27,7 @@ const ed = {
   trim: [0, 0],
   cuts: [], // removed [start, end] ranges inside the trim
   tracks: [], // the project's tracks
+  mixSource: "mix", // split clips: "mix" (the Mix track) or "tracks" (Mic + Desktop)
   peaks: {}, // track index -> {per_second, peaks}
   showUnused: false, // lanes for app slots nothing was recorded on
   selection: null, // {start, end, track} - track null: the video lane
@@ -42,7 +44,7 @@ const ed = {
   loadToken: 0,
 };
 
-const audio = { ctx: null, out: null, master: null, nodes: new Map() };
+const audio = { ctx: null, out: null, nodes: new Map() };
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -122,7 +124,7 @@ function loadKeep(keep) {
 }
 
 function project() {
-  return { version: 1, keep: keepRanges(), tracks: ed.tracks };
+  return { version: 1, keep: keepRanges(), mix_source: ed.mixSource, tracks: ed.tracks };
 }
 
 function keptLength() {
@@ -130,13 +132,14 @@ function keptLength() {
 }
 
 function snapshot() {
-  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks });
+  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, mixSource: ed.mixSource, tracks: ed.tracks });
 }
 
 function restore(snap) {
   const data = JSON.parse(snap);
   ed.trim = data.trim;
   ed.cuts = data.cuts;
+  ed.mixSource = data.mixSource;
   ed.tracks = data.tracks;
   ed.region = null;
 }
@@ -269,6 +272,7 @@ async function loadEditor(name) {
   ed.name = name;
   ed.info = data.info;
   ed.tracks = data.project.tracks;
+  ed.mixSource = data.project.mix_source || "mix";
   loadKeep(data.project.keep);
   ed.discord = data.discord;
   ed.custom = data.custom;
@@ -333,13 +337,15 @@ function isUnedited(index) {
   const plain = (t) => !t.volume_db && !t.offset && !t.muted && !t.regions.length;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
-  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.tracks.every(plain);
+  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.mixSource === "mix" &&
+    ed.tracks.every(plain);
 }
 
 function resetEdits() {
   change(() => {
     ed.trim = [0, duration()];
     ed.cuts = [];
+    ed.mixSource = "mix";
     ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, regions: [] }));
     ed.selection = null;
   });
@@ -467,7 +473,7 @@ function dragPlayhead(e) {
 function videoRow() {
   const row = el("div", "row video-row");
   const head = el("div", "row-head");
-  head.append(el("strong", null, "Clip"), el("span", "muted small", "Trim & cut"));
+  head.append(el("strong", null, "Video"), el("span", "muted small", "Trim & cut"));
   const lane = el("div", "lane video-lane");
   rulerTicks(lane);
   addRemoved(lane, true);
@@ -493,17 +499,46 @@ function isMaster(index) {
   return ed.info.split && index === 0;
 }
 
+const SUB_MIX = [1, 2]; // a split clip's Mix is recorded from Mic + Desktop
+
+// Left out of the mix by the Mix lane's choice (it's still its own .mkv track).
+function outOfMix(index) {
+  if (!ed.info.split) return false;
+  return ed.mixSource === "tracks" ? index === 0 : SUB_MIX.includes(index);
+}
+
+// The Mix lane's choice of what the export's mix is: the recorded Mix
+// track, or one rebuilt from the separately edited Mic and Desktop.
+function mixSourceLine() {
+  const line = el("div", "shift-line");
+  line.append(el("span", "small muted", "Use"));
+  for (const [value, label, title] of [
+    ["mix", "Mix track", "Use the recorded Mix track - Mic and Desktop are left out"],
+    ["tracks", "Sub-tracks", "Build the mix from Mic + Desktop (the app tracks are already in Desktop) - the Mix track is left out"],
+  ]) {
+    const button = el("button", "toggle", label);
+    button.title = title;
+    button.setAttribute("aria-pressed", String(ed.mixSource === value));
+    button.addEventListener("click", () => change(() => { ed.mixSource = value; }));
+    line.append(button);
+  }
+  return line;
+}
+
 function audioRow(index) {
   const track = trackOf(index);
   const row = el("div", "row audio-row");
-  row.classList.toggle("muted-track", track.muted);
+  row.classList.toggle("muted-track", track.muted || outOfMix(index));
   const head = el("div", "row-head");
   const titleLine = el("div", "title-line");
   const title = el("strong", null, isMaster(index) ? "Mix" : trackTitle(index));
   titleLine.append(title);
   if (isMaster(index)) {
-    head.title = "Mic + Desktop, as recorded. Changes here apply to the whole mix.";
-    titleLine.append(el("span", "muted small", "whole mix"));
+    head.title = "Mic + Desktop, as recorded.";
+    if (outOfMix(index)) titleLine.append(el("span", "muted small", "not used"));
+  } else if (outOfMix(index)) {
+    head.title = "Not in the mix - the Mix track is used. Changes here only affect this track in the .mkv export.";
+    titleLine.append(el("span", "muted small", "not in mix"));
   } else if (ed.info.split && index >= 3) {
     head.title = "This app is also in Desktop - changes here only affect this track in the .mkv export.";
     titleLine.append(el("span", "muted small", ".mkv only"));
@@ -520,7 +555,8 @@ function audioRow(index) {
     else ed.solo.add(index);
     renderTimeline();
   });
-  titleLine.append(mute, solo);
+  titleLine.append(mute);
+  if (!isMaster(index)) titleLine.append(solo); // the Mix lane picks its source instead
 
   const volume = el("label", "slider-line");
   const slider = el("input");
@@ -554,6 +590,8 @@ function audioRow(index) {
     const ms = el("span", "small mono shift-value", `${Math.round(track.offset * 1000)} ms`);
     shift.append(el("span", "small muted", "Shift"), grip, minus, ms, plus);
     head.append(shift);
+  } else {
+    head.append(mixSourceLine());
   }
 
   const lane = el("div", "lane audio-lane");
@@ -901,23 +939,9 @@ function gainAt(track, t) {
 
 // Which tracks to hear: the export's mix sources, or just the soloed ones.
 function audibleTracks() {
-  const heard = new Set();
-  if (ed.solo.size) {
-    for (const index of ed.solo) {
-      if (isMaster(index)) {
-        heard.add(1);
-        heard.add(2);
-      } else {
-        heard.add(index);
-      }
-    }
-  } else if (ed.info.split) {
-    heard.add(1);
-    heard.add(2);
-  } else if (ed.info.tracks.length) {
-    heard.add(ed.info.tracks[0].index);
-  }
-  return heard;
+  if (ed.solo.size) return new Set(ed.solo);
+  if (ed.info.split && ed.mixSource === "tracks") return new Set(SUB_MIX);
+  return new Set(ed.info.tracks.length ? [ed.info.tracks[0].index] : []);
 }
 
 function setupAudio(name) {
@@ -929,10 +953,7 @@ function setupAudio(name) {
     return;
   }
   if (!audio.out) setupOutput();
-  audio.master = audio.ctx.createGain();
-  audio.master.connect(audio.out);
   for (const track of ed.info.tracks) {
-    if (isMaster(track.index)) continue; // heard through Mic + Desktop
     const media = new Audio();
     media.preload = "auto";
     media.src = `track/${track.index}/${encodeURIComponent(name)}`;
@@ -940,7 +961,7 @@ function setupAudio(name) {
     const gain = audio.ctx.createGain();
     gain.gain.value = 0;
     source.connect(gain);
-    gain.connect(ed.info.split && (track.index === 1 || track.index === 2) ? audio.master : audio.out);
+    gain.connect(audio.out);
     audio.nodes.set(track.index, { media, source, gain });
   }
 }
@@ -954,8 +975,6 @@ function teardownAudio() {
     node.gain.disconnect();
   }
   audio.nodes.clear();
-  if (audio.master) audio.master.disconnect();
-  audio.master = null;
 }
 
 function syncAudio() {
@@ -964,7 +983,6 @@ function syncAudio() {
   const playing = !player.paused && !player.seeking;
   const heard = audibleTracks();
   const now = audio.ctx.currentTime;
-  if (audio.master) audio.master.gain.setTargetAtTime(gainAt(trackOf(0), t), now, 0.015);
   for (const [index, node] of audio.nodes) {
     const track = trackOf(index);
     const desired = t - track.offset;

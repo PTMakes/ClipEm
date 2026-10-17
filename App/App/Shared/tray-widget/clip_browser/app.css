@@ -399,7 +399,7 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
   cursor: ew-resize;
 }
 
-.lane .scrub-head { bottom: -5px; } /* reaches down to the clip lane */
+.lane .scrub-head { bottom: -5px; } /* reaches down to the video lane */
 
 .scrub-head::before {
   content: "";
