@@ -88,7 +88,7 @@ __pycache__/
 # Upstream OBS clone that build-obs-from-source-for-linux.sh fetches, checks
 # out at the pinned tag and patches in place - not vendored.
 /Dev/obs-src/
-
+/Dev/build/obs-src/
 
 # ---------------------------------------------------------------------------
 # Website/
