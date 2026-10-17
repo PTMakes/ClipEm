@@ -99,6 +99,23 @@ def test_ignored_apps_never_get_a_slot():
     assert app_audio.assign_slots(state, [("obs64.exe", "OBS"), ("paplay", "paplay")], 0, BUFFER) == []
 
 
+def test_the_clip_editor_never_gets_a_slot():
+    state = fresh()
+    apps = [("clipem-editor", "ClipEm Editor"), ("ClipEm Editor.exe", "ClipEm Editor"), ("electron", "ClipEm Editor")]
+    assert app_audio.assign_slots(state, apps, 0, BUFFER) == []
+    text = json.dumps([{"corked": False, "properties": {"application.process.binary": "clipem-editor",
+                                                        "application.name": "ClipEm Editor"}}])
+    assert app_audio.parse_pactl_sink_inputs(text) == []
+
+
+def test_a_slot_the_editor_took_before_it_was_ignored_is_freed():
+    state = fresh()
+    app_audio.assign_slots(state, [("spotify", "Spotify")], 0, BUFFER)
+    state["slots"]["ClipEm App B"] = {"exe": "clipem-editor", "label": "ClipEm Editor", "last_heard": 0, "pinned": True}
+    assert app_audio.drop_ignored_owners(state) == ["ClipEm App B"]
+    assert state["slots"]["ClipEm App B"] is None and state["slots"]["ClipEm App A"]["exe"] == "spotify"
+
+
 def test_parse_pactl_sink_inputs():
     text = json.dumps([
         {"corked": False, "properties": {"application.process.binary": "spotify", "application.name": "Spotify"}},

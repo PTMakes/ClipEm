@@ -23,6 +23,7 @@ never stalls OBS or the game being recorded.
 
 import os
 import platform
+import re
 import shutil
 import subprocess
 import threading
@@ -45,6 +46,9 @@ FIXED_TRACK_TITLES = ("Mix", "Mic", "Desktop")
 APP_SLOT_SOURCE_NAMES = ("ClipEm App A", "ClipEm App B", "ClipEm App C")
 APP_SLOT_LABEL_KEY = "clipem_label"
 FIRST_APP_TRACK = len(FIXED_TRACK_TITLES) + 1
+# An app track whose loudest moment is below this had no sound in the clip:
+# its slot's owner wasn't playing (a slot keeps its owner for days).
+SILENCE_MAX_DB = -70.0
 
 # Discord's free upload limit - must match obs_config.DISCORD_TARGET_MB.
 DEFAULT_TARGET_MB = 20.0
@@ -94,13 +98,48 @@ def tracks_path_for(clip_path):
     return f"{stem}{TRACKS_SUFFIX}.mkv"
 
 
-def track_titles(app_labels):
+def track_titles(app_labels, silent=()):
     """The 6 track names: Mix, Mic, Desktop, then each app slot's owner -
-    or "Track N (unused)" - so track N always means the same thing."""
+    or "Track-N" when the slot has none or was silent all clip (the indexes
+    in `silent`, 0 for the first app track) - so track N always means the
+    same thing."""
     titles = list(FIXED_TRACK_TITLES)
     for index, label in enumerate(app_labels):
-        titles.append(label or f"Track {FIRST_APP_TRACK + index} (unused)")
+        titles.append(label if label and index not in silent else f"Track-{FIRST_APP_TRACK + index}")
     return titles
+
+
+def max_volume_command(ffmpeg, clip_path, track_index):
+    return [ffmpeg, "-hide_banner", "-nostdin", "-i", clip_path, "-map", f"0:a:{track_index}",
+            "-af", "volumedetect", "-f", "null", "-"]
+
+
+def parse_max_volume(stderr):
+    """volumedetect's max_volume in dB (-inf for digital silence), or None."""
+    match = re.search(r"max_volume:\s*(-?inf|-?[\d.]+) dB", stderr or "")
+    if not match:
+        return None
+    return float("-inf") if "inf" in match.group(1) else float(match.group(1))
+
+
+def silent_app_tracks(ffmpeg, clip_path, app_labels, log):
+    """The indexes of the labelled app tracks with no sound in the clip. A
+    track that can't be measured counts as having sound (keeps its label)."""
+    silent = set()
+    for index, label in enumerate(app_labels):
+        if not label:
+            continue
+        try:
+            result = subprocess.run(max_volume_command(ffmpeg, clip_path, FIRST_APP_TRACK - 1 + index),
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                                    errors="replace", **_low_priority_kwargs())
+        except Exception as exc:
+            log(f"couldn't measure {label}'s track: {exc}")
+            continue
+        level = parse_max_volume(result.stderr) if result.returncode == 0 else None
+        if level is not None and level < SILENCE_MAX_DB:
+            silent.add(index)
+    return silent
 
 
 def build_split_command(ffmpeg, clip_path, out_path, titles):
@@ -183,7 +222,7 @@ def split_tracks(ffmpeg, clip_path, app_labels, log):
     """Writes the "-tracks.mkv" copy, then strips the clip to the mix. The
     clip keeps every track if the copy couldn't be made."""
     out_path = tracks_path_for(clip_path)
-    titles = track_titles(app_labels)
+    titles = track_titles(app_labels, silent_app_tracks(ffmpeg, clip_path, app_labels, log))
     if not _run_to(lambda partial: build_split_command(ffmpeg, clip_path, partial, titles),
                    out_path, f"splitting the audio tracks of {clip_path}", log):
         return None

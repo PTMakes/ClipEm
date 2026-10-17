@@ -377,9 +377,10 @@ function secondsPerPixel() {
   return duration() / (laneRect().width || 1);
 }
 
-// "Track 5 (unused)": an app slot no app had when the clip was saved.
+// "Track-5" (older clips: "Track 5 (unused)"): an app slot no app played
+// sound on during the clip.
 function isUnused(index) {
-  return /\(unused\)$/.test(trackTitle(index)) && isUnedited(index);
+  return /^Track-\d+$|\(unused\)$/.test(trackTitle(index)) && isUnedited(index);
 }
 
 function shownTracks() {

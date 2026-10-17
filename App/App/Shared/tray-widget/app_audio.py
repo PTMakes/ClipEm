@@ -38,14 +38,19 @@ CHECK_INTERVAL_SECONDS = 3
 # expiry is measured in days, so minute-level precision is plenty.
 LAST_HEARD_SAVE_SECONDS = 60
 
-# Never given a slot: OBS itself, ClipEm's own clip sound players, and
-# system/notification sound helpers. Compared case-insensitively, minus any
-# ".exe".
+# Never given a slot: OBS itself, ClipEm's own clip sound players and its
+# clip editor window (editor_window.EXE_NAMES - its preview would otherwise
+# land on a track of the next clip), and system/notification sound helpers.
+# Compared case-insensitively, minus any ".exe".
 IGNORED_APPS = {
     "obs", "obs64", "obs32", "audiodg", "paplay", "aplay", "pw-play", "pw-cat",
     "canberra-gtk-play", "speech-dispatcher", "sd_espeak-ng", "pipewire",
     "wireplumber", "pulseaudio", "python", "python3", "pythonw",
+    "clipem-editor", "clipem editor",
 }
+# The same by the name an app gives its sound (application.name / the
+# session's display name), for streams whose binary doesn't say.
+IGNORED_APP_LABELS = {"clipem editor"}
 
 _SYSTEM = platform.system()
 
@@ -53,6 +58,22 @@ _SYSTEM = platform.system()
 def _app_key(exe):
     name = os.path.basename(exe or "").lower()
     return name[:-4] if name.endswith(".exe") else name
+
+
+def is_ignored(exe, label=None):
+    return _app_key(exe) in IGNORED_APPS or (label or "").strip().lower() in IGNORED_APP_LABELS
+
+
+def drop_ignored_owners(state):
+    """Frees slots owned by apps that are ignored now (e.g. the clip editor,
+    which got one before it was). Returns the freed slot names."""
+    freed = []
+    for name, owner in state["slots"].items():
+        if owner and is_ignored(owner["exe"], owner["label"]):
+            log.info(f"App tracks: {owner['label']} is ignored now - {name} is free again.")
+            state["slots"][name] = None
+            freed.append(name)
+    return freed
 
 
 # What some apps put in application.name - the audio library's or engine's
@@ -130,10 +151,13 @@ def parse_pactl_sink_inputs(text, clients_text=None):
         # The stream's own properties win; its client's fill the gaps.
         props = {**clients.get(str(sink_input.get("client")), {}), **(sink_input.get("properties") or {})}
         binary = props.get("application.process.binary") or props.get("application.name") or props.get("node.name")
-        if not binary or _app_key(binary) in IGNORED_APPS or _app_key(binary) in seen:
+        if not binary or _app_key(binary) in seen:
+            continue
+        label = _app_label(props, binary)
+        if is_ignored(binary, label) or is_ignored(binary, props.get("application.name")):
             continue
         seen.add(_app_key(binary))
-        apps.append((binary, _app_label(props, binary)))
+        apps.append((binary, label))
     return apps
 
 
@@ -176,12 +200,14 @@ def _windows_active_apps():
         if process is None or session.State != audio_session_state_active:
             continue
         exe = process.name()
-        if _app_key(exe) in IGNORED_APPS or _app_key(exe) in seen:
+        if _app_key(exe) in seen:
             continue
-        seen.add(_app_key(exe))
         label = session.DisplayName
         if not label or label.startswith("@"):  # "@%SystemRoot%\..." resource strings
             label = os.path.splitext(exe)[0]
+        if is_ignored(exe, label):
+            continue
+        seen.add(_app_key(exe))
         apps.append((exe, label))
     return apps
 
@@ -230,7 +256,7 @@ def assign_slots(state, active_apps, now, buffer_seconds):
             if slots[name]["label"].lower() in GENERIC_APP_NAMES and label != slots[name]["label"]:
                 slots[name]["label"] = label
                 changed.append(name)
-        elif _app_key(exe) not in IGNORED_APPS:
+        elif not is_ignored(exe, label):
             newcomers.append((exe, label))
 
     for exe, label in newcomers:
@@ -319,6 +345,8 @@ class AppTrackMonitor:
 
     def _tick(self, client):
         reloaded = self._reload_state_if_changed()
+        if reloaded and drop_ignored_owners(self._state):
+            self._save()
         if self._slot_kinds is None or reloaded:
             inputs = client.call("GetInputList").get("inputs", [])
             self._slot_kinds = {

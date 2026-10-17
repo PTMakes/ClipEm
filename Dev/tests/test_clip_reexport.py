@@ -107,13 +107,26 @@ def test_validate_zip_root():
 
 def test_split_command_keeps_all_six_tracks_in_order_with_titles():
     titles = clip_reexport.track_titles(["Spotify", "", "Discord"])
-    assert titles == ["Mix", "Mic", "Desktop", "Spotify", "Track 5 (unused)", "Discord"]
+    assert titles == ["Mix", "Mic", "Desktop", "Spotify", "Track-5", "Discord"]
+    # Discord owns its slot but made no sound in this clip.
+    assert clip_reexport.track_titles(["Spotify", "", "Discord"], silent={2})[3:] == ["Spotify", "Track-5", "Track-6"]
     cmd = clip_reexport.build_split_command("ffmpeg", "in.mp4", "out.mkv", titles)
     maps = [cmd[i + 1] for i, arg in enumerate(cmd) if arg == "-map"]
     assert maps == ["0:v:0"] + [f"0:a:{n}" for n in range(6)]
     assert cmd[cmd.index("-c") + 1] == "copy"  # lossless
     assert cmd[cmd.index("-metadata:s:a:3") + 1] == "title=Spotify"
     assert cmd[-1] == "out.mkv"
+
+
+def test_parse_max_volume():
+    assert clip_reexport.parse_max_volume("[Parsed_volumedetect_0 @ 0x1] max_volume: -12.3 dB\n") == -12.3
+    assert clip_reexport.parse_max_volume("max_volume: -inf dB") == float("-inf")
+    assert clip_reexport.parse_max_volume("no audio") is None
+
+
+def test_an_unmeasurable_track_keeps_its_label(monkeypatch):
+    monkeypatch.setattr(clip_reexport.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", "boom"))
+    assert clip_reexport.silent_app_tracks("ffmpeg", "clip.mp4", ["Spotify", "", ""], lambda m: None) == set()
 
 
 def test_strip_command_keeps_only_the_mix_in_the_clips_own_container():
@@ -157,7 +170,9 @@ def test_split_tracks_end_to_end_with_real_ffmpeg(tmp_path):
     clip = tmp_path / "Replay.mp4"
     tones = []
     for n in range(6):
-        tones += ["-f", "lavfi", "-i", f"sine=frequency={220 * (n + 1)}:duration=1"]
+        # Track 6's owner ("Discord" below) isn't playing: a silent track.
+        source = "anullsrc=r=48000:cl=stereo:d=1" if n == 5 else f"sine=frequency={220 * (n + 1)}:duration=1"
+        tones += ["-f", "lavfi", "-i", source]
     maps = ["-map", "0:v"] + [arg for n in range(6) for arg in ("-map", f"{n + 1}:a")]
     subprocess.run(
         ["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=black:s=64x64:d=1", *tones,
@@ -165,7 +180,7 @@ def test_split_tracks_end_to_end_with_real_ffmpeg(tmp_path):
         check=True,
     )
     logs = []
-    out = clip_reexport.split_tracks("ffmpeg", str(clip), ["Spotify", "", "Game"], logs.append)
+    out = clip_reexport.split_tracks("ffmpeg", str(clip), ["Spotify", "", "Discord"], logs.append)
     assert out == str(tmp_path / "Replay-tracks.mkv"), logs
 
     def audio_titles(path):
@@ -175,7 +190,7 @@ def test_split_tracks_end_to_end_with_real_ffmpeg(tmp_path):
         )
         return [s.get("tags", {}).get("title") for s in json.loads(probe.stdout)["streams"]]
 
-    assert audio_titles(out) == ["Mix", "Mic", "Desktop", "Spotify", "Track 5 (unused)", "Game"]
+    assert audio_titles(out) == ["Mix", "Mic", "Desktop", "Spotify", "Track-5", "Track-6"]
     assert len(audio_titles(str(clip))) == 1
     assert sorted(p.name for p in tmp_path.iterdir()) == ["Replay-tracks.mkv", "Replay.mp4"]
 
