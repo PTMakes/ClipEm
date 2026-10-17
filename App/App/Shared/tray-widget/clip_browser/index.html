@@ -36,6 +36,10 @@
       <video id="player" preload="auto" playsinline muted></video>
       <p id="no-selection" class="muted">Pick a clip on the left.</p>
     </div>
+    <!-- Outside #editor: it takes its room from the video, so the tracks stay put. -->
+    <div id="panel" hidden></div>
+    <div id="splitter" role="separator" aria-orientation="horizontal"
+         title="Drag to resize the video and the tracks (double-click to reset)" hidden></div>
     <section id="editor" hidden>
       <div id="transport">
         <button id="play" class="icon" title="Play / pause (Space)" aria-label="Play">&#9654;</button>
@@ -44,7 +48,6 @@
         <div class="spacer"></div>
         <span class="muted hint">Drag on the timeline to select &middot; drag the handles to trim</span>
       </div>
-      <div id="panel" hidden></div>
       <div id="timeline-scroll">
         <div id="timeline"></div>
         <button id="toggle-unused" class="link" hidden></button>

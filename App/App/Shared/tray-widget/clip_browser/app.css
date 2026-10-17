@@ -167,6 +167,32 @@ body {
 
 body.sidebar-hidden #sidebar { display: none; }
 body.dragging { cursor: ew-resize; user-select: none; }
+body.dragging.resizing { cursor: ns-resize; }
+
+#splitter {
+  flex: none;
+  height: 7px;
+  cursor: ns-resize;
+  touch-action: none;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  position: relative;
+}
+
+#splitter::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 2px;
+  width: 36px;
+  height: 3px;
+  margin-left: -18px;
+  border-radius: 2px;
+  background: var(--muted);
+  opacity: 0.5;
+}
+
+#splitter:hover::after, body.resizing #splitter::after { background: var(--accent); opacity: 1; }
 
 #main {
   flex: 1;
@@ -222,7 +248,6 @@ body.sidebar-hidden #toggle-sidebar .arrow { transform: scaleX(-1); }
   flex-direction: column;
   padding: 8px 12px 10px;
   background: var(--panel);
-  border-top: 1px solid var(--line);
 }
 
 #timeline-scroll {
@@ -445,10 +470,10 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 }
 
 #panel {
-  margin-bottom: 8px;
-  padding: 8px 10px;
-  border-radius: 8px;
+  flex: none;
+  padding: 8px 12px;
   background: var(--selected);
+  border-top: 1px solid var(--line);
 }
 
 #panel input.wide { width: 220px; }

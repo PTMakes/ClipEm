@@ -288,6 +288,7 @@ function renderDetails() {
   const clip = selectedClip();
   const ready = !!(clip && ed.info && ed.name === clip.name);
   $("editor").hidden = !ready;
+  $("splitter").hidden = !ready;
   $("no-selection").hidden = !!clip;
   $("out-name-wrap").hidden = !clip;
   $("clip-meta").textContent = clip
@@ -1112,6 +1113,67 @@ $("out-name").addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === "Escape") e.target.blur();
 });
 $("export-cancel").addEventListener("click", () => api("api/export-cancel", {}).catch(() => {}));
+
+// ---------------------------------------------------------------------------
+// Resizing the video and the tracks
+// ---------------------------------------------------------------------------
+
+const EDITOR_HEIGHT_KEY = "clipem.editorHeight";
+const MIN_EDITOR_PX = 240;
+const MIN_PLAYER_PX = 180;
+let editorHeight = null; // px, or null: the default (CSS max-height)
+
+function applyEditorHeight() {
+  const editor = $("editor");
+  if (editorHeight == null) {
+    editor.style.height = "";
+    editor.style.maxHeight = "";
+    return;
+  }
+  // Whatever's above the editor besides the video keeps its room.
+  const main = $("main").getBoundingClientRect().height;
+  const fixed = ["toolbar", "panel", "splitter"].reduce((sum, id) => sum + $(id).getBoundingClientRect().height, 0);
+  const height = clamp(editorHeight, MIN_EDITOR_PX, Math.max(MIN_EDITOR_PX, main - fixed - MIN_PLAYER_PX));
+  editor.style.maxHeight = "none";
+  editor.style.height = `${height}px`;
+}
+
+function saveEditorHeight() {
+  try {
+    if (editorHeight == null) localStorage.removeItem(EDITOR_HEIGHT_KEY);
+    else localStorage.setItem(EDITOR_HEIGHT_KEY, String(Math.round(editorHeight)));
+  } catch (err) { /* storage unavailable - just not remembered */ }
+}
+
+$("splitter").addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const startY = e.clientY;
+  const startHeight = $("editor").getBoundingClientRect().height;
+  document.body.classList.add("resizing");
+  trackPointer(e, (ev) => {
+    editorHeight = startHeight + (startY - ev.clientY);
+    applyEditorHeight();
+  }, () => {
+    document.body.classList.remove("resizing");
+    editorHeight = $("editor").getBoundingClientRect().height; // as clamped
+    saveEditorHeight();
+  });
+});
+
+$("splitter").addEventListener("dblclick", () => {
+  editorHeight = null;
+  applyEditorHeight();
+  saveEditorHeight();
+});
+
+try {
+  const saved = Number(localStorage.getItem(EDITOR_HEIGHT_KEY));
+  if (saved > 0) editorHeight = saved;
+} catch (err) { /* storage unavailable */ }
+window.addEventListener("resize", applyEditorHeight);
+new ResizeObserver(applyEditorHeight).observe($("panel"));
+applyEditorHeight();
 
 // ---------------------------------------------------------------------------
 // Other buttons and keys
