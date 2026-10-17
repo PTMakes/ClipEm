@@ -20,6 +20,8 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
+import urllib.request
 
 from PIL import Image, ImageFilter
 
@@ -42,7 +44,13 @@ import obs_window  # noqa: E402
 from app_audio import AppTrackMonitor  # noqa: E402
 from app_window import use_windows_app_id  # noqa: E402
 from clip_folder import ClipFolderWatch  # noqa: E402
-from clipem_common import acquire_instance_lock, release_instance_lock, setup_logging, start_clipem  # noqa: E402
+from clipem_common import (  # noqa: E402
+    acquire_instance_lock,
+    pid_alive,
+    release_instance_lock,
+    setup_logging,
+    start_clipem,
+)
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
 from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
@@ -93,6 +101,61 @@ SETTINGS_DIALOG_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "settings_dialog.py"
 )
 CLIP_BROWSER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clip_browser.py")
+# The running clip editor's pid and launch URL (written by clip_browser.py).
+CLIP_BROWSER_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".clip_browser.lock")
+CLIP_BROWSER_URL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".clip_browser.url")
+
+
+def clip_editor_quit_url(launch_url):
+    """http://127.0.0.1:port/<token>/api/quit from the editor's launch URL
+    (http://127.0.0.1:port/clipem-editor/#<token>), or None."""
+    parts = urllib.parse.urlsplit(launch_url or "")
+    if parts.hostname != "127.0.0.1" or not parts.port or not parts.fragment:
+        return None
+    return f"http://127.0.0.1:{parts.port}/{urllib.parse.quote(parts.fragment)}/api/quit"
+
+
+def stop_clip_editor(timeout_seconds=3):
+    """Closes the clip editor if one is running - started from the tray or
+    on its own from the Start menu: asks it to quit (it cancels any export
+    and closes its window), then terminates it if it's still there."""
+    try:
+        with open(CLIP_BROWSER_LOCK_PATH, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return
+    if pid == os.getpid() or not pid_alive(pid):
+        return
+    try:
+        with open(CLIP_BROWSER_URL_PATH, "r", encoding="utf-8") as f:
+            url = clip_editor_quit_url(f.read().strip())
+    except OSError:
+        url = None
+    if not url:
+        return
+    try:
+        request = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(request, timeout=2).close()
+    except Exception as exc:
+        # Nothing answered: a stale lock file whose pid may now be some
+        # other program - leave it alone.
+        log.warning(f"Couldn't ask the clip editor to close: {exc}")
+        return
+    deadline = time.monotonic() + timeout_seconds + 2  # it gives its window 3 s to close
+    while pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if pid_alive(pid):
+        log.warning("The clip editor didn't close - ending it.")
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                               creationflags=0x08000000)
+            else:
+                import signal
+
+                os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
 
 
 def ensure_single_instance():
@@ -402,7 +465,9 @@ class TrayApp:
     def stop_children(self, timeout_seconds=3):
         """Closes the helper windows (the settings dialog) this tray widget
         opened - they'd otherwise stay open after it quits. Asks first
-        (SIGTERM / TerminateProcess), then kills whatever is left."""
+        (SIGTERM / TerminateProcess), then kills whatever is left. The clip
+        editor - ours or one opened from the Start menu - is asked first."""
+        stop_clip_editor(timeout_seconds)
         running = [child for child in self._children if child.poll() is None]
         for child in running:
             try:

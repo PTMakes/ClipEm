@@ -23,6 +23,11 @@ covers Windows and X11.
   own profile, so the window closing ends this process, and with autoplay
   allowed, so hover sound works without clicking first;
 - otherwise the default browser, served until the tray widget exits.
+
+Quitting the tray widget closes the editor too, however it was opened
+(the tray menu or the Start menu entry): it POSTs api/quit to the URL in
+URL_PATH, which cancels any export and closes the window (see quit_editor()).
+SIGTERM does the same.
 """
 
 import hashlib
@@ -33,10 +38,10 @@ import platform
 import re
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import threading
-import time
 import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -421,6 +426,7 @@ class ClipBrowserServer(ThreadingHTTPServer):
         self.token = token or secrets.token_urlsafe(24)
         self.thumbnailer = thumbnailer or Thumbnailer()
         self.editor = editor or Editor()
+        self.on_quit = lambda: None  # api/quit - main() closes the window
 
     @property
     def url(self):
@@ -605,6 +611,9 @@ class Handler(BaseHTTPRequestHandler):
                                 "discord": clip_edit.discord_settings(info, clip_edit.kept_duration(project))})
             elif route == "api/export":
                 self._export(folder, body)
+            elif route == "api/quit":
+                self._json({"ok": True})
+                threading.Thread(target=self.server.on_quit, daemon=True).start()
             elif route == "api/export-cancel":
                 self.server.editor.export_job.cancel()
                 self._json(self.server.editor.export_job.status)
@@ -765,15 +774,47 @@ def ensure_app_desktop_entry(browser, directory=None):
     return path
 
 
+# The window this process is showing, so quit_editor() can close it: the
+# --app browser it started, or True for a pywebview window.
+_window = {"browser": None, "webview": False}
+_quitting = threading.Event()
+
+
 def _open_app_browser(browser, url, wait):
     if _SYSTEM == "Linux":
         ensure_app_desktop_entry(browser)
     os.makedirs(BROWSER_PROFILE_DIR, exist_ok=True)
     cmd = app_browser_command(browser, url)
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if wait:
-        subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    else:
-        subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        _window["browser"] = proc
+        if _quitting.is_set():  # quit while it was starting
+            proc.terminate()
+        proc.wait()
+
+
+def quit_editor(server):
+    """Cancels any export and closes the window - main() then returns."""
+    if _quitting.is_set():
+        return
+    _quitting.set()
+    log.info("Closing the clip editor (ClipEm is quitting).")
+    server.editor.export_job.cancel()
+    proc = _window["browser"]
+    if proc and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    if _window["webview"]:
+        try:
+            import webview
+
+            for window in list(webview.windows):
+                window.destroy()
+        except Exception as exc:
+            log.warning(f"Couldn't close the pywebview window: {exc}")
 
 
 def open_window(url):
@@ -786,6 +827,7 @@ def open_window(url):
     if webview is not None:
         try:
             webview.create_window("ClipEm Editor", url, width=1440, height=900)
+            _window["webview"] = True
             try:
                 webview.start(icon=LAUNCH_FILES["icon.png"])
             except TypeError:  # pywebview without icon support
@@ -836,14 +878,21 @@ def main():
         reopen_existing()
         return
     server = ClipBrowserServer(obs_config.load_clip_folder)
+    server.on_quit = lambda: quit_editor(server)
+    if _SYSTEM != "Windows":
+        # Terminated (the tray widget's fallback, or exit_with_parent):
+        # close the window and stop the export rather than orphaning them.
+        signal.signal(signal.SIGTERM, lambda _sig, _frame: threading.Thread(
+            target=quit_editor, args=(server,), daemon=True).start())
     threading.Thread(target=server.serve_forever, daemon=True).start()
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:
         if not open_window(server.launch_url):
-            while parent_pid is None or pid_alive(parent_pid):
-                time.sleep(PARENT_CHECK_SECONDS)
+            while not _quitting.wait(PARENT_CHECK_SECONDS) and (parent_pid is None or pid_alive(parent_pid)):
+                pass
     finally:
+        server.editor.export_job.cancel()  # its ffmpeg would outlive us
         server.shutdown()
         try:
             os.remove(URL_PATH)

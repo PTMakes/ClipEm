@@ -372,3 +372,17 @@ def test_open_in_editor_reports_an_editor_that_dies(tmp_path, monkeypatch):
     with pytest.raises(editor_install.EditorError, match="cannot open display"):
         editor_install.open_in_editor(exe, "/clips/a.mkv", system="Linux")
 
+
+
+def test_quit_closes_the_window_and_cancels_the_export(server, monkeypatch):
+    window = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    monkeypatch.setitem(clip_browser._window, "browser", window)
+    monkeypatch.setattr(clip_browser, "_quitting", threading.Event())
+    cancelled = []
+    monkeypatch.setattr(server.editor.export_job, "cancel", lambda: cancelled.append(True))
+    server.on_quit = lambda: clip_browser.quit_editor(server)
+    status, _h, _body = _post(server, "api/quit", {})
+    assert status == 200
+    assert window.wait(timeout=5) is not None and cancelled == [True]
+    assert clip_browser._quitting.is_set()
+    assert _get(server, "../api/quit")[0] == 404  # needs the token like every API
