@@ -90,7 +90,8 @@ def build():
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--check", action="store_true",
+                        help="don't write anything; exit 1 if the committed snapshot is out of date (release.sh)")
     args = parser.parse_args(argv)
     text = json.dumps(build(), indent=1) + "\n"
     if args.check:

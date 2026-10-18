@@ -23,6 +23,21 @@ import zipfile
 # The embeddable Windows Python's ._pth file puts it in isolated mode, which
 # leaves this script's own folder off sys.path - without this, the sibling
 # imports below fail before anything runs.
+USAGE = """
+Usage: setup.py
+
+Sets up ClipEm in the folder it's in: fetches what's missing (OBS, ffmpeg,
+the clip editor's window), configures OBS for clipping and adds the
+shortcuts and autostart entry. Opens the graphical wizard when it can,
+otherwise asks in the terminal. Safe to run again to change settings or
+repair an install.
+
+  -h, --help  Show this help and exit.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import autostart  # noqa: E402
 import editor_window  # noqa: E402

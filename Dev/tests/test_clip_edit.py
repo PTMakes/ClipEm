@@ -300,6 +300,20 @@ def test_gate_presets_sit_between_noise_and_speech():
     assert clip_edit.gate_presets(-120.0, -100.0)["light"] == clip_edit.GATE_MIN_DB
 
 
+def test_crop_is_cleaned_up_and_exported_before_scaling():
+    info = _info()  # 1920x1080
+    norm = clip_edit.normalize_crop
+    assert norm({"x": 101, "y": 51, "w": 641, "h": 361}, info) == {"x": 100, "y": 50, "w": 640, "h": 360}
+    assert norm({"x": -50, "y": 0, "w": 5000, "h": 10}, info) == {"x": 0, "y": 0, "w": 1920, "h": 64}
+    assert norm({"x": 0, "y": 0, "w": 1920, "h": 1080}, info) is None  # the whole frame
+    assert norm({"x": "a"}, info) is None and norm(None, info) is None
+    project = clip_edit.normalize_project({"crop": {"x": 320, "y": 180, "w": 640, "h": 360}}, info)
+    assert clip_edit.cropped_info(info, project)["height"] == 360
+    graph, _vout, _audio = clip_edit.build_graph(project, info, video_height=240, audio=None)
+    assert graph.index("crop=640:360:320:180") < graph.index("scale=-2:240")
+    assert clip_edit.discord_settings(clip_edit.cropped_info(info, project), 10)["height"] == 360  # never scaled up
+
+
 def test_peaks_by_channel():
     import array
     frames = array.array("h", [32767, 0] * 40 + [0, -16384] * 40)  # left loud, then right half
@@ -638,3 +652,17 @@ def test_real_gate_levels_find_the_noise_and_the_tone(tmp_path):
     noise, speech = clip_edit.gate_levels(FFMPEG, str(clip), 0)
     assert -29 < speech < -20  # the tone: -23 dB RMS per channel, ~-26 dB once mixed to mono
     assert -80 < noise < -55  # the hiss (most of white noise is above 4 kHz, so it reads quieter)
+
+
+@needs_ffmpeg
+def test_real_cropped_export(tracks_clip, tmp_path):
+    if clip_edit.missing_features(FFMPEG) or "crop" not in clip_edit.ffmpeg_features(FFMPEG):
+        pytest.skip("this ffmpeg can't crop")
+    info = clip_edit.probe(FFMPEG, str(tracks_clip))
+    project = clip_edit.default_project(info)
+    project["crop"] = {"x": 200, "y": 100, "w": 640, "h": 360}
+    project = clip_edit.normalize_project(project, info)
+    mkv, mp4 = tmp_path / "out.mkv", tmp_path / "out.mp4"
+    _run(clip_edit.full_quality_commands(FFMPEG, str(tracks_clip), project, info, str(mkv), str(mp4)))
+    out = clip_edit.probe(FFMPEG, str(mp4))
+    assert (out["width"], out["height"]) == (640, 360)

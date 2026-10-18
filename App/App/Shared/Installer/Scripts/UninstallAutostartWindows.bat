@@ -2,6 +2,21 @@
 setlocal
 cd /d "%~dp0"
 
+set "SHOW_HELP="
+if "%~1"=="--help" set "SHOW_HELP=1"
+if "%~1"=="-h" set "SHOW_HELP=1"
+if "%~1"=="/?" set "SHOW_HELP=1"
+if defined SHOW_HELP (
+    echo Usage: UninstallAutostartWindows.bat
+    echo.
+    echo Removes this ClipEm folder's boot autostart entry and its Start Menu
+    echo entry, without running Setup. Entries that start another ClipEm folder
+    echo are left alone. Safe to run any time.
+    echo.
+    echo   -h, --help, /?  Show this help and exit.
+    exit /b 0
+)
+
 set "PYTHON_EXE=%~dp0App\Windows\Python\python.exe"
 
 if not exist "%PYTHON_EXE%" (

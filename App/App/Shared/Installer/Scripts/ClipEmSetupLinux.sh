@@ -14,6 +14,28 @@
 #   ./Setup_Linux.sh [install-dir]
 set -euo pipefail
 
+case "${1:-}" in
+    -h|--help)
+        cat <<'USAGE'
+Usage: ClipEmSetupLinux.sh [install-dir]
+       curl -fsSL https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupLinux.sh | bash
+
+Installs ClipEm (or repairs/updates an install): downloads what's missing -
+a portable Python, OBS, ffmpeg and ClipEm itself, each checked against the
+signed release manifest - then runs ClipEm's setup.
+
+  install-dir   Where to install. Without it, asks (default: a ClipEm folder
+                next to this script, or the install this script is in).
+  -h, --help    Show this help and exit.
+
+Environment:
+  CLIPEM_MANIFEST_URL   Install from another manifest, e.g. the dev build:
+                        https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json
+USAGE
+        exit 0
+        ;;
+esac
+
 # CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json
 # installs the current dev build instead (see Dev/release.sh --dev).
 MANIFEST_URL="${CLIPEM_MANIFEST_URL:-https://github.com/PTMakes/ClipEm/releases/latest/download/install-manifest.json}"

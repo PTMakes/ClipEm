@@ -151,7 +151,12 @@ def release_instance_lock(lock_path):
         pass
 
 
-def start_clipem():
+# run.py's argument for a launch that only restarts OBS (Settings' "Restart
+# OBS"): the tray widget stays running on purpose, so it's not a second copy.
+OBS_RESTART_FLAG = "--restart-obs"
+
+
+def start_clipem(extra_args=()):
     """Starts run.py detached, as the desktop shortcut does: applies queued
     OBS settings, then starts OBS and the tray widget (whichever aren't
     already running)."""
@@ -162,7 +167,7 @@ def start_clipem():
         kwargs["creationflags"] = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
-    subprocess.Popen([sys.executable, os.path.join(INSTALLER_DIR, "run.py")], **kwargs)
+    subprocess.Popen([sys.executable, os.path.join(INSTALLER_DIR, "run.py"), *extra_args], **kwargs)
 
 
 def process_exe_path_win32(pid):

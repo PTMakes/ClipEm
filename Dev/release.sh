@@ -20,6 +20,7 @@
 #
 # Usage: ./release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
 #   (bump defaults to "patch")
+#   -h, --help     show this help and exit
 #   --allow-dirty  build from uncommitted changes without committing them
 #                  first (the build info records it)
 #   --no-upload    stop after step 3 - for a dry run; nothing is published
@@ -36,6 +37,10 @@ DEV=0
 BUMP="patch"
 for arg in "$@"; do
   case "$arg" in
+    -h|--help)
+      # This file's header comment, up to the first line of code.
+      sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+      exit 0 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --no-upload) UPLOAD=0 ;;
     --dev) DEV=1 ;;

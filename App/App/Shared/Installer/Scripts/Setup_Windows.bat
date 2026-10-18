@@ -2,6 +2,22 @@
 setlocal
 cd /d "%~dp0"
 
+set "SHOW_HELP="
+if "%~1"=="--help" set "SHOW_HELP=1"
+if "%~1"=="-h" set "SHOW_HELP=1"
+if "%~1"=="/?" set "SHOW_HELP=1"
+if defined SHOW_HELP (
+    echo Usage: Setup_Windows.bat
+    echo.
+    echo Sets up ClipEm in this folder, or repairs/updates it: fetches Python if
+    echo it's missing ^(checked against its published checksum^), then runs
+    echo ClipEm's setup, which fetches OBS and ffmpeg and configures them.
+    echo Safe to run again to change settings.
+    echo.
+    echo   -h, --help, /?  Show this help and exit.
+    exit /b 0
+)
+
 set "PYTHON_DIR=%~dp0App\Windows\Python"
 set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
 rem sha256 of python-3.12.10-embed-amd64.zip - must match Dev/release/upstream-pins.json

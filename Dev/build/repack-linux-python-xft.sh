@@ -34,6 +34,7 @@
 #
 # Usage: ./build/repack-linux-python-xft.sh <cpython-version> <pbs-tag>
 #   e.g. ./build/repack-linux-python-xft.sh 3.12.14 20260924
+#   -h, --help  show this help and exit
 #
 # The vanilla asset's sha256 is pinned in release/upstream-pins.json; the first time
 # a new PBS release is used, the pin is taken from that release's own
@@ -43,6 +44,13 @@
 # Safe to re-run - skips all work if that file already exists (delete it,
 # or the whole Dev/dist entry, to force a rebuild).
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    # This file's header comment, up to the first line of code.
+    sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+    exit 0 ;;
+esac
 
 PY_VERSION="${1:?Usage: $0 <cpython-version> <pbs-tag>}"
 PBS_TAG="${2:?Usage: $0 <cpython-version> <pbs-tag>}"

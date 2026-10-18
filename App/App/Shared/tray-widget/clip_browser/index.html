@@ -34,7 +34,33 @@
       <button id="reset" title="Undo every edit to this clip" disabled>Reset</button>
     </header>
     <div id="player-wrap">
-      <video id="player" preload="auto" playsinline muted></video>
+      <!-- The video at its fitted size; zoomed and panned as a whole (view.js). -->
+      <div id="stage" hidden>
+        <video id="player" preload="auto" playsinline muted></video>
+        <div id="crop">
+          <div class="crop-shade" data-side="top"></div>
+          <div class="crop-shade" data-side="bottom"></div>
+          <div class="crop-shade" data-side="left"></div>
+          <div class="crop-shade" data-side="right"></div>
+          <div id="crop-box">
+            <div class="crop-handle" data-edge="nw"></div>
+            <div class="crop-handle" data-edge="n"></div>
+            <div class="crop-handle" data-edge="ne"></div>
+            <div class="crop-handle" data-edge="w"></div>
+            <div class="crop-handle" data-edge="e"></div>
+            <div class="crop-handle" data-edge="sw"></div>
+            <div class="crop-handle" data-edge="se"></div>
+            <span id="crop-size"></span>
+            <button id="crop-lock" class="overlay-button"></button>
+          </div>
+        </div>
+      </div>
+      <div id="zoom-controls">
+        <button id="zoom-in" class="overlay-button" title="Zoom in (mouse wheel)" aria-label="Zoom in"></button>
+        <button id="zoom-out" class="overlay-button" title="Zoom out (mouse wheel)" aria-label="Zoom out"></button>
+        <button id="zoom-fit" class="overlay-button" title="Full frame" aria-label="Full frame"></button>
+        <button id="crop-reset" class="overlay-button" title="Remove the crop" hidden>Uncrop</button>
+      </div>
       <canvas id="meter" title="Preview level (RMS, dBFS) - what you hear, after the track edits" hidden></canvas>
       <p id="no-selection" class="muted">Pick a clip on the left.</p>
     </div>
@@ -83,5 +109,6 @@
   </main>
   <script src="browser.js"></script>
   <script src="editor.js"></script>
+  <script src="view.js"></script>
 </body>
 </html>

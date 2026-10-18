@@ -22,6 +22,19 @@ import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+USAGE = """
+Usage: settings_dialog.py
+
+Opens ClipEm's Settings window (the tray menu's "Settings...").
+
+  -h, --help  Show this help and exit.
+
+The tray icon passes --parent-pid <pid> itself, so the window closes with it.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHARED_DIR = os.path.dirname(SCRIPT_DIR)
 INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
@@ -45,6 +58,7 @@ from autostart import (  # noqa: E402
     remove_autostart_entries,
 )
 from clipem_common import (  # noqa: E402
+    OBS_RESTART_FLAG,
     acquire_instance_lock,
     exit_with_parent,
     load_run_config,
@@ -67,9 +81,9 @@ except ImportError:
     updater = None
 
 
-def start_run_py():
+def start_run_py(extra_args=()):
     """Starts ClipEm again (run.py, detached) - see clipem_common.start_clipem."""
-    start_clipem()
+    start_clipem(extra_args)
 
 
 def restart_obs_with_queued_settings():
@@ -85,7 +99,9 @@ def restart_obs_with_queued_settings():
         )
     applied = obs_config.apply_pending_obs_settings()
     log.info(f"Restart OBS: applied {sorted(applied)}")
-    start_run_py()
+    # The tray widget keeps running: tell run.py that's expected, or it asks
+    # whether to start "a second copy of ClipEm".
+    start_run_py([OBS_RESTART_FLAG])
     return None
 
 

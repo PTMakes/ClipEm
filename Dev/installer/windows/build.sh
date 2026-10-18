@@ -2,6 +2,7 @@
 # Compiles ClipEmSetup.nsi -> dist/ClipEmSetupWindows.exe.
 #
 # Usage: ./build.sh <version>      (release.sh calls this with the release version)
+#        ./build.sh --help         show this help and exit
 #
 # Bundles, into the installer, everything bootstrap.ps1 needs to verify a
 # release before downloading it (see bootstrap.ps1's header):
@@ -24,6 +25,13 @@
 #   Arch/CachyOS:   sudo pacman -S nsis 7zip
 #   Debian/Ubuntu:  sudo apt install nsis 7zip
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    # This file's header comment, up to the first line of code.
+    sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+    exit 0 ;;
+esac
 
 VERSION="${1:?Usage: $0 <version>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

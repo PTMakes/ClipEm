@@ -23,7 +23,20 @@ import time
 import urllib.parse
 import urllib.request
 
-from PIL import Image, ImageFilter
+USAGE = """
+Usage: tray_widget.py
+
+ClipEm's tray icon: Save Clip, the clip editor, Settings, Show/Hide OBS and
+the stuck-screen and disk-space checks. Normally started by run.py; run
+on its own, it connects to the OBS that's already running.
+
+  -h, --help  Show this help and exit.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
+from PIL import Image, ImageFilter  # noqa: E402 - after --help, which doesn't need it
 
 # Linux talks StatusNotifierItem/dbusmenu directly (sni_tray.py) instead of
 # through pystray's GTK/AppIndicator backend, which needs PyGObject and

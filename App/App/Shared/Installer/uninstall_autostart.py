@@ -11,6 +11,19 @@ this ClipEm folder's own entry, never another copy's.
 import os
 import sys
 
+USAGE = """
+Usage: uninstall_autostart.py
+
+Removes this ClipEm folder's boot/login autostart entry (and, on Windows,
+its Start Menu entry) without running Setup. Entries that start another
+ClipEm folder are left alone. Safe to run any time.
+
+  -h, --help  Show this help and exit.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
 INSTALLER_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, INSTALLER_DIR)
 import autostart  # noqa: E402

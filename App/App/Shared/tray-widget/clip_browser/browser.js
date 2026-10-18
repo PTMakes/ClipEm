@@ -96,20 +96,30 @@ function clipItem(clip) {
   const badges = document.createElement("span");
   badges.className = "badges";
   // Links on their own row under the thumbnail (the text beside it is too
-  // narrow) - see updateItem: the clip's newest export, shown in its
-  // folder, and for an export, the clip it was made from.
-  const exported = linkButton("clip-export", async () => {
-    try {
-      await api("api/reveal", { name: exported.dataset.file, path: exported.dataset.path });
-    } catch (err) {
-      setStatus(err.message, true);
-    }
+  // narrow) - see updateItem: the clip's newest export - pointed out in the
+  // list when it's there, else shown in its folder - and for an export, the
+  // clip it was made from.
+  const exported = linkButton("clip-export", () => {
+    const name = exported.dataset.file;
+    if (exported.dataset.listed === "1" && state.clips.some((c) => c.name === name)) highlightClip(name);
+    else revealFile({ name, path: exported.dataset.path });
   });
   const origin = linkButton("clip-origin", () => highlightClip(origin.dataset.clip));
   text.append(when, size, badges);
 
+  const reveal = document.createElement("button");
+  reveal.className = "clip-action clip-reveal";
+  reveal.title = "Show in folder";
+  reveal.setAttribute("aria-label", "Show in folder");
+  reveal.innerHTML = FOLDER_ICON;
+  reveal.addEventListener("click", (e) => {
+    e.stopPropagation();
+    revealFile({ name: clip.name });
+  });
+  reveal.addEventListener("keydown", (e) => e.stopPropagation());
+
   const remove = document.createElement("button");
-  remove.className = "clip-delete";
+  remove.className = "clip-action clip-delete";
   remove.title = `Move to the ${TRASH_NAME}`;
   remove.setAttribute("aria-label", `Delete clip`);
   remove.innerHTML = TRASH_ICON;
@@ -122,7 +132,7 @@ function clipItem(clip) {
   const exportRow = document.createElement("div");
   exportRow.className = "clip-export-row";
   exportRow.append(exported, origin);
-  li.append(thumb, text, exportRow, remove);
+  li.append(thumb, text, exportRow, reveal, remove);
   li.addEventListener("click", () => select(clip.name));
   li.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(clip.name); }
@@ -132,6 +142,15 @@ function clipItem(clip) {
   thumb.addEventListener("mouseleave", () => stopHover(thumb));
   updateItem(li, clip);
   return li;
+}
+
+// The file manager, with the file selected.
+async function revealFile(body) {
+  try {
+    await api("api/reveal", body);
+  } catch (err) {
+    setStatus(err.message, true);
+  }
 }
 
 function linkButton(className, onClick) {
@@ -192,13 +211,17 @@ function updateItem(li, clip) {
   if (last) {
     exported.dataset.file = last.name;
     exported.dataset.path = last.path;
-    exported.title = `Show ${last.name} in its folder (exported ${shortWhen(last.time)})`;
+    exported.dataset.listed = last.in_folder ? "1" : "";
+    exported.title = last.in_folder
+      ? `Show ${last.name} in the list (exported ${shortWhen(last.time)})`
+      : `Show ${last.name} in its folder (exported ${shortWhen(last.time)})`;
     exported.querySelector("span").textContent = `Last Exported As ${last.name}`;
   }
   if (from) {
     origin.dataset.clip = from.name;
     origin.title = `Show the clip this was exported from: ${from.name}`;
-    origin.querySelector("span").textContent = `Exported From ${shortWhen(from.time)}`;
+    // With seconds, as the original clip's own date shows them.
+    origin.querySelector("span").textContent = `Exported From ${formatWhen(from.time)}`;
   }
   li.classList.toggle("selected", clip.name === state.selected);
 }
@@ -206,6 +229,7 @@ function updateItem(li, clip) {
 const LINK_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.3-2.3a2.6 2.6 0 0 0-3.7-3.7l-1 1M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.2 9.1a2.6 2.6 0 0 0 3.7 3.7l1-1"/></svg>';
 
 const TRASH_NAME = /Windows/.test(navigator.userAgent) ? "Recycle Bin" : "Trash";
+const FOLDER_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25v8a1 1 0 0 0 1 1h10.5a1 1 0 0 0 1-1v-6.5a1 1 0 0 0-1-1H8L6.5 3.25H2.75a1 1 0 0 0-1 1z"/></svg>';
 const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
 
 async function deleteClip(name) {

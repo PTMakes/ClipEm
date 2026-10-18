@@ -14,7 +14,15 @@
 # Usage:
 #   ./generate-signing-key.sh               create the key (refuses to overwrite) and stamp
 #   ./generate-signing-key.sh --stamp-only  re-stamp the public key from an existing key
+#   ./generate-signing-key.sh --help        show this help and exit
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    # This file's header comment, up to the first line of code.
+    sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+    exit 0 ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 KEY_PATH="${CLIPEM_SIGNING_KEY:-$HOME/.config/clipem/signing-key.pem}"

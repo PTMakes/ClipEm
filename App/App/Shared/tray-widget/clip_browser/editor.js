@@ -144,7 +144,12 @@ function loadKeep(keep) {
 }
 
 function project() {
-  return { version: 2, keep: keepRanges(), tracks: ed.tracks };
+  return { version: 2, keep: keepRanges(), tracks: ed.tracks, crop: ed.crop || null };
+}
+
+// The exported video's height before any scaling: the crop's, or the clip's.
+function outputHeight() {
+  return ed.crop ? ed.crop.h : ed.info.height;
 }
 
 function keptLength() {
@@ -152,7 +157,7 @@ function keptLength() {
 }
 
 function snapshot() {
-  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks });
+  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, crop: ed.crop || null });
 }
 
 function restore(snap) {
@@ -160,6 +165,7 @@ function restore(snap) {
   ed.trim = data.trim;
   ed.cuts = data.cuts;
   ed.tracks = data.tracks;
+  ed.crop = data.crop || null;
   ed.region = null;
 }
 
@@ -192,6 +198,7 @@ function endEdit() {
 
 // Something changed (mid-edit too): redraw and save soon.
 function edited() {
+  if (typeof renderCrop === "function") renderCrop(); // view.js
   renderTimeline();
   renderPanel();
   renderToolbar();
@@ -229,6 +236,7 @@ function flushSave() {
       const result = await api("api/project", body);
       if (ed.name === name) {
         ed.discord = result.discord;
+        if (result.custom) ed.custom = result.custom; // follows the crop
         renderExportBar();
       }
     } catch (err) {
@@ -293,6 +301,8 @@ async function loadEditor(name) {
   ed.info = data.info;
   ed.tracks = data.project.tracks;
   loadKeep(data.project.keep);
+  ed.crop = data.project.crop || null;
+  ed.canCrop = !!data.can_crop;
   ed.discord = data.discord;
   ed.custom = data.custom;
   ed.missing = data.missing || [];
@@ -348,6 +358,8 @@ function renderDetails() {
   $("splitter").hidden = !ready;
   $("meter").hidden = !ready || !audio.out;
   $("no-selection").hidden = !!clip;
+  $("stage").hidden = !clip;
+  if (typeof renderCrop === "function") renderCrop(); // view.js
   $("out-name-wrap").hidden = !clip;
   $("clip-meta").textContent = clip
     ? [formatWhen(clip.mtime), formatDuration(clip.duration), formatSize(clip.size)].filter(Boolean).join(" · ")
@@ -377,13 +389,14 @@ function isUnedited(index) {
   const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
-  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.tracks.every(plain);
+  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && !ed.crop && ed.tracks.every(plain);
 }
 
 function resetEdits() {
   change(() => {
     ed.trim = [0, duration()];
     ed.cuts = [];
+    ed.crop = null;
     ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, level: false,
       gate_db: null, mono: false, regions: [] }));
     ed.selection = null;
@@ -1430,7 +1443,7 @@ function renderCustomExport() {
   const options = ed.custom;
   $("custom-export").hidden = !options;
   if (!options) return;
-  const sourceHeight = ed.info && ed.info.height ? ` (${ed.info.height}p)` : "";
+  const sourceHeight = ed.info && ed.info.height ? ` (${outputHeight()}p)` : "";
   const sourceFps = ed.info && ed.info.fps ? ` (${Math.round(ed.info.fps)})` : "";
   fillSelect($("custom-height"), [["", `Source${sourceHeight}`],
     ...options.heights.map((h) => [String(h), `${h}p`])], "1080");
@@ -1461,7 +1474,7 @@ function exportAsDefault(custom) {
   const stem = ed.name.replace(/\.[^.]+$/, "");
   let name = $("out-name").value.trim() || stem;
   if (name === stem) {
-    const height = custom.height || (ed.info && ed.info.height) || "";
+    const height = custom.height || (ed.info && outputHeight()) || "";
     const fps = custom.fps || (ed.info && ed.info.fps ? Math.round(ed.info.fps) : "");
     name = `${stem}-${height}p${fps}`;
   }

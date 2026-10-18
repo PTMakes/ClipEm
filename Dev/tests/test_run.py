@@ -376,3 +376,28 @@ def test_obs_skips_replay_buffer_while_clips_folder_is_missing(app, monkeypatch,
     run.run_linux(with_tray)
     assert "--startreplaybuffer" in launched[-1]
     assert run.REPLAY_BUFFER_DEFERRED_ENV not in trays[-1]
+
+
+def test_a_running_tray_counts_as_already_open_except_for_an_obs_restart(launch_gate, monkeypatch):
+    tmp_path, asked, answer = launch_gate
+    answer(True)
+    tray = _other_process()
+    monkeypatch.setattr(run, "is_tray_widget_process", lambda pid: pid == tray.pid)
+    try:
+        (tmp_path / ".tray.lock").write_text(str(tray.pid))
+        run._claim_launch()
+        assert asked == ["ClipEm's tray icon is already running."]
+        # Settings' "Restart OBS" keeps the tray widget running on purpose.
+        (tmp_path / ".run.lock").unlink()
+        monkeypatch.setattr(sys, "argv", ["run.py", run.OBS_RESTART_FLAG])
+        assert run._claim_launch() is True
+        assert len(asked) == 1  # not asked again
+        assert run._tray_widget_running()  # so run.py doesn't start a second one
+        # ...but an OBS that's still running is still a second copy.
+        (tmp_path / ".run.lock").unlink()
+        monkeypatch.setattr(run.obs_process, "obs_running", lambda: True)
+        run._claim_launch()
+        assert asked[-1] == "ClipEm's OBS is already running."
+    finally:
+        tray.kill()
+        tray.wait()

@@ -42,6 +42,20 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+USAGE = """
+Usage: clip_browser.py
+
+Opens ClipEm's clip editor (the tray menu's "Open Clip Editor"). If it's
+already open, brings its window to the front instead.
+
+  -h, --help  Show this help and exit.
+
+The tray icon passes --parent-pid <pid> itself, so the editor closes with it.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SHARED_DIR = os.path.dirname(SCRIPT_DIR)
 INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
@@ -70,7 +84,7 @@ log = logging.getLogger("clip_browser")
 
 UI_DIR = os.path.join(SCRIPT_DIR, "clip_browser")
 UI_FILES = {"": "index.html", "index.html": "index.html", "browser.js": "browser.js", "editor.js": "editor.js",
-            "app.css": "app.css"}
+            "view.js": "view.js", "app.css": "app.css"}
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
     ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".flv": "video/x-flv",
@@ -342,6 +356,10 @@ class Editor:
                 self._info[key] = cached
         return cached or None
 
+    def can_crop(self):
+        """Whether this ffmpeg can crop video (ClipEm's builds since r3)."""
+        return bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.CROP_FILTERS)
+
     def can_gate(self):
         """Whether it has the noise gate filter (newer builds too)."""
         if self._can_gate is None:
@@ -414,8 +432,10 @@ class Editor:
                 continue
             path = str(entry.get("file"))
             if os.path.isfile(path):
+                # in_folder: it's in the clip list too ("Export As" can save anywhere).
                 found[os.path.basename(clip)] = {"name": os.path.basename(path), "path": path,
-                                                 "time": entry.get("time")}
+                                                 "time": entry.get("time"),
+                                                 "in_folder": os.path.dirname(os.path.realpath(path)) == root}
         return found
 
     def export_origins(self, folder, names):
@@ -484,7 +504,8 @@ class Editor:
         exact = name if name and name != stem else None
         if preset == "custom":
             custom = custom or {}
-            settings = clip_edit.custom_settings(info, custom.get("height"), custom.get("fps"),
+            settings = clip_edit.custom_settings(clip_edit.cropped_info(info, project), custom.get("height"),
+                                                 custom.get("fps"),
                                                  custom.get("video_kbps"))
             label = f"{settings['height']}p{round(settings['fps']) if settings['fps'] else ''}"
             if out_path is not None:
@@ -550,8 +571,8 @@ def project_payload(clip, source, info, project, missing):
                         "channels": clip_edit.channel_count(info, t["index"])} for t in info["audio"]],
         },
         "project": project,
-        "discord": clip_edit.discord_settings(info, clip_edit.kept_duration(project)),
-        "custom": clip_edit.custom_options(info),
+        "discord": clip_edit.discord_settings(clip_edit.cropped_info(info, project), clip_edit.kept_duration(project)),
+        "custom": clip_edit.custom_options(clip_edit.cropped_info(info, project)),
         "missing": missing,
     }
 
@@ -915,8 +936,11 @@ class Handler(BaseHTTPRequestHandler):
                     editor = self.server.editor
                     info = editor.info(source)
                     project = editor.save_project(clip, info, body.get("project"))
+                    # The export options follow the crop (a cropped clip is smaller).
+                    sized = clip_edit.cropped_info(info, project)
                     self._json({"project": project,
-                                "discord": clip_edit.discord_settings(info, clip_edit.kept_duration(project))})
+                                "discord": clip_edit.discord_settings(sized, clip_edit.kept_duration(project)),
+                                "custom": clip_edit.custom_options(sized)})
             elif route == "api/export":
                 self._export(folder, body)
             elif route == "api/quit":
@@ -966,6 +990,7 @@ class Handler(BaseHTTPRequestHandler):
         payload["can_level"] = editor.can_level()
         payload["can_channels"] = editor.can_split_channels()
         payload["can_gate"] = editor.can_gate()
+        payload["can_crop"] = editor.can_crop()
         payload["gate_default_db"] = clip_edit.GATE_DEFAULT_DB
         self._json(payload)
 
@@ -986,6 +1011,10 @@ class Handler(BaseHTTPRequestHandler):
         if any(t.get("level") for t in saved["tracks"]) and not editor.can_level():
             self._json({"error": "A track is set to Level Out Audio, which needs a newer ffmpeg - update ClipEm "
                                  "or turn Level off."}, 409)
+            return
+        if saved.get("crop") and not editor.can_crop():
+            self._json({"error": "This clip is cropped, which needs a newer ffmpeg - update ClipEm or "
+                                 "remove the crop."}, 409)
             return
         if any(t.get("gate_db") is not None for t in saved["tracks"]) and not editor.can_gate():
             self._json({"error": "A track has the noise gate on, which needs a newer ffmpeg - update ClipEm "

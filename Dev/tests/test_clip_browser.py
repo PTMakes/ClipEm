@@ -344,7 +344,8 @@ def test_last_export_is_listed_with_its_clip(tmp_path):
     finally:
         srv.shutdown()
         srv.server_close()
-    assert listed == {"a.mp4": {"name": "a-edit.mp4", "path": str(clips / "a-edit.mp4"), "time": 123},
+    assert listed == {"a.mp4": {"name": "a-edit.mp4", "path": str(clips / "a-edit.mp4"), "time": 123,
+                                "in_folder": True},
                       "b.mp4": None, "a-edit.mp4": None}
     assert editor.last_exports(str(tmp_path)) == {}  # another folder's clips
 

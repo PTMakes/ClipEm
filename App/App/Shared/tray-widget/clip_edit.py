@@ -14,7 +14,9 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
                  "gate_db": null,     # noise gate threshold (dBFS), null: off
                  "mono": false,       # left and right combined, on both sides
                  "regions": [{"start": s, "end": e, "db": g,
-                              "channel": null}]}]}  # 0 left / 1 right only, null both
+                              "channel": null}]}],  # 0 left / 1 right only, null both
+     "crop": null}                    # or {"x", "y", "w", "h"}: the part of the frame
+                                      # to keep, in source pixels (even numbers)
 
 Trims and cuts both just shorten `keep`. Gain regions are in the clip's own
 timeline (before cuts), so a region keeps its place when a cut is added.
@@ -50,6 +52,9 @@ REQUIRED_MUXERS = ("mp4", "matroska", "null", "s16le")
 # Only for "Level" (older ClipEm ffmpeg builds lack them - the button is
 # then unavailable, everything else still works).
 LEVEL_FILTERS = ("loudnorm", "alimiter")
+# Only for cropping, likewise.
+CROP_FILTERS = ("crop",)
+MIN_CROP_PIXELS = 64
 # Only for the noise gate, likewise.
 GATE_FILTERS = ("agate",)
 # Noise gate: below the threshold, sound is turned down by GATE_RANGE_DB -
@@ -229,6 +234,7 @@ def default_project(info):
              "gate_db": None, "mono": False, "regions": []}
             for track in info["audio"]
         ],
+        "crop": None,
     }
 
 
@@ -311,7 +317,42 @@ def normalize_project(project, info):
         source = project.get("mix_source")
         if source == "tracks" or (source is None and any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)):
             tracks[0]["muted"] = True
-    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks}
+    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks, "crop": normalize_crop(project.get("crop"), info)}
+
+
+def _even(value):
+    return int(value) // 2 * 2
+
+
+def normalize_crop(crop, info):
+    """A crop that fits the frame, in even numbers (H.264's 4:2:0 needs
+    them), at least MIN_CROP_PIXELS a side - or None for the whole frame
+    (also when it can't be read)."""
+    width, height = info.get("width"), info.get("height")
+    if not isinstance(crop, dict) or not width or not height:
+        return None
+    try:
+        x, y, w, h = (float(crop[key]) for key in ("x", "y", "w", "h"))
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)):
+        return None
+    w = _even(_clamp(w, MIN_CROP_PIXELS, width))
+    h = _even(_clamp(h, MIN_CROP_PIXELS, height))
+    x = _even(_clamp(x, 0, width - w))
+    y = _even(_clamp(y, 0, height - h))
+    if (x, y, w, h) == (0, 0, _even(width), _even(height)):
+        return None
+    return {"x": x, "y": y, "w": w, "h": h}
+
+
+def cropped_info(info, project):
+    """info with the video's size after the project's crop - what the
+    export settings (Discord, Custom) work from."""
+    crop = project.get("crop") if project else None
+    if not crop:
+        return info
+    return dict(info, width=crop["w"], height=crop["h"])
 
 
 def _gate_db(value):
@@ -566,6 +607,9 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
 
     video = _cut(graph, "0:v:0", keep, audio=False)
     post = []
+    crop = project.get("crop")
+    if crop:
+        post.append(f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']}")
     if video_height:
         post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
     if fps:
@@ -700,7 +744,7 @@ def custom_settings(info, height, fps, video_kbps):
 
 def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog):
     """Two-pass H.264 at settings' bitrate, so the size is predictable."""
-    height = settings["height"] if settings["height"] != info["height"] else None
+    height = settings["height"] if settings["height"] != cropped_info(info, project)["height"] else None
     fps = settings["fps"] if info["fps"] and settings["fps"] < info["fps"] - 0.5 else None
     video_args = ["-c:v", "libx264", "-preset", "medium", "-b:v", f"{settings['video_kbps']}k",
                   "-maxrate", f"{int(settings['video_kbps'] * 1.5)}k",
@@ -721,7 +765,7 @@ def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
 
 def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
     """Two-pass H.264 so the size lands just under Discord's limit."""
-    settings = discord_settings(info, kept_duration(project))
+    settings = discord_settings(cropped_info(info, project), kept_duration(project))
     return two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
 
 

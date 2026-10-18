@@ -18,6 +18,23 @@ import sys
 import threading
 import time
 
+USAGE = """
+Usage: run.py [--boot]
+
+Starts ClipEm - OBS, recording into its replay buffer, and the tray icon.
+This is what the ClipEm shortcut runs. A chosen update is installed first,
+and new ones are offered afterwards.
+
+  --boot      Start only what Settings' "Autostart with PC boot" allows
+              (the boot autostart entry passes this).
+  -h, --help  Show this help and exit.
+
+ClipEm passes these itself: --restarted, --post-update, --restart-obs.
+"""
+if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
+    print(USAGE.strip())
+    sys.exit(0)
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app_window  # noqa: E402
 import autostart  # noqa: E402
@@ -32,6 +49,7 @@ from clipem_common import (  # noqa: E402
     APP_DIR,
     DEFAULT_RUN_CONFIG,
     INSTALLER_DIR,
+    OBS_RESTART_FLAG,
     ROOT_DIR,
     SHARED_DIR,
     TRAY_LOCK_PATH,
@@ -115,6 +133,9 @@ def _resolve_tray_python(tray_deps_dir, fallback_python_exe):
 
 
 def _start_tray_widget(python_exe, extra_env=None, tray_deps_dir=None):
+    if _tray_widget_running():  # e.g. Settings restarting just OBS
+        log.info("The tray widget is already running.")
+        return
     python_exe = _resolve_tray_python(tray_deps_dir, python_exe)
     check_env = dict(os.environ)
     if tray_deps_dir:
@@ -593,10 +614,16 @@ def _what_is_already_open():
         return None  # the restarts close OBS and the tray widget first
     if obs_process.obs_running():
         return "ClipEm's OBS is already running."
-    tray_pid = _read_pid(TRAY_LOCK_PATH)
-    if tray_pid and tray_pid != os.getpid() and pid_alive(tray_pid) and is_tray_widget_process(tray_pid):
+    if OBS_RESTART_FLAG in sys.argv[1:]:
+        return None  # Settings' "Restart OBS": the tray widget stays, on purpose
+    if _tray_widget_running():
         return "ClipEm's tray icon is already running."
     return None
+
+
+def _tray_widget_running():
+    tray_pid = _read_pid(TRAY_LOCK_PATH)
+    return bool(tray_pid and tray_pid != os.getpid() and pid_alive(tray_pid) and is_tray_widget_process(tray_pid))
 
 
 def _ask_already_open(reason):

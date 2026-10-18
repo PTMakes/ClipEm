@@ -38,7 +38,19 @@
 #   re-applied to a clean checkout every time.
 # - Expect this to take a while: a full clone with submodules, then a
 #   20-60+ minute compile depending on your hardware.
+#
+# Usage: ./build/build-obs-from-source-for-linux.sh [obs-ref]
+#   obs-ref     an OBS Studio tag or commit to build instead of the pinned
+#               one (OBS_PINNED_REF below)
+#   -h, --help  show this help and exit
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    # This file's header comment, up to the first line of code.
+    sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+    exit 0 ;;
+esac
 
 OBS_PINNED_REF="32.2.2"
 OBS_PINNED_COMMIT="ba2f32bdf791005443988a4955e963663e16b1ed"

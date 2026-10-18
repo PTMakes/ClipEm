@@ -28,7 +28,16 @@
 #   sudo pacman -S --needed base-devel git nasm mingw-w64-gcc
 #
 # Usage: ./build/build-ffmpeg.sh [--force]
+#   --force     rebuild even if the archives for these pins already exist
+#   -h, --help show this help and exit
 set -euo pipefail
+
+case "${1:-}" in
+  -h|--help)
+    # This file's header comment, up to the first line of code.
+    sed -n '2,/^set -euo pipefail/p' "${BASH_SOURCE[0]}" | sed '$d; s/^# \{0,1\}//'
+    exit 0 ;;
+esac
 
 FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
@@ -183,7 +192,7 @@ check_has() {  # <-encoders|-muxers|-filters> <name>...
 }
 check_has -encoders libx264 aac mjpeg pcm_s16le
 check_has -muxers mp4 matroska null s16le image2
-check_has -filters concat volume amix adelay apad afade asplit split scale loudnorm alimiter pan channelsplit join agate
+check_has -filters concat volume amix adelay apad afade asplit split scale loudnorm alimiter pan channelsplit join agate crop
 if ldd "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" >/dev/null 2>&1; then
   echo "Linux build is dynamically linked - expected a static binary" >&2
   exit 1

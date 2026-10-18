@@ -219,6 +219,8 @@ class _DBusMenuInterface(ServiceInterface):
         self._items_by_id = {}
         self._next_id = 1
         self._assign_ids(icon.menu.items)
+        # What the host was last told the menu looks like - see announce_layout_changed.
+        self._announced = self._snapshot(icon.menu.items)
 
     def _assign_ids(self, items):
         for item in items:
@@ -318,8 +320,24 @@ class _DBusMenuInterface(ServiceInterface):
         return [updated, removed]
 
     def announce_layout_changed(self):
+        """Tells the tray host to re-read the menu - only when what it shows
+        changed. Hosts rebuild an open menu on every LayoutUpdated, and a
+        click landing mid-rebuild is lost; the tray widget asks for an
+        update on every poll (every 2 s), which made menu items often do
+        nothing when clicked."""
+        snapshot = self._snapshot(self._icon.menu.items)
+        if snapshot == self._announced:
+            return
+        self._announced = snapshot
         self._revision += 1
         self.LayoutUpdated(self._revision, 0)
+
+    def _snapshot(self, items):
+        return tuple(
+            (item._dbus_id, item.label(), item.is_enabled(), item.is_visible(),
+             self._snapshot(item.submenu.items) if item.submenu is not None else ())
+            for item in items
+        )
 
 
 class Icon:
