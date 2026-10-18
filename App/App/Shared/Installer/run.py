@@ -29,7 +29,7 @@ and new ones are offered afterwards.
               (the boot autostart entry passes this).
   -h, --help  Show this help and exit.
 
-ClipEm passes these itself: --restarted, --post-update, --restart-obs.
+ClipEm passes these itself: --restarted, --post-update, --restart-obs, --reopen-editor.
 """
 if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
     print(USAGE.strip())
@@ -50,6 +50,8 @@ from clipem_common import (  # noqa: E402
     DEFAULT_RUN_CONFIG,
     INSTALLER_DIR,
     OBS_RESTART_FLAG,
+    OPEN_EDITOR_ENV,
+    REOPEN_EDITOR_FLAG,
     ROOT_DIR,
     SHARED_DIR,
     TRAY_LOCK_PATH,
@@ -59,6 +61,7 @@ from clipem_common import (  # noqa: E402
     load_run_config,
     pid_alive,
     setup_logging,
+    stop_clip_editor,
     stop_tray_widget,
 )
 
@@ -292,12 +295,14 @@ def _obs_launch_flags():
     invalid" error dialog, so OBS starts without it and the tray widget
     starts the replay buffer once the folder is there
     (tray-widget/clip_folder.py)."""
+    # A restart that closed the clip editor: the new tray widget opens it again.
+    tray_env = {OPEN_EDITOR_ENV: "1"} if REOPEN_EDITOR_FLAG in sys.argv[1:] else {}
     clips_dir = obs_config.load_clip_folder()
     if os.path.isdir(clips_dir):
-        return ["--startreplaybuffer", "--minimize-to-tray", "--multi"], {}
+        return ["--startreplaybuffer", "--minimize-to-tray", "--multi"], tray_env
     log.warning(f"Clips folder {clips_dir} isn't there - starting OBS without the replay buffer; "
                 "the tray widget starts it once the folder is.")
-    return ["--minimize-to-tray", "--multi"], {REPLAY_BUFFER_DEFERRED_ENV: "1"}
+    return ["--minimize-to-tray", "--multi"], {**tray_env, REPLAY_BUFFER_DEFERRED_ENV: "1"}
 
 
 def run_windows(config):
@@ -585,8 +590,10 @@ def _restart_clipem_to_update():
         _show_error("OBS didn't close (it may be showing a dialog), so the update will be installed "
                     "the next time ClipEm starts.")
         return
+    # Its code (and window) is part of the update too.
+    editor_was_open = stop_clip_editor(log)
     stop_tray_widget(log)
-    _restart_self([])
+    _restart_self([REOPEN_EDITOR_FLAG] if editor_was_open else [])
 
 
 def _read_pid(path):

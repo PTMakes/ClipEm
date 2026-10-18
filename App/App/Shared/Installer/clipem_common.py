@@ -155,6 +155,75 @@ def release_instance_lock(lock_path):
 # OBS"): the tray widget stays running on purpose, so it's not a second copy.
 OBS_RESTART_FLAG = "--restart-obs"
 
+# run.py's argument for a restart that closed the clip editor (updating or
+# restarting ClipEm): it has the new tray widget open the editor again
+# (OPEN_EDITOR_ENV), so it comes back on the new version.
+REOPEN_EDITOR_FLAG = "--reopen-editor"
+OPEN_EDITOR_ENV = "CLIPEM_OPEN_EDITOR"
+
+# The running clip editor's pid and launch URL (written by clip_browser.py).
+CLIP_EDITOR_LOCK_PATH = os.path.join(SHARED_DIR, "tray-widget", ".clip_browser.lock")
+CLIP_EDITOR_URL_PATH = os.path.join(SHARED_DIR, "tray-widget", ".clip_browser.url")
+
+
+def clip_editor_quit_url(launch_url):
+    """http://127.0.0.1:port/<token>/api/quit from the editor's launch URL
+    (http://127.0.0.1:port/clipem-editor/#<token>), or None."""
+    import urllib.parse
+
+    parts = urllib.parse.urlsplit(launch_url or "")
+    if parts.hostname != "127.0.0.1" or not parts.port or not parts.fragment:
+        return None
+    return f"http://127.0.0.1:{parts.port}/{urllib.parse.quote(parts.fragment)}/api/quit"
+
+
+def stop_clip_editor(log, timeout_seconds=3):
+    """Closes the clip editor if one is running - started from the tray or
+    on its own from the Start menu: asks it to quit (it cancels any export
+    and closes its window), then terminates it if it's still there. True if
+    one was running (so it can be opened again after a restart)."""
+    import subprocess
+    import urllib.request
+
+    try:
+        with open(CLIP_EDITOR_LOCK_PATH, "r", encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    if pid == os.getpid() or not pid_alive(pid):
+        return False
+    try:
+        with open(CLIP_EDITOR_URL_PATH, "r", encoding="utf-8") as f:
+            url = clip_editor_quit_url(f.read().strip())
+    except OSError:
+        url = None
+    if not url:
+        return False
+    try:
+        request = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"})
+        urllib.request.urlopen(request, timeout=2).close()
+    except Exception as exc:
+        # Nothing answered: a stale lock file whose pid may now be some
+        # other program - leave it alone.
+        log.warning(f"Couldn't ask the clip editor to close: {exc}")
+        return False
+    deadline = time.monotonic() + timeout_seconds + 2  # it gives its window 3 s to close
+    while pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    if pid_alive(pid):
+        log.warning("The clip editor didn't close - ending it.")
+        try:
+            if sys.platform == "win32":
+                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
+                               creationflags=0x08000000)
+            else:
+                import signal
+
+                os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    return True
+
 
 def start_clipem(extra_args=()):
     """Starts run.py detached, as the desktop shortcut does: applies queued

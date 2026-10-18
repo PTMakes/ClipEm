@@ -20,8 +20,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.parse
-import urllib.request
 
 USAGE = """
 Usage: tray_widget.py
@@ -61,12 +59,14 @@ from app_window import use_windows_app_id  # noqa: E402
 from clip_folder import ClipFolderWatch  # noqa: E402
 from clipem_common import (  # noqa: E402
     LOG_DIR,
+    OPEN_EDITOR_ENV,
+    REOPEN_EDITOR_FLAG,
     acquire_instance_lock,
     load_run_config,
-    pid_alive,
     release_instance_lock,
     setup_logging,
     start_clipem,
+    stop_clip_editor,
 )
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
@@ -167,61 +167,6 @@ SETTINGS_DIALOG_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "settings_dialog.py"
 )
 CLIP_BROWSER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clip_browser.py")
-# The running clip editor's pid and launch URL (written by clip_browser.py).
-CLIP_BROWSER_LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".clip_browser.lock")
-CLIP_BROWSER_URL_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".clip_browser.url")
-
-
-def clip_editor_quit_url(launch_url):
-    """http://127.0.0.1:port/<token>/api/quit from the editor's launch URL
-    (http://127.0.0.1:port/clipem-editor/#<token>), or None."""
-    parts = urllib.parse.urlsplit(launch_url or "")
-    if parts.hostname != "127.0.0.1" or not parts.port or not parts.fragment:
-        return None
-    return f"http://127.0.0.1:{parts.port}/{urllib.parse.quote(parts.fragment)}/api/quit"
-
-
-def stop_clip_editor(timeout_seconds=3):
-    """Closes the clip editor if one is running - started from the tray or
-    on its own from the Start menu: asks it to quit (it cancels any export
-    and closes its window), then terminates it if it's still there."""
-    try:
-        with open(CLIP_BROWSER_LOCK_PATH, "r", encoding="utf-8") as f:
-            pid = int(f.read().strip())
-    except (OSError, ValueError):
-        return
-    if pid == os.getpid() or not pid_alive(pid):
-        return
-    try:
-        with open(CLIP_BROWSER_URL_PATH, "r", encoding="utf-8") as f:
-            url = clip_editor_quit_url(f.read().strip())
-    except OSError:
-        url = None
-    if not url:
-        return
-    try:
-        request = urllib.request.Request(url, data=b"{}", headers={"Content-Type": "application/json"})
-        urllib.request.urlopen(request, timeout=2).close()
-    except Exception as exc:
-        # Nothing answered: a stale lock file whose pid may now be some
-        # other program - leave it alone.
-        log.warning(f"Couldn't ask the clip editor to close: {exc}")
-        return
-    deadline = time.monotonic() + timeout_seconds + 2  # it gives its window 3 s to close
-    while pid_alive(pid) and time.monotonic() < deadline:
-        time.sleep(0.1)
-    if pid_alive(pid):
-        log.warning("The clip editor didn't close - ending it.")
-        try:
-            if sys.platform == "win32":
-                subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True,
-                               creationflags=0x08000000)
-            else:
-                import signal
-
-                os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
 
 
 def ensure_single_instance():
@@ -609,7 +554,7 @@ class TrayApp:
         (SIGTERM / TerminateProcess), then kills whatever is left. The clip
         editor - ours or one opened from the Start menu - is asked first."""
         self._stopping_children = True
-        stop_clip_editor(timeout_seconds)
+        stop_clip_editor(log, timeout_seconds)
         running = [child for child in self._children if child.poll() is None]
         for child in running:
             try:
@@ -648,11 +593,13 @@ class TrayApp:
         if not closed:
             self._notify("OBS didn't close (it may be showing a dialog) - nothing was restarted.")
             return
+        # Closed before the new tray widget starts, so it can open it again.
+        editor_was_open = stop_clip_editor(log)
         # Hand the single-instance lock over first, or the new tray widget
         # would see this one still running and exit.
         release_instance_lock(LOCK_PATH)
         try:
-            start_clipem()
+            start_clipem([REOPEN_EDITOR_FLAG] if editor_was_open else [])
         except Exception as exc:
             log.warning(f"Restart: couldn't start ClipEm again: {exc}")
             self._notify(f"Couldn't start ClipEm again ({exc}) - use its shortcut.")
@@ -782,6 +729,10 @@ class TrayApp:
         self.icon.update_menu()
 
     def run(self):
+        # Restarted (an update, or Restart ClipEm) with the clip editor open:
+        # open it again - see run.py's REOPEN_EDITOR_FLAG.
+        if os.environ.pop(OPEN_EDITOR_ENV, "") == "1":
+            self._start_helper(CLIP_BROWSER_SCRIPT, "the clip editor")
         threading.Thread(target=self._poll_loop, daemon=True).start()
         threading.Thread(target=self._check_tray_available, daemon=True).start()
         self.icon.run()

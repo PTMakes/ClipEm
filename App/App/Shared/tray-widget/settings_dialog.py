@@ -60,6 +60,7 @@ from autostart import (  # noqa: E402
 )
 from clipem_common import (  # noqa: E402
     OBS_RESTART_FLAG,
+    REOPEN_EDITOR_FLAG,
     acquire_instance_lock,
     exit_with_parent,
     load_run_config,
@@ -67,6 +68,7 @@ from clipem_common import (  # noqa: E402
     save_run_config,
     setup_logging,
     start_clipem,
+    stop_clip_editor,
     stop_tray_widget,
 )
 from mic_filter_gui import MicFilterWizard  # noqa: E402
@@ -137,8 +139,10 @@ def restart_clipem(pending_message=UPDATE_PENDING_MESSAGE):
         return f"OBS didn't close (it may be showing a dialog). {pending_message}"
     if obs_config.load_pending_obs_settings():
         obs_config.apply_pending_obs_settings()
+    # Its code (and window) is part of the update too.
+    editor_was_open = stop_clip_editor(log)
     stop_tray_widget(log)
-    start_run_py()
+    start_run_py([REOPEN_EDITOR_FLAG] if editor_was_open else [])
     return None
 
 
