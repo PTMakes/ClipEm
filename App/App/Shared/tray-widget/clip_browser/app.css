@@ -170,6 +170,7 @@ body {
 }
 
 .clip-text {
+  flex: 1 1 0; /* beside the thumbnail, with long export names cut short */
   min-width: 0;
   display: flex;
   flex-direction: column;
@@ -182,7 +183,25 @@ body {
 
 .badges { display: flex; gap: 4px; }
 
-.clip-export-row { flex-basis: 100%; min-width: 0; display: flex; }
+.clip-export-row { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 6px; }
+/* Up to two lines - an export's name ("Replay 2026-10-17 / 22-06-05-discord")
+   needs them to show what it is - then cut short. */
+.clip-text .when { white-space: nowrap; }
+.clip-text .when.named {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+
+/* The clip an export was made from, pointed out by "Exported From". */
+.clip.flash { animation: clip-flash 1.6s ease-out; }
+@keyframes clip-flash {
+  0%, 30% { box-shadow: inset 0 0 0 2px var(--accent); background: var(--selection); }
+  100% { box-shadow: inset 0 0 0 2px transparent; }
+}
 .clip-export-row[hidden] { display: none; }
 .clip-export {
   flex: none;

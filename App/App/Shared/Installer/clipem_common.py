@@ -34,8 +34,9 @@ RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
 # clip_saved_notification: the tray's "Clip saved." notification. On when
 # the key is missing (installs from before it existed keep what they had);
 # the shipped run_config.json turns it off for new installs.
+# show_recording_item: the tray menu's Start/Stop Recording item.
 DEFAULT_RUN_CONFIG = {"autostart_obs": True, "autostart_tray": True, "custom_editor_path": "",
-                      "clip_saved_notification": True}
+                      "clip_saved_notification": True, "show_recording_item": True}
 
 # Written next to the macOS/Linux tray-deps by setup.install_tray_widget():
 # the exact interpreter its compiled dependencies (Pillow) were installed

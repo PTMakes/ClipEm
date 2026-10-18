@@ -396,13 +396,24 @@ def gate_filters(threshold_db):
             f":ratio={GATE_RATIO}:attack={GATE_ATTACK_MS}:release={GATE_RELEASE_MS}"]
 
 
-def effect_filters(level=False, gate_db=None):
-    """The noise gate, then Level - as the editor previews them
+def effect_filters(level=False, gate_db=None, volume_db=0.0):
+    """The noise gate, the track's volume (only given here with Level on -
+    see pre_level_db), then Level - as the editor previews them
     (track_audio()/track_peaks() with the same arguments)."""
     filters = gate_filters(gate_db) if gate_db is not None else []
     if level:
+        if volume_db:
+            filters.append(f"volume={_gain(volume_db)}")
         filters += level_filters()
     return filters
+
+
+def pre_level_db(track):
+    """The whole-track volume when it goes before Level Out Audio (which
+    then evens out the result), else 0. The slider's "muted" end stays
+    after it, so it still silences the track."""
+    db = track.get("volume_db") or 0.0
+    return db if track.get("level") and db > MUTE_DB else 0.0
 
 
 def gate_levels(ffmpeg, source, index, run=subprocess.run):
@@ -445,7 +456,7 @@ def _track_chain(track, duration):
     previews - then it's made mono the way the editor does."""
     filters = ["aformat=sample_rates=48000:channel_layouts=stereo"]
     if not track["muted"]:
-        filters += effect_filters(track.get("level"), track.get("gate_db"))
+        filters += effect_filters(track.get("level"), track.get("gate_db"), pre_level_db(track))
     if track.get("mono") and not track["muted"]:
         filters.append(MONO_PAN)
     offset = track["offset"]
@@ -463,7 +474,7 @@ def _gain_filters(track):
     filters = []
     if track["muted"]:
         return ["volume=0"]
-    if track["volume_db"]:
+    if track["volume_db"] and not pre_level_db(track):  # else applied before Level Out Audio
         filters.append(f"volume={_gain(track['volume_db'])}")
     return filters + _region_filters(track, None)
 
@@ -718,21 +729,21 @@ def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
 # Preview audio and waveforms
 # ---------------------------------------------------------------------------
 
-def track_audio_command(ffmpeg, source, index, codec, out_path, level=False, gate_db=None):
+def track_audio_command(ffmpeg, source, index, codec, out_path, level=False, gate_db=None, volume_db=0.0):
     """One audio track as an .m4a the page can play next to the (muted)
     video - copied when it's already AAC. level/gate_db: with those effects."""
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", source,
            "-map", f"0:a:{index}", "-vn"]
-    effects = effect_filters(level, gate_db)
+    effects = effect_filters(level, gate_db, volume_db)
     if effects:
         cmd += ["-af", ",".join(effects)]
     cmd += ["-c:a", "copy"] if codec == "aac" and not effects else ["-c:a", "aac", "-b:a", f"{PREVIEW_AUDIO_KBPS}k"]
     return cmd + ["-f", "mp4", out_path]
 
 
-def peaks_command(ffmpeg, source, index, level=False, channels=1, gate_db=None):
+def peaks_command(ffmpeg, source, index, level=False, channels=1, gate_db=None, volume_db=0.0):
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", source, "-map", f"0:a:{index}"]
-    effects = effect_filters(level, gate_db)
+    effects = effect_filters(level, gate_db, volume_db)
     if effects:
         cmd += ["-af", ",".join(effects)]
     return cmd + ["-ac", str(channels), "-ar", str(PEAK_SAMPLE_RATE), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]
@@ -790,23 +801,25 @@ def _cache_lock(key):
         return _locks.setdefault(key, threading.Lock())
 
 
-def track_audio(ffmpeg, source, info, index, cache_path, run=subprocess.run, level=False, gate_db=None):
+def track_audio(ffmpeg, source, info, index, cache_path, run=subprocess.run, level=False, gate_db=None,
+                volume_db=0.0):
     def make(partial):
         result = run(track_audio_command(ffmpeg, source, index, info["audio"][index]["codec"], partial, level,
-                                         gate_db),
+                                         gate_db, volume_db),
                      capture_output=True, text=True, errors="replace", **_no_window_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"Couldn't extract audio track {index + 1}: {result.stderr.strip()[-300:]}")
     return _cached(cache_path, make)
 
 
-def track_peaks(ffmpeg, source, index, cache_path, run=subprocess.run, level=False, channels=1, gate_db=None):
+def track_peaks(ffmpeg, source, index, cache_path, run=subprocess.run, level=False, channels=1, gate_db=None,
+                volume_db=0.0):
     """{"per_second", "peaks", "channels": [left peaks, right peaks]} - the
     loudest of both in "peaks", and "channels" only for a stereo track."""
     channels = 2 if channels >= 2 else 1
 
     def make(partial):
-        result = run(peaks_command(ffmpeg, source, index, level, channels, gate_db), capture_output=True,
+        result = run(peaks_command(ffmpeg, source, index, level, channels, gate_db, volume_db), capture_output=True,
                      **_no_window_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"Couldn't read audio track {index + 1}: {result.stderr.decode(errors='replace')[-300:]}")

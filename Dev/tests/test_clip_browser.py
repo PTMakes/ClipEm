@@ -313,7 +313,7 @@ def test_media_refuses_paths_outside_the_folder(server):
 def test_opening_an_editor(server, monkeypatch):
     opened = []
     editor = None
-    monkeypatch.setattr(clip_browser.editor_install, "custom_editor_path", lambda: editor)
+    monkeypatch.setattr(clip_browser.editor_install, "external_editor", lambda: editor)
     monkeypatch.setattr(clip_browser.editor_install, "open_in_editor",
                         lambda editor, path, log=None: opened.append((editor, os.path.basename(path))))
     body = json.dumps({"name": "a.mp4"}).encode()
@@ -347,6 +347,22 @@ def test_last_export_is_listed_with_its_clip(tmp_path):
     assert listed == {"a.mp4": {"name": "a-edit.mp4", "path": str(clips / "a-edit.mp4"), "time": 123},
                       "b.mp4": None, "a-edit.mp4": None}
     assert editor.last_exports(str(tmp_path)) == {}  # another folder's clips
+
+
+def test_exports_point_back_to_their_clip(tmp_path):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    for name in ("Replay 1.mp4", "Replay 1-edit.mp4", "Replay 1-discord-2.mp4", "Replay 1-1080p60.mp4",
+                 "Replay 1-best.mp4", "Funny moment.mp4", "Replay 2.mp4", "Replay 2-edition.mp4", "Lone-edit.mp4"):
+        _touch(clips, name, b"x", mtime=100)
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 exports_path=str(tmp_path / "exports.json"))
+    editor.record_export(str(clips / "Replay 2.mp4"), [str(clips / "Funny moment.mp4")], now=1)  # "Export As"
+    names = [p.name for p in clips.iterdir()]
+    assert editor.export_origins(str(clips), names) == {
+        "Replay 1-edit.mp4": "Replay 1.mp4", "Replay 1-discord-2.mp4": "Replay 1.mp4",
+        "Replay 1-1080p60.mp4": "Replay 1.mp4", "Funny moment.mp4": "Replay 2.mp4",
+    }  # not "-best" or "-edition" (not export names), nor an export whose clip is gone
 
 
 def test_export_as_goes_where_picked_and_can_be_shown(server, editor, tmp_path, monkeypatch):
@@ -505,3 +521,16 @@ def test_linux_trash_follows_the_freedesktop_layout(tmp_path, monkeypatch):
     assert sorted(p.name for p in (trash / "files").iterdir()) == ["my clip.2.mp4", "my clip.mp4"]
     info = (trash / "info" / "my clip.mp4.trashinfo").read_text()
     assert info == f"[Trash Info]\nPath={urllib.parse.quote(str(tmp_path / 'my clip.mp4'))}\nDeletionDate=2026-10-17T15:00:00\n"
+
+
+def test_which_editor_clips_are_edited_in():
+    kind, disabled, external = (editor_install.editor_kind, editor_install.editors_disabled,
+                                editor_install.external_editor)
+    assert kind({}) == "internal" and external({}) is None
+    old = {"custom_editor_path": "/usr/bin/kdenlive"}  # set before the choice existed
+    assert kind(old) == "external" and external(old) == "/usr/bin/kdenlive"
+    chosen_internal = dict(old, clip_editor="internal")
+    assert external(chosen_internal) is None  # its path is kept, just not used
+    off = dict(old, clip_editor="external", clip_editors_disabled=True)
+    assert disabled(off) and external(off) is None
+    assert external({"clip_editor": "external", "custom_editor_path": "  "}) is None

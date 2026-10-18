@@ -224,7 +224,12 @@ def test_level_runs_first_on_each_leveled_track_and_limits_the_mix():
     assert project["tracks"][1]["level"] is True and project["tracks"][2]["level"] is False
     graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
     mic = next(line for line in graph.split(";") if line.startswith("[0:a:1]"))
-    assert mic.index("loudnorm=I=-14:TP=-1.5") < mic.index("volume=3dB")  # leveled, then the user's gain
+    # The track's volume first, then Level Out Audio evens out the result - once.
+    assert mic.index("volume=3dB") < mic.index("loudnorm=I=-14:TP=-1.5") and mic.count("volume=3dB") == 1
+    muted = clip_edit.normalize_project(project, info)
+    muted["tracks"][1]["volume_db"] = clip_edit.MUTE_DB  # the slider's "muted" end still silences it
+    line = next(x for x in clip_edit.build_graph(muted, info, audio="mix")[0].split(";") if x.startswith("[0:a:1]"))
+    assert line.index("loudnorm") < line.index("volume=0")
     assert graph.count("loudnorm") == 1 and "alimiter" in graph
     project["tracks"][1]["level"] = False
     assert "alimiter" not in clip_edit.build_graph(project, info, audio="mix")[0]

@@ -31,6 +31,7 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # autostart entry (autostart.apply_boot_autostart).
 sys.path.insert(0, INSTALLER_DIR)
 import bug_report  # noqa: E402
+import editor_install  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
@@ -163,6 +164,19 @@ def run_in_background(root, work, on_done):
 
     threading.Thread(target=worker, daemon=True).start()
     root.after(100, poll)
+
+
+def indent_under_text(widget, checkbutton):
+    """Lines up a checkbox's sub-options with its text rather than its box:
+    the box's width (plus its gap) is whatever's left of the checkbox's
+    width after its text and right-hand padding."""
+    import tkinter.font as tkfont
+
+    checkbutton.update_idletasks()
+    font = tkfont.Font(font=checkbutton.cget("font"))
+    text_width = max(font.measure(line) for line in str(checkbutton.cget("text")).splitlines())
+    right = int(checkbutton.cget("padx")) + int(checkbutton.cget("bd")) + int(checkbutton.cget("highlightthickness"))
+    widget.grid_configure(padx=(max(0, checkbutton.winfo_reqwidth() - text_width - right), 0))
 
 
 def load_recording_settings(pending):
@@ -476,15 +490,20 @@ def main():
     # The "-small.mp4" copy (Scripts/clip_reexport.py) - as on Setup's
     # "Lower-Quality Re-export" page.
     reexport_var = tk.BooleanVar(value=reexport["enabled"])
-    tk.Checkbutton(
+    reexport_check = tk.Checkbutton(
         frame, text="Also save a smaller copy of each clip (\"-small.mp4\"), for sites\n"
                     "with a file size limit - the full-quality clip is always kept",
         variable=reexport_var, justify="left", command=lambda: on_reexport_toggle(),
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    )
+    reexport_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
-    tk.Label(frame, text="Target size:").grid(row=next_row, column=0, sticky="w")
-    size_row = tk.Frame(frame)
-    size_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    # Its options sit under its text, not its box - see indent_under_text().
+    reexport_box = tk.Frame(frame)
+    reexport_box.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+    tk.Label(reexport_box, text="Target size:").grid(row=0, column=0, sticky="w")
+    size_row = tk.Frame(reexport_box)
+    size_row.grid(row=0, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     target_mb_var = tk.StringVar(value=f"{reexport['target_mb']:g}")
     target_entry = tk.Entry(size_row, textvariable=target_mb_var, width=6)
     target_entry.pack(side="left")
@@ -495,18 +514,15 @@ def main():
     )
     recommended_button.pack(side="left", padx=(px(6), 0))
     tk.Label(size_row, text="(Discord's free upload limit)", fg="gray40").pack(side="left", padx=(px(4), 0))
-    next_row += 1
-    tk.Label(frame, text="Keep the last:").grid(row=next_row, column=0, sticky="w")
-    crop_row = tk.Frame(frame)
-    crop_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    tk.Label(reexport_box, text="Keep the last:").grid(row=1, column=0, sticky="w")
+    crop_row = tk.Frame(reexport_box)
+    crop_row.grid(row=1, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     crop_var = tk.StringVar(value=str(min(reexport["crop_seconds"], replay_seconds)))
     crop_spin = tk.Spinbox(crop_row, from_=1, to=max(1, replay_seconds), textvariable=crop_var, width=5)
     crop_spin.pack(side="left")
     tk.Label(crop_row, text=f"seconds (of the {replay_seconds} s replay buffer)").pack(side="left", padx=(px(3), 0))
-    next_row += 1
     bitrate_var = tk.StringVar()
-    tk.Label(frame, textvariable=bitrate_var, fg="gray40").grid(row=next_row, column=1, sticky="w", padx=(px(6), 0))
-    next_row += 1
+    tk.Label(reexport_box, textvariable=bitrate_var, fg="gray40").grid(row=2, column=1, sticky="w", padx=(px(6), 0))
 
     def reexport_values():
         """(target MB, crop seconds), or None if either isn't a number."""
@@ -703,12 +719,33 @@ def main():
     run_in_background(root, lambda: {"displays": setup.list_displays(), "audio": setup.list_audio_devices()},
                       on_devices)
 
-    # --- The clip editor's "Open in..." button: any editor the user has.
+    # --- Which editor the tray's editor item opens: ClipEm's own, the user's
+    # (editor_install.py), or none at all.
     tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )
     next_row += 1
-    tk.Label(frame, text="External editor:").grid(row=next_row, column=0, sticky="w")
+    editors_off_var = tk.BooleanVar(value=editor_install.editors_disabled(run_config))
+    tk.Checkbutton(
+        frame, text="Disable clip editors (no editor in the tray menu)", variable=editors_off_var,
+        command=lambda: show_editor_choice(),
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+    editor_kind_var = tk.StringVar(value=editor_install.editor_kind(run_config))
+    kind_row = tk.Frame(frame)
+    kind_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(2), 0))
+    tk.Label(kind_row, text="Edit clips in:").pack(side="left")
+    kind_buttons = [
+        tk.Radiobutton(kind_row, text="ClipEm's editor", value=editor_install.INTERNAL, variable=editor_kind_var,
+                       command=lambda: show_editor_choice()),
+        tk.Radiobutton(kind_row, text="External editor", value=editor_install.EXTERNAL, variable=editor_kind_var,
+                       command=lambda: show_editor_choice()),
+    ]
+    for button in kind_buttons:
+        button.pack(side="left", padx=(px(6), 0))
+    next_row += 1
+    editor_label = tk.Label(frame, text="External editor:")
+    editor_label.grid(row=next_row, column=0, sticky="w")
     editor_row = tk.Frame(frame)
     editor_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     editor_path_var = tk.StringVar(value=run_config.get("custom_editor_path") or "")
@@ -739,6 +776,31 @@ def main():
     tk.Button(editor_row, text="Clear", command=lambda: editor_path_var.set("")).pack(
         side="left", padx=(px(4), 0)
     )
+    next_row += 1
+
+    def show_editor_choice():
+        """The picker only for "External editor"; neither choice while
+        editors are off."""
+        off = editors_off_var.get()
+        for button in kind_buttons:
+            button.config(state="disabled" if off else "normal")
+        if not off and editor_kind_var.get() == editor_install.EXTERNAL:
+            editor_label.grid()
+            editor_row.grid()
+        else:
+            editor_label.grid_remove()
+            editor_row.grid_remove()
+
+    show_editor_choice()
+
+    tk.Label(frame, text="Tray Menu", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    recording_item_var = tk.BooleanVar(value=bool(run_config.get("show_recording_item", True)))
+    tk.Checkbutton(
+        frame, text="Show \"Start Recording\" in the tray menu", variable=recording_item_var,
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
 
     tk.Label(frame, text="Scripts", font=("", 10, "bold")).grid(
@@ -1287,6 +1349,10 @@ def main():
         next_row += 1
 
     def on_save():
+        if (not editors_off_var.get() and editor_kind_var.get() == editor_install.EXTERNAL
+                and not editor_path_var.get().strip()):
+            messagebox.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.", parent=root)
+            return
         try:
             port_val = obs_config.validate_port(port_var.get().strip())
         except ValueError:
@@ -1378,6 +1444,9 @@ def main():
             # Read by the tray widget each poll - see disk_space.py.
             run_config["disk_space_warnings_enabled"] = bool(disk_warnings_var.get())
             run_config["custom_editor_path"] = editor_path_var.get().strip()
+            run_config["clip_editor"] = editor_kind_var.get()
+            run_config["clip_editors_disabled"] = bool(editors_off_var.get())
+            run_config["show_recording_item"] = bool(recording_item_var.get())  # read by the tray menu
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
             apply_boot_autostart(run_config["autostart_obs"])
@@ -1437,6 +1506,7 @@ def main():
 
     # Size to fit the settings' width, but only a limited height - the rest
     # scrolls. Never taller than the screen, so the footer stays on it.
+    indent_under_text(reexport_box, reexport_check)
     root.update_idletasks()
     width = frame.winfo_reqwidth() + scrollbar.winfo_reqwidth()
     content_height = frame.winfo_reqheight() + footer.winfo_reqheight() + px(2)

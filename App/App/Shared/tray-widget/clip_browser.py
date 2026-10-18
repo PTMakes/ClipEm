@@ -82,6 +82,9 @@ EDITS_DIR = os.path.join(CACHE_DIR, "edits")
 TRACK_AUDIO_DIR = os.path.join(CACHE_DIR, "track-audio")
 PEAKS_DIR = os.path.join(CACHE_DIR, "peaks")
 PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
+# What start_export() adds to a clip's name - how an export is told apart
+# from a clip when there's no record of it (exports.json keeps the newest).
+EXPORT_SUFFIX_RE = re.compile(r"-(?:edit|discord|\d{3,4}p\d*)(?:-\d+)?$")
 # Each clip's newest export, for the clip list's "Last exported" link:
 # {clip path: {"file": export path, "time": epoch seconds}}.
 EXPORTS_PATH = os.path.join(CACHE_DIR, "exports.json")
@@ -268,7 +271,8 @@ def _no_window_kwargs():
 
 
 def editors_info():
-    custom = editor_install.custom_editor_path()
+    # Only when clips are edited in the user's editor (Settings > Clip Editor).
+    custom = editor_install.external_editor()
     return {
         "custom": {"label": editor_install.editor_label(custom)} if custom else None,
     }
@@ -414,6 +418,30 @@ class Editor:
                                                  "time": entry.get("time")}
         return found
 
+    def export_origins(self, folder, names):
+        """{export's file name: its original clip's name} for the clips in
+        folder (names) that are exports of another one there: as recorded
+        when exported (exports.json - newest export only), else by the
+        names exports get (<clip>-edit, -discord, -1080p60, ... -2)."""
+        root = os.path.realpath(folder)
+        names = set(names)
+        origins = {}
+        exports = load_json(self.exports_path, {})
+        for clip, entry in (exports.items() if isinstance(exports, dict) else ()):
+            if not isinstance(entry, dict):
+                continue
+            path = str(entry.get("file"))
+            origin, export = os.path.basename(clip), os.path.basename(path)
+            if os.path.dirname(clip) == root and os.path.dirname(path) == root and {origin, export} <= names:
+                origins[export] = origin
+        stems = {os.path.splitext(name)[0]: name for name in names}
+        for name in names - set(origins):
+            stem = os.path.splitext(name)[0]
+            match = EXPORT_SUFFIX_RE.search(stem)
+            if match and stem[:match.start()] in stems:
+                origins[name] = stems[stem[:match.start()]]
+        return origins
+
     def is_recorded_export(self, path):
         """Whether path is an export this editor wrote (exports.json) - the
         only files outside the clips folder it will open or show."""
@@ -423,15 +451,19 @@ class Editor:
         path = os.path.realpath(path)
         return any(isinstance(e, dict) and e.get("file") == path for e in exports.values())
 
-    def track_audio(self, source, index, level=False, gate_db=None):
+    def track_audio(self, source, index, level=False, gate_db=None, volume_db=0.0):
         info = self.info(source)
-        path = os.path.join(self.track_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}.m4a")
-        return clip_edit.track_audio(self.ffmpeg, source, info, index, path, level=level, gate_db=gate_db)
+        suffix = _effects_suffix(level, gate_db, volume_db)
+        path = os.path.join(self.track_dir, f"{self._key(source)}-{index}{suffix}.m4a")
+        return clip_edit.track_audio(self.ffmpeg, source, info, index, path, level=level, gate_db=gate_db,
+                                     volume_db=volume_db)
 
-    def peaks(self, source, index, level=False, gate_db=None):
+    def peaks(self, source, index, level=False, gate_db=None, volume_db=0.0):
         # "-v3": per-channel, 16-bit peaks (older cache files are 8-bit, or combined).
-        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}-v3.json")
+        suffix = _effects_suffix(level, gate_db, volume_db)
+        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}{suffix}-v3.json")
         return clip_edit.track_peaks(self.ffmpeg, source, index, path, level=level, gate_db=gate_db,
+                                     volume_db=volume_db,
                                      channels=clip_edit.channel_count(self.info(source), index))
 
     def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None, solo=None,
@@ -486,9 +518,10 @@ class Editor:
         return self.export_job.status
 
 
-def _effects_suffix(level, gate_db):
+def _effects_suffix(level, gate_db, volume_db=0.0):
     """Cache file names' part for a track's preview effects."""
-    return ("-level" if level else "") + (f"-gate{-gate_db}" if gate_db is not None else "")
+    return (("-level" if level else "") + (f"-gate{-gate_db}" if gate_db is not None else "")
+            + (f"-vol{volume_db:g}" if volume_db else ""))
 
 
 def export_as_target(path, clip_path, source):
@@ -802,10 +835,14 @@ class Handler(BaseHTTPRequestHandler):
         elif route == "api/clips":
             clips = list_clips(folder)
             exports = self.server.editor.last_exports(folder)
+            origins = self.server.editor.export_origins(folder, [clip["name"] for clip in clips])
+            mtimes = {clip["name"]: clip["mtime"] for clip in clips}
             for clip in clips:
                 path = os.path.join(folder, clip["name"])
                 clip["duration"] = self.server.thumbnailer.info(path).get("duration")
                 clip["last_export"] = exports.get(clip["name"])
+                origin = origins.get(clip["name"])
+                clip["exported_from"] = {"name": origin, "time": mtimes[origin]} if origin else None
             self._json({"folder": folder, "clips": clips})
         elif route == "api/editors":
             self._json(editors_info())
@@ -829,13 +866,21 @@ class Handler(BaseHTTPRequestHandler):
                 level = self._query("level") == "1"
                 gate = self._query("gate")
                 gate_db = clip_edit._gate_db(int(gate)) if gate and gate.lstrip("-").isdigit() else None
+                # The volume before Level Out Audio (clip_edit.pre_level_db): a
+                # whole number of half dB within the slider's range.
+                try:
+                    volume_db = round(float(self._query("vol") or 0) * 2) / 2 if level else 0.0
+                except ValueError:
+                    volume_db = 0.0
+                volume_db = volume_db if clip_edit.MUTE_DB < volume_db <= clip_edit.MAX_GAIN_DB else 0.0
                 editor = self.server.editor
                 if found and ((level and not editor.can_level()) or (gate_db is not None and not editor.can_gate())):
                     self._json({"error": "ClipEm's ffmpeg can't do that effect - update ClipEm."}, 409)
                 elif found and route.startswith("track/"):
-                    self._send_file(editor.track_audio(*found, level=level, gate_db=gate_db), cache=True)
+                    self._send_file(editor.track_audio(*found, level=level, gate_db=gate_db, volume_db=volume_db),
+                                    cache=True)
                 elif found:
-                    self._json(editor.peaks(*found, level=level, gate_db=gate_db))
+                    self._json(editor.peaks(*found, level=level, gate_db=gate_db, volume_db=volume_db))
             except Exception as exc:
                 log.exception(f"{route} failed")
                 self._json({"error": str(exc)}, 500)
@@ -963,9 +1008,9 @@ class Handler(BaseHTTPRequestHandler):
         if not path:
             self._json({"error": "That clip isn't there any more."}, 404)
             return
-        editor = editor_install.custom_editor_path()
+        editor = editor_install.external_editor()
         if not editor:
-            self._json({"error": "No editor is set - choose one in ClipEm's Settings."}, 400)
+            self._json({"error": "No external editor is set - choose one in ClipEm's Settings."}, 400)
             return
         log.info(f"Opening {path} in {editor}")
         editor_install.open_in_editor(editor, path, log=log.info)

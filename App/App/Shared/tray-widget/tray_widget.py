@@ -38,6 +38,7 @@ else:
     import pystray
 
 import autostart  # noqa: E402 - from App/Shared/Installer, see sys.path above
+import editor_install  # noqa: E402
 import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
@@ -367,10 +368,10 @@ class TrayApp:
                 visible=self._clip_folder_missing,
             ),
             pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip),
-            pystray.MenuItem("Open Clip Editor", self._open_clip_editor),
+            pystray.MenuItem(self._clip_editor_label, self._open_clip_editor, visible=self._clip_editor_shown),
             pystray.MenuItem("Open Clips Folder", self._open_clips_folder),
             pystray.MenuItem(self._replay_label, self._toggle_replay_buffer),
-            pystray.MenuItem(self._recording_label, self._toggle_recording),
+            pystray.MenuItem(self._recording_label, self._toggle_recording, visible=self._recording_shown),
             pystray.MenuItem(self._obs_window_label, self._toggle_obs_window),
             pystray.MenuItem("Settings...", self._open_settings),
             pystray.MenuItem(
@@ -449,10 +450,47 @@ class TrayApp:
             log.warning(f"Failed to save clip: {exc}")
             self._notify(f"Failed to save clip: {exc}")
 
+    # Settings > Clip Editor: ClipEm's editor, the user's own (opening the
+    # newest clip in it), or no editor item at all.
+    def _recording_shown(self, item):
+        """Settings > Tray Menu can hide Start/Stop Recording - but never
+        while a recording is running, or it couldn't be stopped from here."""
+        return self.recording_active or load_run_config().get("show_recording_item", True)
+
+    def _clip_editor_shown(self, item):
+        return not editor_install.editors_disabled()
+
+    def _clip_editor_label(self, item):
+        editor = editor_install.external_editor()
+        return f"Open in {editor_install.editor_label(editor)}" if editor else "Open Clip Editor"
+
     def _open_clip_editor(self, icon, item):
+        editor = editor_install.external_editor()
+        if editor:
+            threading.Thread(target=self._open_newest_clip_in, args=(editor,), daemon=True).start()
+            return
         if not editor_window.installed():
             self._notify("Setting up the clip editor - downloading its window (about 130 MB)...")
         self._start_helper(CLIP_BROWSER_SCRIPT, "the clip editor")
+
+    def _open_newest_clip_in(self, editor):
+        """The newest clip - not an export of one - in the user's editor, as
+        its "-tracks.mkv" (every audio track) when there is one."""
+        import clip_browser  # only needed here, and it's sizeable
+
+        folder = obs_config.load_clip_folder()
+        clips = [c for c in clip_browser.list_clips(folder)
+                 if not clip_browser.EXPORT_SUFFIX_RE.search(os.path.splitext(c["name"])[0])]
+        if not clips:
+            self._notify("No clips yet - save one first.")
+            return
+        path = clip_browser.file_to_edit(folder, clips[0]["name"])
+        try:
+            log.info(f"Opening {path} in {editor}")
+            editor_install.open_in_editor(editor, path, log=log.info)
+        except Exception as exc:
+            log.warning(f"Couldn't open {path} in {editor}: {exc}")
+            self._notify(f"Couldn't open the clip in {editor_install.editor_label(editor)} - see logs/tray.log.")
 
     def _clip_folder_missing(self, item):
         return self.connected and self.clip_folder.missing_dir is not None
@@ -534,6 +572,13 @@ class TrayApp:
 
     def _watch_helper(self, proc, what, stderr_path):
         code = proc.wait()
+        if not self._stopping_children:
+            # Settings may have changed what the menu shows (the editor item,
+            # Start Recording, the hotkey in "Save Clip").
+            try:
+                self.icon.update_menu()
+            except Exception as exc:
+                log.warning(f"Couldn't refresh the tray menu: {exc!r}")
         if code == 0 or self._stopping_children:
             return
         try:

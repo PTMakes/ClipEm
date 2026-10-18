@@ -95,22 +95,17 @@ function clipItem(clip) {
   size.className = "size muted";
   const badges = document.createElement("span");
   badges.className = "badges";
-  // The clip's newest export, shown in its folder - see updateItem. On
-  // its own row under the thumbnail: the text beside it is too narrow.
-  const exported = document.createElement("button");
-  exported.className = "clip-export";
-  exported.innerHTML = LINK_ICON + "<span></span>";
-  exported.addEventListener("click", async (e) => {
-    e.stopPropagation();
-    const name = exported.dataset.file;
-    if (!name) return;
+  // Links on their own row under the thumbnail (the text beside it is too
+  // narrow) - see updateItem: the clip's newest export, shown in its
+  // folder, and for an export, the clip it was made from.
+  const exported = linkButton("clip-export", async () => {
     try {
-      await api("api/reveal", { name, path: exported.dataset.path });
+      await api("api/reveal", { name: exported.dataset.file, path: exported.dataset.path });
     } catch (err) {
       setStatus(err.message, true);
     }
   });
-  exported.addEventListener("keydown", (e) => e.stopPropagation());
+  const origin = linkButton("clip-origin", () => highlightClip(origin.dataset.clip));
   text.append(when, size, badges);
 
   const remove = document.createElement("button");
@@ -126,7 +121,7 @@ function clipItem(clip) {
 
   const exportRow = document.createElement("div");
   exportRow.className = "clip-export-row";
-  exportRow.append(exported);
+  exportRow.append(exported, origin);
   li.append(thumb, text, exportRow, remove);
   li.addEventListener("click", () => select(clip.name));
   li.addEventListener("keydown", (e) => {
@@ -139,9 +134,43 @@ function clipItem(clip) {
   return li;
 }
 
+function linkButton(className, onClick) {
+  const button = document.createElement("button");
+  button.className = `clip-export ${className}`;
+  button.innerHTML = LINK_ICON + "<span></span>";
+  button.addEventListener("click", (e) => {
+    e.stopPropagation();
+    onClick();
+  });
+  button.addEventListener("keydown", (e) => e.stopPropagation());
+  return button;
+}
+
+// Scrolls a clip in the list into view and makes it flash (not selected).
+function highlightClip(name) {
+  const li = [...list.children].find((item) => item.dataset.name === name);
+  if (!li) return;
+  li.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  li.classList.remove("flash");
+  void li.offsetWidth; // restart the animation
+  li.classList.add("flash");
+}
+
+function shortWhen(seconds) {
+  return new Date(seconds * 1000).toLocaleString(undefined,
+    { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
 function updateItem(li, clip) {
-  li.querySelector(".when").textContent = formatWhen(clip.mtime);
-  li.querySelector(".size").textContent = formatSize(clip.size);
+  // An export goes by its file name (they'd all show their export time);
+  // its date moves to the size line.
+  const from = clip.exported_from;
+  const stem = clip.name.replace(/\.[^.]+$/, "");
+  li.querySelector(".when").textContent = from ? stem : formatWhen(clip.mtime);
+  li.querySelector(".when").title = from ? clip.name : "";
+  li.querySelector(".when").classList.toggle("named", !!from);
+  li.querySelector(".size").textContent = from ? `${formatSize(clip.size)} · ${shortWhen(clip.mtime)}`
+    : formatSize(clip.size);
   li.querySelector(".length").textContent = formatDuration(clip.duration);
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
@@ -154,16 +183,22 @@ function updateItem(li, clip) {
       badges.append(badge);
     }
   }
-  const exported = li.querySelector(".clip-export");
+  const exported = li.querySelector(".clip-export:not(.clip-origin)");
+  const origin = li.querySelector(".clip-origin");
   const last = clip.last_export;
   exported.hidden = !last;
-  exported.parentElement.hidden = !last;
+  origin.hidden = !from;
+  exported.parentElement.hidden = !last && !from;
   if (last) {
     exported.dataset.file = last.name;
     exported.dataset.path = last.path;
-    exported.title = `Show ${last.name} in its folder`;
-    exported.querySelector("span").textContent = `Last exported ${new Date(last.time * 1000).toLocaleString(
-      undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+    exported.title = `Show ${last.name} in its folder (exported ${shortWhen(last.time)})`;
+    exported.querySelector("span").textContent = `Last Exported As ${last.name}`;
+  }
+  if (from) {
+    origin.dataset.clip = from.name;
+    origin.title = `Show the clip this was exported from: ${from.name}`;
+    origin.querySelector("span").textContent = `Exported From ${shortWhen(from.time)}`;
   }
   li.classList.toggle("selected", clip.name === state.selected);
 }

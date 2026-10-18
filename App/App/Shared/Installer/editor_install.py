@@ -2,6 +2,11 @@
 The external editor ClipEm's clip editor (tray-widget/clip_browser.py) opens clips
 in: the user's own editor - a path set in the tray's Settings
 (run_config.json's "custom_editor_path").
+
+Which editor clips are edited in is the Settings' choice too (run_config.json):
+"clip_editor" - INTERNAL (ClipEm's editor, the tray's "Open Clip Editor")
+or EXTERNAL (the tray opens the newest clip in the user's editor) - and
+"clip_editors_disabled", which takes the editor out of the tray menu.
 """
 
 import os
@@ -20,8 +25,35 @@ class EditorError(Exception):
     pass
 
 
+INTERNAL, EXTERNAL = "internal", "external"
+
+
 def custom_editor_path():
     path = (load_run_config().get("custom_editor_path") or "").strip()
+    return path or None
+
+
+def editor_kind(config=None):
+    """INTERNAL or EXTERNAL. Installs from before the choice existed that had
+    an editor set get EXTERNAL - that's what they were using it for."""
+    config = load_run_config() if config is None else config
+    kind = config.get("clip_editor")
+    if kind in (INTERNAL, EXTERNAL):
+        return kind
+    return EXTERNAL if (config.get("custom_editor_path") or "").strip() else INTERNAL
+
+
+def editors_disabled(config=None):
+    config = load_run_config() if config is None else config
+    return bool(config.get("clip_editors_disabled"))
+
+
+def external_editor(config=None):
+    """The user's editor when clips are edited in it, else None."""
+    config = load_run_config() if config is None else config
+    if editors_disabled(config) or editor_kind(config) != EXTERNAL:
+        return None
+    path = (config.get("custom_editor_path") or "").strip()
     return path or None
 
 

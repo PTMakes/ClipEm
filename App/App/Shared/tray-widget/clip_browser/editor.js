@@ -320,6 +320,7 @@ async function loadEditor(name) {
 function effectsQuery(track) {
   const params = [];
   if (track.level) params.push("level=1");
+  if (preLevelDb(track)) params.push(`vol=${preLevelDb(track)}`);
   if (track.gate_db != null) params.push(`gate=${track.gate_db}`);
   return params.length ? `?${params.join("&")}` : "";
 }
@@ -1126,10 +1127,17 @@ function skipRemoved() {
   }
 }
 
+// With Level Out Audio on, the track's volume goes before it (as
+// clip_edit.pre_level_db): it's in the audio the server renders, not added here.
+function preLevelDb(track) {
+  return track.level && track.volume_db > MUTE_DB ? track.volume_db : 0;
+}
+
 // The gain on one output channel (0 left, 1 right) at t.
 function gainAt(track, t, channel) {
   if (track.muted) return 0;
-  let gain = dbToGain(track.volume_db);
+  // Level Out Audio on: the volume is already in the rendered audio.
+  let gain = track.level && track.volume_db > MUTE_DB ? 1 : dbToGain(track.volume_db);
   for (const region of track.regions) {
     const here = region.channel == null || region.channel === channel;
     if (here && t >= region.start && t < region.end) gain *= dbToGain(region.db);
