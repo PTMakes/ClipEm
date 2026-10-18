@@ -5,10 +5,11 @@
 //   magnifier buttons that show on hover; "Full frame" goes back. Drag to
 //   pan while zoomed (or with the middle button).
 // - Crop (saved with the edit, applied on export - clip_edit.normalize_crop):
-//   drag a corner or the top/left/right edge's handle. The shape stays the
-//   video's own (16:9 for most captures) and snaps to standard sizes (720p,
-//   480p...) unless unlocked - with the lock button near the handles, or by
-//   holding Ctrl, Alt or Shift while dragging. Drag inside a crop to move it.
+//   the Crop button shows the handles; drag a corner or an edge's handle (the
+//   bottom edge's shows once the crop is clear of the frame's bottom). The
+//   shape stays the video's own (16:9 for most captures) and snaps to standard
+//   sizes (720p, 480p...) unless unlocked - with the lock button beside Crop,
+//   or by holding Ctrl, Alt or Shift while dragging. Drag inside a crop to move it.
 // Crop coordinates are the source video's pixels, as the export uses them.
 
 const stage = $("stage");
@@ -16,16 +17,17 @@ const wrap = $("player-wrap");
 const cropBox = $("crop-box");
 const cropSize = $("crop-size");
 const cropLock = $("crop-lock");
+const cropToggle = $("crop-toggle");
 
 const view = { scale: 1, x: 0, y: 0, width: 0, height: 0, name: null };
 const ZOOM_STEP = 1.25;
 const MAX_ZOOM = 8;
 const MIN_CROP = 64;
 const SNAP_SCREEN_PX = 8; // how close (on screen) a size has to be to snap
-const NEAR_HANDLE_PX = 56;
 const STANDARD_HEIGHTS = [2160, 1440, 1080, 900, 720, 540, 480, 360, 240];
 const STANDARD_WIDTHS = [3840, 2560, 1920, 1600, 1280, 960, 854, 640, 426];
 ed.cropLocked = true;
+ed.cropping = false; // crop mode: the handles show
 
 const MAGNIFIER = '<svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="6.75" cy="6.75" r="4.25"/><path d="M10 10l4 4"/>';
 $("zoom-in").innerHTML = MAGNIFIER + '<path d="M4.75 6.75h4M6.75 4.75v4"/></svg>';
@@ -132,7 +134,9 @@ function renderCrop() {
     view.name = ed.name;
     view.scale = 1;
     view.x = view.y = 0;
+    ed.cropping = false;
   }
+  if (!ed.canCrop) ed.cropping = false;
   fitStage();
   const [width, height] = sourceSize();
   const rect = cropRect();
@@ -142,11 +146,17 @@ function renderCrop() {
   cropBox.style.height = `${(rect.h / height) * 100}%`;
   placeShades(ed.crop, width, height);
   cropBox.classList.toggle("cropped", !!ed.crop);
-  cropBox.classList.toggle("can-crop", !!ed.canCrop);
+  cropBox.classList.toggle("at-bottom", rect.y + rect.h >= height - 1);
+  cropBox.classList.toggle("cropping", ed.cropping);
+  wrap.classList.toggle("cropping", ed.cropping);
+  cropToggle.hidden = !ed.canCrop;
+  cropToggle.setAttribute("aria-pressed", String(ed.cropping));
+  cropToggle.title = ed.cropping ? "Done cropping - hide the crop handles" : "Show the crop handles";
+  cropLock.hidden = !ed.cropping;
   cropSize.textContent = `${rect.w} × ${rect.h}`;
   $("crop-reset").hidden = !ed.crop;
   const ratio = aspectLabel(width, height);
-  cropLock.innerHTML = ed.cropLocked ? LOCKED_ICON : UNLOCKED_ICON;
+  cropLock.innerHTML = (ed.cropLocked ? LOCKED_ICON : UNLOCKED_ICON) + `<span>${ratio}</span>`;
   cropLock.classList.toggle("unlocked", !ed.cropLocked);
   cropLock.title = ed.cropLocked
     ? `Crop shape locked to ${ratio} - click to unlock (or hold Ctrl, Alt or Shift while dragging)`
@@ -177,22 +187,14 @@ function aspectLabel(width, height) {
   return label.length > 7 ? `${(width / height).toFixed(2)}:1` : label;
 }
 
-cropLock.addEventListener("pointerdown", (e) => e.stopPropagation());
-cropLock.addEventListener("click", (e) => {
-  e.stopPropagation();
+cropLock.addEventListener("click", () => {
   ed.cropLocked = !ed.cropLocked;
   renderCrop();
 });
-
-// The lock shows while the pointer is near a handle.
-wrap.addEventListener("pointermove", (e) => {
-  const near = !!ed.canCrop && [...cropBox.querySelectorAll(".crop-handle")].some((handle) => {
-    const r = handle.getBoundingClientRect();
-    return Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) < NEAR_HANDLE_PX;
-  });
-  cropBox.classList.toggle("near-handle", near);
+cropToggle.addEventListener("click", () => {
+  ed.cropping = !ed.cropping;
+  renderCrop();
 });
-wrap.addEventListener("pointerleave", () => cropBox.classList.remove("near-handle"));
 
 // The closest of choices within tolerance of value, else value.
 function snapTo(value, choices, tolerance) {
@@ -208,7 +210,7 @@ function snapTo(value, choices, tolerance) {
   return best;
 }
 
-// The crop rectangle after dragging `edge` (n, w, e, nw, ne, sw, se) by
+// The crop rectangle after dragging `edge` (n, s, w, e, nw, ne, sw, se) by
 // (dx, dy) source pixels from `start`, inside a width x height frame.
 function resizeCrop(start, edge, dx, dy, free, width, height, snapPx) {
   let left = start.x;
@@ -301,7 +303,7 @@ function pressBox(e) {
   trackPointer(e, (ev) => {
     if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < DRAG_THRESHOLD_PX) return;
     if (!moving) {
-      moving = ed.crop && ed.canCrop ? "crop" : view.scale > 1 ? "pan" : "none";
+      moving = ed.crop && ed.cropping ? "crop" : view.scale > 1 ? "pan" : "none";
       if (moving === "crop") beginEdit();
       if (moving === "pan") {
         pan(ev);
@@ -327,7 +329,7 @@ cropBox.addEventListener("pointerdown", (e) => {
   e.preventDefault();
   e.stopPropagation();
   const handle = e.target.closest(".crop-handle");
-  if (handle && ed.canCrop) dragHandle(e, handle.dataset.edge);
+  if (handle && ed.cropping) dragHandle(e, handle.dataset.edge);
   else pressBox(e);
 });
 

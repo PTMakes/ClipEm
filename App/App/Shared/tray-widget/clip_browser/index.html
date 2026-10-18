@@ -49,17 +49,23 @@
             <div class="crop-handle" data-edge="w"></div>
             <div class="crop-handle" data-edge="e"></div>
             <div class="crop-handle" data-edge="sw"></div>
+            <div class="crop-handle" data-edge="s"></div>
             <div class="crop-handle" data-edge="se"></div>
             <span id="crop-size"></span>
-            <button id="crop-lock" class="overlay-button"></button>
           </div>
         </div>
       </div>
       <div id="zoom-controls">
-        <button id="zoom-in" class="overlay-button" title="Zoom in (mouse wheel)" aria-label="Zoom in"></button>
-        <button id="zoom-out" class="overlay-button" title="Zoom out (mouse wheel)" aria-label="Zoom out"></button>
-        <button id="zoom-fit" class="overlay-button" title="Full frame" aria-label="Full frame"></button>
-        <button id="crop-reset" class="overlay-button" title="Remove the crop" hidden>Uncrop</button>
+        <div id="crop-controls">
+          <button id="crop-toggle" class="overlay-button" title="Show the crop handles" aria-pressed="false">Crop</button>
+          <button id="crop-lock" class="overlay-button" hidden></button>
+        </div>
+        <div>
+          <button id="zoom-in" class="overlay-button" title="Zoom in (mouse wheel)" aria-label="Zoom in"></button>
+          <button id="zoom-out" class="overlay-button" title="Zoom out (mouse wheel)" aria-label="Zoom out"></button>
+          <button id="zoom-fit" class="overlay-button" title="Full frame" aria-label="Full frame"></button>
+          <button id="crop-reset" class="overlay-button" title="Remove the crop" hidden>Uncrop</button>
+        </div>
       </div>
       <canvas id="meter" title="Preview level (RMS, dBFS) - what you hear, after the track edits" hidden></canvas>
       <p id="no-selection" class="muted">Pick a clip on the left.</p>
@@ -88,7 +94,7 @@
           <span class="muted small">Custom</span>
           <select id="custom-height" title="Resolution"></select>
           <select id="custom-fps" title="Frame rate"></select>
-          <select id="custom-bitrate" title="Bitrate (estimated file size)"></select>
+          <select id="custom-bitrate" title="Bitrate (largest file size - simple footage comes out smaller)"></select>
           <button id="export-custom" class="primary" title="Export with these settings - choose where to save it">Export As...</button>
         </div>
         <div class="spacer"></div>

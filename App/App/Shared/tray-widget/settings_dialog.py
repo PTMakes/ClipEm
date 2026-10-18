@@ -839,36 +839,35 @@ def main():
     )
     next_row += 1
 
-    # One choice for both: the tray widget is required, so it always starts
-    # at boot alongside OBS.
-    autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
     tk.Label(frame, text="Autostart with PC boot", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
     )
     next_row += 1
 
-    tk.Checkbutton(
-        frame, text="Start ClipEm (OBS and the tray icon) when the PC boots", variable=autostart_var
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
-
-    # Install/Uninstall act straight away (no Save needed) on the OS's
-    # autostart entry itself - including ones left by another ClipEm folder.
-    # Only the button that applies is shown: Install when this folder has
-    # no entry, Uninstall when there's one to remove (both only when the
-    # only entries start another ClipEm folder).
+    # The buttons act straight away (no Save needed) on the OS's autostart
+    # entry, which starts ClipEm (OBS and the tray icon - one choice for
+    # both, as the tray widget is required). Only the buttons that apply are
+    # shown: Install when this folder has no entry, else Uninstall - and
+    # one for entries left by another ClipEm folder (or an older version).
     autostart_status_var = tk.StringVar()
     autostart_row = tk.Frame(frame)
     install_button = tk.Button(autostart_row, text="Install Autostart")
     uninstall_button = tk.Button(autostart_row, text="Uninstall Autostart")
+    uninstall_others_button = tk.Button(autostart_row)
 
-    def show_autostart_buttons(show_install, show_uninstall):
+    def show_autostart_buttons(show_install, show_uninstall, others=0):
         install_button.pack_forget()
         uninstall_button.pack_forget()
+        uninstall_others_button.pack_forget()
         if show_install:
             install_button.pack(side="left", padx=(0, px(4)))
         if show_uninstall:
             uninstall_button.pack(side="left", padx=(0, px(4)))
+        if others:
+            uninstall_others_button.configure(
+                text=f"Uninstall {others} other detected ClipEm autostart entr{'y' if others == 1 else 'ies'}"
+            )
+            uninstall_others_button.pack(side="left", padx=(0, px(4)))
 
     def show_autostart_status(then=None):
         """Looks the entries up in the background - on Windows that runs
@@ -888,21 +887,21 @@ def main():
             if others:
                 text += f" (+{others} from another ClipEm folder)"
             autostart_status_var.set(f"Autostart entry: {text}")
-            show_autostart_buttons(not ours, bool(entries))
+            show_autostart_buttons(not ours, ours, others)
             if then:
                 then(entries)
 
         run_in_background(root, find_autostart_entries, on_entries)
 
-    def save_autostart_flags():
+    def save_autostart_flags(enabled):
+        """What run.py --boot starts (the entry runs it)."""
         config = load_run_config()
-        config["autostart_obs"] = config["autostart_tray"] = bool(autostart_var.get())
+        config["autostart_obs"] = config["autostart_tray"] = enabled
         save_run_config(config)
 
     def on_install_autostart():
-        autostart_var.set(True)
         try:
-            save_autostart_flags()
+            save_autostart_flags(True)
             apply_boot_autostart(True)
         except Exception as exc:
             messagebox.showerror("Install Autostart", f"Couldn't install autostart: {exc}", parent=root)
@@ -917,27 +916,35 @@ def main():
         show_autostart_status(then=check_installed)
 
     def on_uninstall_autostart():
-        entries = find_autostart_entries()
-        to_remove = [entry for entry in entries if entry["this_install"]]
-        others = [entry for entry in entries if not entry["this_install"]]
-        if others and messagebox.askyesno(
-            "Uninstall Autostart",
-            "These ClipEm autostart entries start another ClipEm folder (or an older version):\n\n"
-            + "\n".join(f"  \u2022 {describe_autostart_entry(entry)}" for entry in others)
-            + "\n\nRemove them too?",
-            parent=root,
-        ):
-            to_remove += others
-        autostart_var.set(False)
         try:
-            save_autostart_flags()
-            remove_autostart_entries(to_remove)
+            save_autostart_flags(False)
+            remove_autostart_entries([entry for entry in find_autostart_entries() if entry["this_install"]])
         except Exception as exc:
             messagebox.showerror("Uninstall Autostart", f"Couldn't uninstall autostart: {exc}", parent=root)
         show_autostart_status()
 
+    def on_uninstall_other_autostarts():
+        try:
+            others = [entry for entry in find_autostart_entries() if not entry["this_install"]]
+        except Exception as exc:
+            messagebox.showerror("Uninstall Autostart", f"Couldn't look up the autostart entries: {exc}", parent=root)
+            return
+        if others and messagebox.askyesno(
+            "Uninstall Autostart",
+            "These ClipEm autostart entries start another ClipEm folder (or an older version):\n\n"
+            + "\n".join(f"  \u2022 {describe_autostart_entry(entry)}" for entry in others)
+            + "\n\nRemove them?",
+            parent=root,
+        ):
+            try:
+                remove_autostart_entries(others)
+            except Exception as exc:
+                messagebox.showerror("Uninstall Autostart", f"Couldn't remove them: {exc}", parent=root)
+        show_autostart_status()
+
     install_button.configure(command=on_install_autostart)
     uninstall_button.configure(command=on_uninstall_autostart)
+    uninstall_others_button.configure(command=on_uninstall_other_autostarts)
     autostart_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
     next_row += 1
     tk.Label(frame, textvariable=autostart_status_var, fg="gray40").grid(
@@ -1453,7 +1460,6 @@ def main():
             # Fresh copy: the tray widget writes to this file too (see
             # obs_config.set_capture_display_user_changed).
             run_config = load_run_config()
-            run_config["autostart_obs"] = run_config["autostart_tray"] = bool(autostart_var.get())
             # Read by the tray widget before each check - see stuck_screen.py.
             run_config["stuck_check_enabled"] = bool(stuck_var.get())
             run_config["black_check_enabled"] = bool(black_var.get())
@@ -1465,9 +1471,8 @@ def main():
             run_config["show_recording_item"] = bool(recording_item_var.get())  # read by the tray menu
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
-            apply_boot_autostart(run_config["autostart_obs"])
         except Exception as exc:
-            messagebox.showerror("Save Failed", f"Couldn't save autostart, screen-detection and disk-space settings: {exc}")
+            messagebox.showerror("Save Failed", f"Couldn't save screen-detection and disk-space settings: {exc}")
             return
 
         try:

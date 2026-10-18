@@ -105,9 +105,9 @@ function hasEffects(track) {
 
 function effectNames(track, index) {
   const names = [];
-  if (track.level) names.push("Level Out Audio");
-  if (track.gate_db != null) names.push(`Noise gate (${track.gate_db} dB)`);
   if (track.mono && isStereo(index)) names.push("Mono");
+  if (track.gate_db != null) names.push(`Noise gate (${track.gate_db} dB)`);
+  if (track.level) names.push("Level Out Audio");
   return names;
 }
 
@@ -626,13 +626,13 @@ function audioRow(index) {
   });
   // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo.
   if (!isMaster(index)) titleLine.append(mute, solo);
-  // Level, Noise gate and Mono: set in the panel below the timeline (renderFx),
+  // Mono, Noise gate and Level: set in the panel below the timeline (renderFx),
   // so the track's row keeps its height.
   const fx = el("button", "toggle", "FX");
   fx.setAttribute("aria-pressed", String(hasEffects(track)));
   fx.classList.toggle("open", ed.fx === index);
   fx.title = `Effects: ${effectNames(track, index).join(", ") ||
-    "Level Out Audio, Noise gate" + (isStereo(index) ? ", Mono" : "")}`;
+    (isStereo(index) ? "Mono, " : "") + "Noise gate, Level Out Audio"}`;
   fx.addEventListener("click", () => {
     ed.fx = ed.fx === index ? null : index;
     ed.selection = null;
@@ -1010,8 +1010,8 @@ function renderPanel() {
   panel.append(closeButton());
 }
 
-// A track's effects, in the panel: Level, Noise gate (with its threshold)
-// and, for a stereo track, Mono.
+// A track's effects, in the panel: for a stereo track, Mono; Noise gate
+// (with its threshold); and Level.
 function renderFx(panel, index) {
   const track = trackOf(index);
   panel.append(el("strong", null, `${isMaster(index) ? "Mix" : trackTitle(index)} effects`));
@@ -1028,10 +1028,12 @@ function renderFx(panel, index) {
     return wrap;
   };
   const update = "its ffmpeg is too old - update ClipEm";
-  panel.append(check("Level Out Audio", !!track.level, ed.canLevel,
-    ed.canLevel ? "Even out the volume: quiet parts up, loud peaks down, to about -14 LUFS - " +
-      "the usual level for videos on Discord and the web" : `Can't level audio: ${update}`,
-    (on) => change(() => { track.level = on; })));
+  if (isStereo(index)) {
+    panel.append(check("Mono", !!track.mono, ed.canChannels,
+      ed.canChannels ? "Combine left and right into one channel, played on both sides"
+        : `Can't make tracks mono: ${update}`,
+      (on) => change(() => { track.mono = on; })));
+  }
 
   // The gate's threshold comes from this track's own noise floor and speech
   // level (measured by the server), as Light / Normal / Strong.
@@ -1060,12 +1062,10 @@ function renderFx(panel, index) {
   panel.append(strength);
   if (presets === undefined) loadGatePresets(index);
 
-  if (isStereo(index)) {
-    panel.append(check("Mono", !!track.mono, ed.canChannels,
-      ed.canChannels ? "Combine left and right into one channel, played on both sides"
-        : `Can't make tracks mono: ${update}`,
-      (on) => change(() => { track.mono = on; })));
-  }
+  panel.append(check("Level Out Audio", !!track.level, ed.canLevel,
+    ed.canLevel ? "Even out the volume: quiet parts up, loud peaks down, to about -14 LUFS - " +
+      "the usual level for videos on Discord and the web" : `Can't level audio: ${update}`,
+    (on) => change(() => { track.level = on; })));
   panel.append(closeButton());
 }
 
@@ -1435,6 +1435,10 @@ function fillSelect(select, options, fallback) {
   select.value = values.includes(previous) ? previous : values.includes(fallback) ? fallback : values[0];
 }
 
+// The custom export's "max" size: its bitrate for this long, plus a margin.
+const MAX_SIZE_MARGIN = 1.05;
+const MAX_SIZE_EXTRA_S = 0.5;
+
 function formatMb(mb) {
   return mb < 10 ? mb.toFixed(1) : String(Math.round(mb));
 }
@@ -1451,10 +1455,14 @@ function renderCustomExport() {
     ...options.fps.map((f) => [String(f), `${f} fps`])], "60");
   const seconds = keptLength();
   fillSelect($("custom-bitrate"), options.video_kbps.map((kbps) => {
-    const mb = ((kbps + options.audio_kbps) * seconds) / 8 / 1000;
     // A maximum: x264 doesn't pad simple footage (menus, static screens) up
-    // to the bitrate, so those come out smaller.
-    return [String(kbps), `${kbps / 1000} Mbps · up to ${formatMb(mb)} MB`];
+    // to the bitrate, so those come out smaller. Two-pass can run a little
+    // over, most on short clips (the first keyframe) - up to 16% on a 1 s
+    // clip, ~1% from 5 s - so the margin covers both.
+    const mb = ((kbps + options.audio_kbps) * (seconds * MAX_SIZE_MARGIN + MAX_SIZE_EXTRA_S)) / 8 / 1000;
+    // Rounded up, so it's never under.
+    const max = mb < 10 ? (Math.ceil(mb * 10) / 10).toFixed(1) : String(Math.ceil(mb));
+    return [String(kbps), `${kbps / 1000} Mbps · max ${max} MB`];
   }), "8000");
 }
 
