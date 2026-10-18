@@ -84,7 +84,7 @@ body {
 #clip-list {
   list-style: none;
   margin: 0;
-  padding: 0 8px 12px;
+  padding: 0 6px 12px;
   overflow-y: auto;
   flex: 1;
 }
@@ -93,7 +93,7 @@ body {
 
 .clip {
   display: flex;
-  gap: 10px;
+  gap: 8px;
   padding: 6px;
   border-radius: 8px;
   cursor: pointer;
@@ -187,9 +187,11 @@ body {
 /* Size and +tracks/+small on one line, so with the title's two lines the
    text stays clear of the folder and delete buttons below-right and every
    clip is the thumbnail's height. */
-.clip-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.clip-meta .size { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.badges { flex: none; display: flex; gap: 3px; }
+.clip-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* The size always shows whole ("128 MB"); on a narrow sidebar the badges
+   are cut short instead. */
+.clip-meta .size { flex: none; white-space: nowrap; }
+.badges { flex: 0 1 auto; min-width: 0; display: flex; gap: 3px; }
 
 .clip-export-row { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 6px; }
 /* Up to two lines - an export's name ("Replay 2026-10-17 / 22-06-05-discord")
@@ -236,9 +238,14 @@ body {
 }
 
 .badge {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 10px;
   line-height: 14px;
-  padding: 0 5px;
+  padding: 0 4px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--hover);
