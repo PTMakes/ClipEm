@@ -35,7 +35,7 @@ FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
 # ClipEm's own build revision: bump it whenever FFMPEG_COMMON_FLAGS change, so
 # the archives get new names (and hashes) and installs pick the new build up.
-BUILD_REV="r2"
+BUILD_REV="r3"
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEV_DIR/dist/ffmpeg"
@@ -106,6 +106,7 @@ FFMPEG_COMMON_FLAGS=(
   --enable-bsf=aac_adtstoasc,h264_mp4toannexb,extract_extradata
   --enable-filter=scale,format,aresample,aformat,null,anull,trim,atrim,setpts,asetpts
   --enable-filter=concat,volume,amix,adelay,apad,afade,asplit,split
+  --enable-filter=loudnorm,alimiter,pan,channelsplit,join,agate
   --enable-swscale --enable-swresample
 )
 
@@ -182,7 +183,7 @@ check_has() {  # <-encoders|-muxers|-filters> <name>...
 }
 check_has -encoders libx264 aac mjpeg pcm_s16le
 check_has -muxers mp4 matroska null s16le image2
-check_has -filters concat volume amix adelay apad afade asplit split scale
+check_has -filters concat volume amix adelay apad afade asplit split scale loudnorm alimiter pan channelsplit join agate
 if ldd "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" >/dev/null 2>&1; then
   echo "Linux build is dynamically linked - expected a static binary" >&2
   exit 1

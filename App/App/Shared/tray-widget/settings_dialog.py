@@ -363,6 +363,15 @@ def main():
 
     on_sound_toggle()
 
+    # The tray's "Clip saved." notification (Save Clip in its menu) - saved
+    # with the other run_config.json settings below.
+    clip_notification_var = tk.BooleanVar(value=bool(run_config.get("clip_saved_notification", True)))
+    tk.Checkbutton(
+        frame, text="Show a notification when a clip is saved from the tray menu",
+        variable=clip_notification_var,
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+
     # --- Where clips are saved, and whether audio sources get their own tracks.
     tk.Label(frame, text="Clip Output", font=("", 10, "bold")).grid(
         row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
@@ -1031,6 +1040,7 @@ def main():
             # Read by the tray widget each poll - see disk_space.py.
             run_config["disk_space_warnings_enabled"] = bool(disk_warnings_var.get())
             run_config["custom_editor_path"] = editor_path_var.get().strip()
+            run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
             apply_boot_autostart(run_config["autostart_obs"])
         except Exception as exc:

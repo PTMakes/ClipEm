@@ -35,3 +35,13 @@ def test_clips_folder_is_the_placeholder():
     with open(os.path.join(OBS_CONFIG_DIR, "basic", "profiles", "DefaultPTM", "basic.ini")) as f:
         values = dict(line.strip().split("=", 1) for line in f if "FilePath=" in line)
     assert values == {"FilePath": "{{CLIPS_DIR}}", "RecFilePath": "{{CLIPS_DIR}}", "FFFilePath": "{{CLIPS_DIR}}"}
+
+
+def test_new_installs_start_with_the_clip_saved_notification_off():
+    import json
+
+    with open(os.path.join(APP_SHARED_DIR, "run_config.json"), encoding="utf-8") as f:
+        shipped = json.load(f)
+    assert shipped["clip_saved_notification"] is False
+    # Written per install on its first Windows launch - never shipped.
+    assert "start_menu_registered" not in shipped

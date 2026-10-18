@@ -14,7 +14,6 @@ Run it with the same distribution's Python (bundled embeddable Python on
 Windows, system python3 on macOS/Linux - see the platform launch scripts).
 """
 
-import collections
 import logging
 import os
 import subprocess
@@ -47,7 +46,9 @@ from app_audio import AppTrackMonitor  # noqa: E402
 from app_window import use_windows_app_id  # noqa: E402
 from clip_folder import ClipFolderWatch  # noqa: E402
 from clipem_common import (  # noqa: E402
+    LOG_DIR,
     acquire_instance_lock,
+    load_run_config,
     pid_alive,
     release_instance_lock,
     setup_logging,
@@ -73,8 +74,55 @@ if sys.platform == "win32":
             if lparam == _WM_LBUTTONUP:
                 lparam = _WM_RBUTTONUP
             return super()._on_notify(wparam, lparam)
+
+        # Also pystray 0.19.5's private _win32.Icon._create_menu (it builds
+        # each submenu through this too): no check-mark column. Win32 menus
+        # keep a blank strip left of every item for one, which made the menu
+        # much wider than on Linux - and ClipEm's has no checkable items.
+        def _create_menu(self, descriptors, callbacks):
+            hmenu = super()._create_menu(descriptors, callbacks)
+            if hmenu:
+                _without_check_column(hmenu)
+            return hmenu
+
+    def _without_check_column(hmenu):
+        import ctypes
+        from ctypes import wintypes
+
+        class MENUINFO(ctypes.Structure):
+            _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.DWORD), ("dwStyle", wintypes.DWORD),
+                        ("cyMax", wintypes.UINT), ("hbrBack", wintypes.HANDLE),
+                        ("dwContextHelpID", wintypes.DWORD), ("dwMenuData", ctypes.c_size_t)]
+
+        mim_style, mns_nocheck = 0x10, 0x80000000
+        info = MENUINFO(cbSize=ctypes.sizeof(MENUINFO), fMask=mim_style, dwStyle=mns_nocheck)
+        try:
+            handle = getattr(hmenu, "value", hmenu)  # an int, or a ctypes HMENU
+            ctypes.windll.user32.SetMenuInfo(ctypes.c_void_p(handle), ctypes.byref(info))
+        except (AttributeError, OSError, TypeError, ctypes.ArgumentError):
+            pass
 else:
     _TrayIcon = pystray.Icon
+
+
+def use_dark_menus():
+    """Makes the tray menu (a plain Win32 popup menu) dark. Windows has no
+    public API for that: uxtheme's unnamed SetPreferredAppMode (ordinal 135,
+    Windows 10 1903+) with ForceDark, then FlushMenuThemes (136) so menus
+    made afterwards pick it up. Older Windows: they stay light."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        uxtheme = ctypes.WinDLL("uxtheme")
+        force_dark = 2
+        set_preferred_app_mode = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int)((135, uxtheme))
+        flush_menu_themes = ctypes.WINFUNCTYPE(None)((136, uxtheme))
+        set_preferred_app_mode(force_dark)
+        flush_menu_themes()
+    except (AttributeError, OSError) as exc:
+        log.info(f"Dark tray menu unavailable: {exc}")
 
 POLL_SECONDS = 2
 
@@ -99,6 +147,8 @@ TRAY_AVAILABILITY_CHECK_SECONDS = 20
 SHARED_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 LOCK_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".tray.lock")
+# How much of a helper window's stderr goes into tray.log when it fails.
+HELPER_STDERR_TAIL_BYTES = 4000
 SETTINGS_DIALOG_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "settings_dialog.py"
 )
@@ -340,13 +390,14 @@ class TrayApp:
 
     def _save_clip_label(self, item):
         """ "Save Clip" plus the configured clip hotkey, re-read each time the
-        menu is rebuilt so a change from Settings shows up. Windows menus
-        right-align text after a tab like a real shortcut hint."""
+        menu is rebuilt so a change from Settings shows up. Inline on every
+        platform: a Windows shortcut column (after a tab) made the menu much
+        wider than on Linux."""
         try:
             hotkey = obs_config.describe_hotkey(*obs_config.load_clip_hotkey())
         except Exception:
             return "Save Clip"
-        return f"Save Clip\t{hotkey}" if sys.platform == "win32" else f"Save Clip ({hotkey})"
+        return f"Save Clip ({hotkey})"
 
     def _can_save_clip(self, item):
         return self.connected and self.replay_active
@@ -392,7 +443,8 @@ class TrayApp:
             return
         try:
             self.client.call("SaveReplayBuffer")
-            self._notify("Clip saved.")
+            if load_run_config().get("clip_saved_notification", True):  # Settings > Clip Sound
+                self._notify("Clip saved.")
         except ObsWebSocketError as exc:
             log.warning(f"Failed to save clip: {exc}")
             self._notify(f"Failed to save clip: {exc}")
@@ -459,41 +511,39 @@ class TrayApp:
 
     def _start_helper(self, script, what):
         """Runs a helper window's script (the clip editor, the settings
-        dialog) and tells the user if it exits with an error. Its stderr is
-        kept for that: under pythonw, a crash before it opens its own log
-        (e.g. a failed import) otherwise leaves no trace anywhere."""
+        dialog) and tells the user if it exits with an error. Its stderr goes
+        to logs/<script>.stderr.log for that: under pythonw, a crash before it
+        opens its own log (e.g. a failed import) otherwise leaves no trace.
+        A file, not a pipe: what the helper starts (Settings restarting
+        ClipEm and OBS, the user's video editor) inherits it and outlives
+        this tray widget - a pipe would break under them (SIGPIPE)."""
+        name = os.path.splitext(os.path.basename(script))[0]
+        stderr_path = os.path.join(LOG_DIR, f"{name}.stderr.log")
         try:
-            proc = subprocess.Popen(
-                [sys.executable, script, "--parent-pid", str(os.getpid())], stderr=subprocess.PIPE
-            )
+            os.makedirs(LOG_DIR, exist_ok=True)
+            with open(stderr_path, "wb") as stderr_file:
+                proc = subprocess.Popen(
+                    [sys.executable, script, "--parent-pid", str(os.getpid())], stderr=stderr_file
+                )
         except Exception as exc:
             log.warning(f"Failed to open {what}: {exc}")
             self._notify(f"Couldn't open {what} - see logs/tray.log.")
             return
         self._children.append(proc)
-        threading.Thread(target=self._watch_helper, args=(proc, what), daemon=True).start()
+        threading.Thread(target=self._watch_helper, args=(proc, what, stderr_path), daemon=True).start()
 
-    def _watch_helper(self, proc, what):
-        tail = collections.deque(maxlen=40)
-
-        def drain():
-            # Read all along so the helper never blocks on a full pipe. Not
-            # waited on to the end: a program it started (e.g. the user's
-            # own video editor) can inherit the pipe and keep it open.
-            for line in proc.stderr:
-                text = line.decode("utf-8", errors="replace").rstrip()
-                tail.append(text)
-                if sys.stderr is not None:
-                    print(text, file=sys.stderr)
-
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
+    def _watch_helper(self, proc, what, stderr_path):
         code = proc.wait()
-        reader.join(timeout=1)
         if code == 0 or self._stopping_children:
             return
-        log.warning(f"{what[0].upper()}{what[1:]} exited with code {code}:\n" + "\n".join(tail))
-        self._notify(f"Couldn't open {what} (it closed with an error) - see logs/tray.log.")
+        try:
+            with open(stderr_path, "rb") as f:
+                f.seek(max(0, os.path.getsize(stderr_path) - HELPER_STDERR_TAIL_BYTES))
+                tail = f.read().decode("utf-8", errors="replace").strip()
+        except OSError:
+            tail = ""
+        log.warning(f"{what[0].upper()}{what[1:]} exited with code {code}:\n{tail}")
+        self._notify(f"{what[0].upper()}{what[1:]} closed with an error - see logs/tray.log.")
 
     def stop_children(self, timeout_seconds=3):
         """Closes the helper windows (the settings dialog) this tray widget
@@ -682,6 +732,7 @@ class TrayApp:
 if __name__ == "__main__":
     ensure_single_instance()
     use_clipem_notification_name()
+    use_dark_menus()
     app = TrayApp()
     try:
         app.run()

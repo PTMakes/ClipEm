@@ -20,6 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app_window  # noqa: E402
+import autostart  # noqa: E402
 import components  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
@@ -707,6 +708,14 @@ def main():
                 log.info(f"Smaller-copy target moved to Discord's new {obs_config.DISCORD_TARGET_MB} MB limit.")
         except Exception as exc:
             log.warning(f"Could not update the smaller-copy target size: {exc}")
+    # Before the tray widget starts: it only names its notifications "ClipEm"
+    # once this entry exists (tray_widget.use_clipem_notification_name).
+    try:
+        path = autostart.ensure_start_menu_entry()
+        if path:
+            log.info(f"Added ClipEm to the Start Menu: {path}")
+    except Exception as exc:
+        log.warning(f"Could not add ClipEm to the Start Menu: {exc}")
     boot = "--boot" in sys.argv[1:]
     config = load_run_config() if boot else dict(DEFAULT_RUN_CONFIG)
     system = platform.system()

@@ -17,13 +17,20 @@ import subprocess
 import sys
 from xml.sax.saxutils import escape as xml_escape
 
-from clipem_common import APP_DIR, INSTALLER_DIR, ROOT_DIR, SHARED_DIR
+from clipem_common import APP_DIR, INSTALLER_DIR, ROOT_DIR, SHARED_DIR, load_run_config, save_run_config
 
 RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
 MACOS_LAUNCH_AGENT_LABEL = "com.ptmakes.clipem"
 # The tray widget's AppUserModelID, also stamped on the Start Menu shortcut
 # so Windows names its notifications "ClipEm" - see set_shortcut_app_id.
 WINDOWS_APP_ID = "PTMakes.ClipEm"
+# Bump to have every Windows install rewrite its Start Menu entry on its next
+# launch (ensure_start_menu_entry) - e.g. when what the entry carries changes.
+# Kept in run_config.json as "start_menu_registered".
+START_MENU_REGISTRATION = 1
+# Launches that try it before giving up (until Setup runs again): where it
+# can't work, each try would hold up starting ClipEm for PowerShell.
+START_MENU_MAX_ATTEMPTS = 3
 
 
 # ---------------------------------------------------------------------------
@@ -39,8 +46,12 @@ def ps_quote(value):
 
 def run_powershell(script, **kwargs):
     """Runs `script` via -EncodedCommand, so nothing in it goes through
-    Windows command-line argument parsing (which mangles embedded quotes)."""
+    Windows command-line argument parsing (which mangles embedded quotes).
+    Never with a console window: from pythonw (the tray, Settings) one would
+    flash up on screen."""
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    if sys.platform == "win32":
+        kwargs.setdefault("creationflags", 0x08000000)  # CREATE_NO_WINDOW
     return subprocess.run(
         ["powershell", "-NoProfile", "-NonInteractive", "-EncodedCommand", encoded], **kwargs
     )
@@ -401,29 +412,70 @@ def create_shortcut_windows():
     # widget when closed. Always (re)written so shortcuts from older setups
     # that pointed at python.exe get fixed by re-running Setup.
     shortcut_path = os.path.join(ROOT_DIR, "ClipEm.lnk")
-    pythonw = os.path.join(find_windows_python_root() or os.path.join(APP_DIR, "Windows", "Python"), "pythonw.exe")
-    icon = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.ico")
-    script = windows_shortcut_script(
-        shortcut_path, pythonw, windows_command_line_arg(RUN_PY), ROOT_DIR, icon,
-    )
+    pythonw, arguments, icon = _windows_launch_target()
+    script = windows_shortcut_script(shortcut_path, pythonw, arguments, ROOT_DIR, icon)
     run_powershell(script, check=True)
     print(f"Created shortcut: {shortcut_path}")
 
     # A shortcut in the ClipEm folder isn't indexed by Windows Search - one
     # in the Start Menu is. Best effort: the folder's own shortcut is enough
     # to run ClipEm.
-    start_menu_path = start_menu_shortcut_path()
-    if not start_menu_path:
-        return
     try:
-        os.makedirs(os.path.dirname(start_menu_path), exist_ok=True)
-        run_powershell(windows_shortcut_script(
-            start_menu_path, pythonw, windows_command_line_arg(RUN_PY), ROOT_DIR, icon,
-        ), check=True)
-        set_shortcut_app_id(start_menu_path, WINDOWS_APP_ID)
-        print(f"Added ClipEm to the Start Menu: {start_menu_path}")
+        path = create_start_menu_shortcut()
+        if path:
+            print(f"Added ClipEm to the Start Menu: {path}")
     except Exception as exc:
         print(f"Could not add ClipEm to the Start Menu ({exc}) - skipping it.", file=sys.stderr)
+
+
+def _windows_launch_target():
+    """(pythonw.exe, its arguments, icon) every ClipEm shortcut runs."""
+    pythonw = os.path.join(find_windows_python_root() or os.path.join(APP_DIR, "Windows", "Python"), "pythonw.exe")
+    return pythonw, windows_command_line_arg(RUN_PY), os.path.join(SHARED_DIR, "tray-widget", "ClipEm.ico")
+
+
+def create_start_menu_shortcut():
+    """Writes the Start Menu entry (with WINDOWS_APP_ID, so notifications
+    say "ClipEm") and records it in run_config.json. Returns its path, or
+    None without APPDATA. Raises on failure."""
+    path = start_menu_shortcut_path()
+    if not path:
+        return None
+    pythonw, arguments, icon = _windows_launch_target()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    run_powershell(windows_shortcut_script(path, pythonw, arguments, ROOT_DIR, icon), check=True,
+                   capture_output=True)
+    set_shortcut_app_id(path, WINDOWS_APP_ID)
+    config = load_run_config()
+    config["start_menu_registered"] = START_MENU_REGISTRATION
+    config.pop("start_menu_failures", None)
+    save_run_config(config)
+    return path
+
+
+def ensure_start_menu_entry():
+    """Only Setup adds the Start Menu entry, so an install that updated from
+    a version before it - or before it carried WINDOWS_APP_ID - never got
+    one: no Windows Search entry, notifications from "Python". run.py calls
+    this on each launch; it does the work once per START_MENU_REGISTRATION.
+    Returns the shortcut's path when it wrote one, else None."""
+    if platform.system() != "Windows":
+        return None
+    config = load_run_config()
+    try:
+        done = int(config.get("start_menu_registered") or 0)
+        failed = int(config.get("start_menu_failures") or 0)
+    except (TypeError, ValueError):
+        done = failed = 0
+    if done >= START_MENU_REGISTRATION or failed >= START_MENU_MAX_ATTEMPTS:
+        return None
+    try:
+        return create_start_menu_shortcut()
+    except Exception:
+        config = load_run_config()
+        config["start_menu_failures"] = failed + 1
+        save_run_config(config)
+        raise
 
 
 def remove_start_menu_shortcut():

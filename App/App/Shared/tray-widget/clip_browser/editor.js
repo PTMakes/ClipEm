@@ -90,6 +90,27 @@ function duration() {
   return (ed.info && ed.info.duration) || 0;
 }
 
+// A track recorded in stereo (left and right shown, and editable, apart).
+function isStereo(index) {
+  const info = ed.info && ed.info.tracks.find((t) => t.index === index);
+  return ((info && info.channels) || 2) >= 2;
+}
+
+const CHANNEL_NAMES = ["left", "right"];
+const GATE_CHOICES = [-70, -65, -60, -55, -50, -45, -40, -35, -30, -25, -20];
+
+function hasEffects(track) {
+  return !!(track.level || track.mono || track.gate_db != null);
+}
+
+function effectNames(track, index) {
+  const names = [];
+  if (track.level) names.push("Level");
+  if (track.gate_db != null) names.push(`Noise gate (${track.gate_db} dB)`);
+  if (track.mono && isStereo(index)) names.push("Mono");
+  return names;
+}
+
 function trackTitle(index) {
   const track = ed.info.tracks.find((t) => t.index === index);
   return track ? track.title : `Track ${index + 1}`;
@@ -252,6 +273,7 @@ function closeClip() {
 async function loadEditor(name) {
   const token = ++ed.loadToken;
   $("out-name").value = name.replace(/\.[^.]+$/, "");
+  $("export-done").hidden = true; // that was another clip's export
   ed.name = null;
   ed.info = null;
   teardownAudio();
@@ -274,6 +296,11 @@ async function loadEditor(name) {
   ed.discord = data.discord;
   ed.custom = data.custom;
   ed.missing = data.missing || [];
+  ed.canLevel = !!data.can_level;
+  ed.canGate = !!data.can_gate;
+  ed.gateDefault = data.gate_default_db ?? -45;
+  ed.fx = null;
+  ed.canChannels = !!data.can_channels;
   ed.peaks = {};
   ed.selection = null;
   ed.region = null;
@@ -287,10 +314,24 @@ async function loadEditor(name) {
   for (const track of ed.info.tracks) loadPeaks(name, track.index, token);
 }
 
+// What a track's preview audio and waveform are made with: its Level and
+// noise gate (the server renders them; Mono is done here).
+function effectsQuery(track) {
+  const params = [];
+  if (track.level) params.push("level=1");
+  if (track.gate_db != null) params.push(`gate=${track.gate_db}`);
+  return params.length ? `?${params.join("&")}` : "";
+}
+
+function trackPath(kind, index, name) {
+  return `${kind}/${index}/${encodeURIComponent(name)}${effectsQuery(trackOf(index))}`;
+}
+
 async function loadPeaks(name, index, token) {
+  const wanted = effectsQuery(trackOf(index));
   try {
-    const data = await api(`peaks/${index}/${encodeURIComponent(name)}`);
-    if (token !== ed.loadToken) return;
+    const data = await api(trackPath("peaks", index, name));
+    if (token !== ed.loadToken || effectsQuery(trackOf(index)) !== wanted) return;
     ed.peaks[index] = data;
     drawWaveform(index);
   } catch (err) {
@@ -331,7 +372,7 @@ function renderToolbar() {
 
 // Nothing changed - in one track, or (no index) in the whole clip.
 function isUnedited(index) {
-  const plain = (t) => !t.volume_db && !t.offset && !t.muted && !t.regions.length;
+  const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
   return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && ed.tracks.every(plain);
@@ -341,7 +382,8 @@ function resetEdits() {
   change(() => {
     ed.trim = [0, duration()];
     ed.cuts = [];
-    ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, regions: [] }));
+    ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, level: false,
+      gate_db: null, mono: false, regions: [] }));
     ed.selection = null;
   });
 }
@@ -392,6 +434,7 @@ function renderTimeline() {
   const shown = shownTracks();
   timeline.replaceChildren(scrubRow(), videoRow(), ...shown.map((t) => audioRow(t.index)));
   for (const track of shown) drawWaveform(track.index);
+  syncEffects();
   const hidden = ed.info.tracks.length - shown.length;
   const toggle = $("toggle-unused");
   toggle.hidden = !hidden && !ed.showUnused;
@@ -428,6 +471,7 @@ function addSelection(lane, track) {
   const sel = ed.selection;
   if (!sel || sel.track !== track) return;
   const node = el("div", "selection");
+  if (sel.channel != null) node.classList.add(`ch-${sel.channel}`);
   placeSpan(node, sel.start, sel.end);
   lane.append(node);
 }
@@ -567,6 +611,20 @@ function audioRow(index) {
   });
   // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo.
   if (!isMaster(index)) titleLine.append(mute, solo);
+  // Level, Noise gate and Mono: set in the panel below the timeline (renderFx),
+  // so the track's row keeps its height.
+  const fx = el("button", "toggle", "FX");
+  fx.setAttribute("aria-pressed", String(hasEffects(track)));
+  fx.classList.toggle("open", ed.fx === index);
+  fx.title = `Effects: ${effectNames(track, index).join(", ") || "Level, Noise gate" + (isStereo(index) ? ", Mono" : "")}`;
+  fx.addEventListener("click", () => {
+    ed.fx = ed.fx === index ? null : index;
+    ed.selection = null;
+    ed.region = null;
+    renderTimeline();
+    renderPanel();
+  });
+  titleLine.append(fx);
 
   const volume = el("label", "slider-line");
   const slider = el("input");
@@ -606,15 +664,19 @@ function audioRow(index) {
 
   const lane = el("div", "lane audio-lane");
   lane.dataset.track = index;
+  lane.classList.toggle("stereo", showsChannels(index));
   const canvas = el("canvas", "wave");
   lane.append(canvas);
   addRemoved(lane, false);
   track.regions.forEach((region, regionIndex) => {
     const node = el("div", "region", formatDb(region.db));
     node.classList.toggle("boost", region.db > 0);
+    if (region.channel != null) node.classList.add(`ch-${region.channel}`);
     node.classList.toggle("active", !!ed.region && ed.region.track === index && ed.region.index === regionIndex);
     placeSpan(node, region.start, region.end);
-    node.title = "Click to change this volume change";
+    node.title = region.channel != null
+      ? `Click to change this volume change (${CHANNEL_NAMES[region.channel]} channel only)`
+      : "Click to change this volume change";
     node.addEventListener("pointerdown", (e) => {
       e.stopPropagation();
       ed.region = { track: index, index: regionIndex };
@@ -646,18 +708,46 @@ function drawWaveform(index) {
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#7d72ff";
   const offset = trackOf(index).offset;
   const perPixel = duration() / width;
-  const mid = height / 2;
+  // Stereo: left on top, right below; mono (or "Mono" on): one, combined.
+  const rows = showsChannels(index) && data.channels ? data.channels : [data.peaks];
+  const rowHeight = height / rows.length;
   // Scaled to the track's own loudest moment, so quiet tracks still show.
   const loudest = data.peaks.reduce((max, peak) => (peak > max ? peak : max), 24);
-  const scale = (height - 2) / loudest;
-  for (let x = 0; x < width; x++) {
-    const from = Math.floor((x * perPixel - offset) * data.per_second);
-    const to = Math.max(from + 1, Math.floor(((x + 1) * perPixel - offset) * data.per_second));
-    let peak = 0;
-    for (let i = Math.max(0, from); i < Math.min(data.peaks.length, to); i++) peak = Math.max(peak, data.peaks[i]);
-    const h = Math.max(peak ? 1 : 0, peak * scale);
-    ctx.fillRect(x, mid - h / 2, 1, h);
+  const scale = (rowHeight - 2) / loudest;
+  rows.forEach((peaks, row) => {
+    const mid = rowHeight * (row + 0.5);
+    for (let x = 0; x < width; x++) {
+      const from = Math.floor((x * perPixel - offset) * data.per_second);
+      const to = Math.max(from + 1, Math.floor(((x + 1) * perPixel - offset) * data.per_second));
+      let peak = 0;
+      for (let i = Math.max(0, from); i < Math.min(peaks.length, to); i++) peak = Math.max(peak, peaks[i]);
+      const h = Math.max(peak ? 1 : 0, peak * scale);
+      ctx.fillRect(x, mid - h / 2, 1, h);
+    }
+  });
+  if (rows.length === 2) {
+    ctx.save();
+    ctx.globalAlpha = 0.6;
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim() || "#888";
+    ctx.fillRect(0, Math.round(rowHeight), width, Math.max(1, Math.round(ratio)));
+    ctx.font = `${Math.round(10 * ratio)}px sans-serif`;
+    ctx.textBaseline = "top";
+    // On a small patch of the lane colour, so they show over the waveform.
+    for (const [label, top] of [["L", 0], ["R", rowHeight]]) {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--lane").trim() || "#eee";
+      ctx.fillRect(1 * ratio, top + 1 * ratio, 11 * ratio, 12 * ratio);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--muted").trim() || "#888";
+      ctx.fillText(label, 3 * ratio, top + 2 * ratio);
+    }
+    ctx.restore();
   }
+}
+
+// Whether a track's lane shows (and lets you Alt-select) left and right apart.
+function showsChannels(index) {
+  return isStereo(index) && !trackOf(index).mono;
 }
 
 window.addEventListener("resize", () => {
@@ -687,18 +777,24 @@ function trackPointer(e, onMove, onUp) {
   document.addEventListener("pointercancel", up);
 }
 
-// Click: move the playhead. Drag: select a range on this lane.
+// Click: move the playhead. Drag: select a range on this lane - with Alt,
+// on a stereo track, just the channel (left on top, right below) it starts on.
 function laneDown(e, track) {
   if (e.button !== 0) return;
   e.preventDefault();
   const startX = e.clientX;
   const anchor = laneTime(e.clientX);
+  let channel = null;
+  if (e.altKey && track !== null && ed.canChannels && showsChannels(track)) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    channel = e.clientY - rect.top < rect.height / 2 ? 0 : 1;
+  }
   let dragging = false;
   trackPointer(e, (ev) => {
     if (!dragging && Math.abs(ev.clientX - startX) < DRAG_THRESHOLD_PX) return;
     dragging = true;
     const t = laneTime(ev.clientX);
-    ed.selection = { start: Math.min(anchor, t), end: Math.max(anchor, t), track };
+    ed.selection = { start: Math.min(anchor, t), end: Math.max(anchor, t), track, channel };
     ed.region = null;
     renderTimeline();
   }, () => {
@@ -803,7 +899,7 @@ function setRangeVolume(db) {
     const sel = ed.selection;
     if (!sel || sel.track === null) return;
     const track = trackOf(sel.track);
-    region = { start: sel.start, end: sel.end, db };
+    region = { start: sel.start, end: sel.end, db, channel: sel.channel ?? null };
     track.regions.push(region);
     track.regions.sort((a, b) => a.start - b.start);
     ed.region = { track: sel.track, index: track.regions.indexOf(region) };
@@ -829,8 +925,13 @@ function renderPanel() {
   const sel = ed.selection;
   const region = activeRegion();
   panel.replaceChildren();
-  panel.hidden = !ed.info || (!sel && !region);
+  if (sel || region) ed.fx = null; // a selection takes the panel over
+  panel.hidden = !ed.info || (!sel && !region && ed.fx === null);
   if (panel.hidden) return;
+  if (ed.fx !== null) {
+    renderFx(panel, ed.fx);
+    return;
+  }
 
   if (sel && sel.track === null) {
     panel.append(
@@ -851,7 +952,10 @@ function renderPanel() {
   const end = region ? region.end : sel.end;
   const index = region ? ed.region.track : sel.track;
   const db = region ? region.db : 0;
-  panel.append(el("span", null, `${isMaster(index) ? "Mix" : trackTitle(index)} ${formatTime(start)} – ${formatTime(end)}`));
+  const channel = region ? region.channel : sel.channel;
+  const side = channel != null ? ` (${CHANNEL_NAMES[channel]})` : "";
+  panel.append(el("span", null,
+    `${isMaster(index) ? "Mix" : trackTitle(index)}${side} ${formatTime(start)} – ${formatTime(end)}`));
   const slider = el("input");
   slider.type = "range";
   slider.min = MIN_SLIDER_DB;
@@ -882,11 +986,62 @@ function renderPanel() {
   panel.append(closeButton());
 }
 
+// A track's effects, in the panel: Level, Noise gate (with its threshold)
+// and, for a stereo track, Mono.
+function renderFx(panel, index) {
+  const track = trackOf(index);
+  panel.append(el("strong", null, `${isMaster(index) ? "Mix" : trackTitle(index)} effects`));
+
+  const check = (label, checked, enabled, title, onToggle) => {
+    const wrap = el("label", "fx-option");
+    const box = el("input");
+    box.type = "checkbox";
+    box.checked = checked;
+    box.disabled = !enabled;
+    box.addEventListener("change", () => onToggle(box.checked));
+    wrap.title = title;
+    wrap.append(box, document.createTextNode(label));
+    return wrap;
+  };
+  const update = "its ffmpeg is too old - update ClipEm";
+  panel.append(check("Level", !!track.level, ed.canLevel,
+    ed.canLevel ? "Even out the volume: quiet parts up, loud peaks down, to about -14 LUFS - " +
+      "the usual level for videos on Discord and the web" : `Can't level audio: ${update}`,
+    (on) => change(() => { track.level = on; })));
+
+  const gateOn = track.gate_db != null;
+  panel.append(check("Noise gate", gateOn, ed.canGate,
+    ed.canGate ? "Turn down background noise (hiss, hum, keyboard) whenever the track is " +
+      "quieter than the threshold - the gaps between words" : `Can't gate audio: ${update}`,
+    (on) => change(() => { track.gate_db = on ? ed.gateDefault : null; })));
+  const threshold = el("select");
+  threshold.title = "Threshold: sound quieter than this is turned down. Raise it if noise still " +
+    "gets through; lower it if quiet words get cut.";
+  threshold.disabled = !gateOn || !ed.canGate;
+  for (const db of GATE_CHOICES) {
+    const option = el("option", null, `${db} dB`);
+    option.value = String(db);
+    threshold.append(option);
+  }
+  threshold.value = String(gateOn ? track.gate_db : ed.gateDefault);
+  threshold.addEventListener("change", () => change(() => { track.gate_db = Number(threshold.value); }));
+  panel.append(threshold);
+
+  if (isStereo(index)) {
+    panel.append(check("Mono", !!track.mono, ed.canChannels,
+      ed.canChannels ? "Combine left and right into one channel, played on both sides"
+        : `Can't make tracks mono: ${update}`,
+      (on) => change(() => { track.mono = on; })));
+  }
+  panel.append(closeButton());
+}
+
 function closeButton() {
   const close = el("button", null, "Done");
   close.addEventListener("click", () => {
     ed.selection = null;
     ed.region = null;
+    ed.fx = null;
     renderTimeline();
     renderPanel();
   });
@@ -938,13 +1093,23 @@ function skipRemoved() {
   }
 }
 
-function gainAt(track, t) {
+// The gain on one output channel (0 left, 1 right) at t.
+function gainAt(track, t, channel) {
   if (track.muted) return 0;
   let gain = dbToGain(track.volume_db);
   for (const region of track.regions) {
-    if (t >= region.start && t < region.end) gain *= dbToGain(region.db);
+    const here = region.channel == null || region.channel === channel;
+    if (here && t >= region.start && t < region.end) gain *= dbToGain(region.db);
   }
   return gain;
+}
+
+// How much of each recorded channel goes to each side: [L->L, L->R, R->L,
+// R->R]. Mono averages them onto both, as the export does; a one-channel
+// recording plays on both.
+function channelMatrix(index) {
+  if (!isStereo(index)) return [1, 1, 0, 0];
+  return trackOf(index).mono ? [0.5, 0.5, 0.5, 0.5] : [1, 0, 0, 1];
 }
 
 function audibleTracks() {
@@ -963,13 +1128,49 @@ function setupAudio(name) {
   for (const track of ed.info.tracks) {
     const media = new Audio();
     media.preload = "auto";
-    media.src = `track/${track.index}/${encodeURIComponent(name)}`;
+    const effects = effectsQuery(trackOf(track.index));
+    media.src = trackPath("track", track.index, name);
+    // source -> split -> [L->L, L->R, R->L, R->R] -> left/right gain -> merge:
+    // each side has its own gain, for one-channel volume changes.
     const source = audio.ctx.createMediaElementSource(media);
-    const gain = audio.ctx.createGain();
-    gain.gain.value = 0;
-    source.connect(gain);
-    gain.connect(audio.out);
-    audio.nodes.set(track.index, { media, source, gain });
+    const split = audio.ctx.createChannelSplitter(2);
+    const merge = audio.ctx.createChannelMerger(2);
+    const sides = [0, 1].map((channel) => {
+      const side = audio.ctx.createGain();
+      side.channelCount = 1;
+      side.channelCountMode = "explicit";
+      side.gain.value = 0;
+      side.connect(merge, 0, channel);
+      return side;
+    });
+    const matrix = [[0, 0], [0, 1], [1, 0], [1, 1]].map(([from, to]) => {
+      const gain = audio.ctx.createGain();
+      split.connect(gain, from);
+      gain.connect(sides[to]);
+      return gain;
+    });
+    source.connect(split);
+    merge.connect(audio.out);
+    const node = { media, source, split, matrix, sides, merge, effects, mix: null };
+    audio.nodes.set(track.index, node);
+  }
+}
+
+// Level or the noise gate changed (or undone): play and draw that track as
+// it now sounds. The server makes each version the first time it's asked.
+function syncEffects() {
+  if (!ed.name) return;
+  for (const [index, node] of audio.nodes) {
+    const effects = effectsQuery(trackOf(index));
+    if (node.effects === effects) continue;
+    node.effects = effects;
+    node.media.pause();
+    node.media.src = trackPath("track", index, ed.name);
+    const busy = effects ? `Applying effects to ${isMaster(index) ? "Mix" : trackTitle(index)}...` : "";
+    if (busy) setStatus(busy);
+    loadPeaks(ed.name, index, ed.loadToken).then(() => {
+      if (busy && $("status").textContent === busy) setStatus("");
+    });
   }
 }
 
@@ -978,8 +1179,7 @@ function teardownAudio() {
     node.media.pause();
     node.media.removeAttribute("src");
     node.media.load();
-    node.source.disconnect();
-    node.gain.disconnect();
+    for (const part of [node.source, node.split, ...node.matrix, ...node.sides, node.merge]) part.disconnect();
   }
   audio.nodes.clear();
 }
@@ -995,7 +1195,12 @@ function syncAudio() {
     const desired = t - track.offset;
     const inRange = desired >= 0 && (!isFinite(node.media.duration) || desired < node.media.duration);
     const on = playing && heard.has(index) && inRange;
-    node.gain.gain.setTargetAtTime(on ? gainAt(track, t) : 0, now, 0.015);
+    const mix = channelMatrix(index);
+    if (String(mix) !== String(node.mix)) {
+      node.mix = mix;
+      node.matrix.forEach((gain, i) => gain.gain.setTargetAtTime(mix[i], now, 0.015));
+    }
+    node.sides.forEach((side, channel) => side.gain.setTargetAtTime(on ? gainAt(track, t, channel) : 0, now, 0.015));
     if (!on) {
       if (!node.media.paused) node.media.pause();
       continue;
@@ -1193,7 +1398,9 @@ function renderCustomExport() {
   const seconds = keptLength();
   fillSelect($("custom-bitrate"), options.video_kbps.map((kbps) => {
     const mb = ((kbps + options.audio_kbps) * seconds) / 8 / 1000;
-    return [String(kbps), `${kbps / 1000} Mbps · ~${formatMb(mb)} MB`];
+    // A maximum: x264 doesn't pad simple footage (menus, static screens) up
+    // to the bitrate, so those come out smaller.
+    return [String(kbps), `${kbps / 1000} Mbps · up to ${formatMb(mb)} MB`];
   }), "8000");
 }
 
@@ -1207,13 +1414,38 @@ function customSettings() {
   };
 }
 
+// "Export As" default: the export name, in the clips folder (the folder
+// the clip is in - the dialog starts there).
+function exportAsDefault(custom) {
+  const stem = ed.name.replace(/\.[^.]+$/, "");
+  let name = $("out-name").value.trim() || stem;
+  if (name === stem) {
+    const height = custom.height || (ed.info && ed.info.height) || "";
+    const fps = custom.fps || (ed.info && ed.info.fps ? Math.round(ed.info.fps) : "");
+    name = `${stem}-${height}p${fps}`;
+  }
+  if (!state.folder) return `${name}.mp4`;
+  const sep = state.folder.includes("\\") ? "\\" : "/";
+  return `${state.folder.replace(/[\\/]+$/, "")}${sep}${name}.mp4`;
+}
+
 async function startExport(preset) {
   if (!ed.name) return;
   setStatus("");
   try {
     await flushSave();
     const body = { name: ed.name, preset, out_name: $("out-name").value };
-    if (preset === "custom") body.custom = customSettings();
+    if (preset === "custom") {
+      body.custom = customSettings();
+      // ClipEm's own window has a save dialog (editor-window/preload.js);
+      // anywhere else the export goes next to the clip, as before.
+      if (window.clipem && window.clipem.saveAs) {
+        const path = await window.clipem.saveAs(exportAsDefault(body.custom));
+        if (!path) return; // cancelled
+        body.out_path = path;
+      }
+    }
+    $("export-done").hidden = true;
     body.solo = [...ed.solo]; // what's heard is what's exported
     showExportProgress(await api("api/export", body));
     pollExport();
@@ -1224,6 +1456,7 @@ async function startExport(preset) {
 
 let exportPoll = null;
 let lastExportFile = null;
+let lastExportPath = null; // the full path - "Export As" can put it anywhere
 
 function showExportProgress(status) {
   const running = status.state === "running";
@@ -1249,8 +1482,14 @@ async function pollExport() {
   }
   if (status.state === "done") {
     lastExportFile = status.files[0] || null;
+    lastExportPath = (status.paths && status.paths[0]) || null;
     await loadClips(); // first, so the export isn't announced as a new clip
     setStatus(`Saved ${status.files.join(" and ")} next to your clips.`);
+    if (lastExportFile) {
+      const size = status.sizes && status.sizes[0] != null ? ` (${formatMb(status.sizes[0] / 1e6)} MB)` : "";
+      $("export-done-message").textContent = `Exported ${lastExportFile}${size}`;
+      $("export-done").hidden = false;
+    }
   } else if (status.state === "error") {
     setStatus(`Export failed: ${status.message}`, true);
   } else if (status.state === "cancelled") {
@@ -1265,6 +1504,18 @@ $("out-name").addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === "Escape") e.target.blur();
 });
 $("export-cancel").addEventListener("click", () => api("api/export-cancel", {}).catch(() => {}));
+
+async function exportFileAction(route) {
+  if (!lastExportFile) return;
+  try {
+    await api(route, { name: lastExportFile, path: lastExportPath });
+  } catch (err) {
+    setStatus(err.message, true);
+  }
+}
+
+$("export-play").addEventListener("click", () => exportFileAction("api/play"));
+$("export-reveal").addEventListener("click", () => exportFileAction("api/reveal"));
 
 // ---------------------------------------------------------------------------
 // Resizing the video and the tracks
@@ -1364,7 +1615,7 @@ $("reveal").addEventListener("click", async () => {
   const name = lastExportFile || state.selected;
   if (!name) return;
   try {
-    await api("api/reveal", { name });
+    await api("api/reveal", lastExportFile ? { name, path: lastExportPath } : { name });
   } catch (err) {
     setStatus(err.message, true);
   }
@@ -1401,6 +1652,25 @@ window.addEventListener("keyup", (e) => {
   e.stopPropagation();
 }, { capture: true });
 
+// Left/Right: a tap moves one frame; held, the steps grow quickly (over
+// ARROW_RAMP_MS from the first key repeat - the OS waits a moment before
+// repeating) to a second each. Shift jumps 5 s at once.
+const ARROW_RAMP_MS = 400;
+const ARROW_FULL_STEP = 1;
+let arrowRepeatSince = 0;
+
+function arrowStep(e) {
+  if (e.shiftKey) return 5;
+  const frame = 1 / (ed.info.fps || 60);
+  if (!e.repeat) {
+    arrowRepeatSince = 0;
+    return frame;
+  }
+  if (!arrowRepeatSince) arrowRepeatSince = performance.now();
+  const t = Math.min(1, (performance.now() - arrowRepeatSince) / ARROW_RAMP_MS);
+  return frame + (ARROW_FULL_STEP - frame) * t * t;
+}
+
 document.addEventListener("keydown", (e) => {
   if (!ed.info || e.defaultPrevented || typingIn(e.target)) return;
   const key = e.key.toLowerCase();
@@ -1425,7 +1695,7 @@ document.addEventListener("keydown", (e) => {
     deleteRegion();
   } else if (key === "arrowleft" || key === "arrowright") {
     e.preventDefault();
-    seek(player.currentTime + (key === "arrowleft" ? -1 : 1) * (e.shiftKey ? 5 : 1));
+    seek(player.currentTime + (key === "arrowleft" ? -1 : 1) * arrowStep(e));
   } else if (key === "escape") {
     ed.selection = null;
     ed.region = null;

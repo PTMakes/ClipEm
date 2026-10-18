@@ -19,6 +19,7 @@ from conftest import TRAY_WIDGET_DIR
 
 sys.path.insert(0, TRAY_WIDGET_DIR)
 import clip_browser  # noqa: E402
+import clip_edit  # noqa: E402
 import editor_install  # noqa: E402
 
 
@@ -247,7 +248,7 @@ def test_project_is_loaded_from_the_tracks_copy_and_saved(server, editor):
     _status, _h, body = _get(server, "api/project?name=a.mp4")
     saved = json.loads(body)["project"]
     assert saved["keep"] == [[1.0, 4.0], [6.0, 12.0]]
-    assert saved["tracks"][1]["regions"] == [{"start": 2.0, "end": 3.0, "db": 6.0}]
+    assert saved["tracks"][1]["regions"] == [{"start": 2.0, "end": 3.0, "db": 6.0, "channel": None}]
 
 
 def test_project_of_a_missing_clip(server, editor):
@@ -266,7 +267,7 @@ def test_export_needs_a_new_enough_ffmpeg(server, editor):
 def test_export_starts_the_job_with_safe_names(server, editor, monkeypatch):
     started = []
     monkeypatch.setattr(editor.export_job, "start",
-                        lambda steps, outputs, total, cleanup=(): started.append((steps, outputs, total)))
+                        lambda steps, outputs, total, cleanup=(), on_done=None: started.append((steps, outputs, total)))
     clips = server.folder_fn()
     open(os.path.join(clips, "a-edit.mp4"), "w").close()
     status, _h, _body = _post(server, "api/export", {"name": "a.mp4", "preset": "full"})
@@ -323,6 +324,78 @@ def test_opening_an_editor(server, monkeypatch):
     status, _h, response = _get(server, "api/open", {"Content-Type": "application/json"}, body)
     assert status == 200 and json.loads(response)["file"] == "a-tracks.mkv"
     assert opened == [("/usr/bin/kdenlive", "a-tracks.mkv")]
+
+
+def test_last_export_is_listed_with_its_clip(tmp_path):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    _touch(clips, "a.mp4", b"a", mtime=100)
+    _touch(clips, "b.mp4", b"b", mtime=100)
+    _touch(clips, "a-edit.mp4", b"e", mtime=200)
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 exports_path=str(tmp_path / "cache" / "exports.json"))
+    editor.record_export(str(clips / "a.mp4"), [str(clips / "a-edit.mp4"), str(clips / "a-edit-tracks.mkv")], now=123)
+    editor.record_export(str(clips / "b.mp4"), [str(clips / "b-gone.mp4")], now=5)  # export since deleted
+    srv = clip_browser.ClipBrowserServer(lambda: str(clips), token="tok", thumbnailer=FakeThumbnailer(), editor=editor)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    try:
+        listed = {c["name"]: c["last_export"] for c in json.loads(_get(srv, "api/clips")[2])["clips"]}
+    finally:
+        srv.shutdown()
+        srv.server_close()
+    assert listed == {"a.mp4": {"name": "a-edit.mp4", "path": str(clips / "a-edit.mp4"), "time": 123},
+                      "b.mp4": None, "a-edit.mp4": None}
+    assert editor.last_exports(str(tmp_path)) == {}  # another folder's clips
+
+
+def test_export_as_goes_where_picked_and_can_be_shown(server, editor, tmp_path, monkeypatch):
+    started = []
+    monkeypatch.setattr(editor.export_job, "start", lambda steps, outputs, total, cleanup=(), on_done=None:
+                        started.append((outputs, on_done)))
+    monkeypatch.setattr(editor, "exports_path", str(tmp_path / "exports.json"))
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    custom = {"height": None, "fps": None, "video_kbps": 4000}
+    status, _h, _b = _post(server, "api/export", {"name": "a.mp4", "preset": "custom", "custom": custom,
+                                                  "out_path": str(elsewhere / "My clip")})
+    assert status == 200
+    outputs, on_done = started[0]
+    assert list(outputs.values()) == [str(elsewhere / "My clip.mp4")]
+    assert os.path.dirname(next(iter(outputs))) == str(elsewhere)  # the partial is beside it
+    for bad in ("relative.mp4", str(tmp_path / "missing" / "x.mp4"), os.path.join(server.folder_fn(), "a.mp4")):
+        assert _post(server, "api/export", {"name": "a.mp4", "preset": "custom", "custom": custom,
+                                            "out_path": bad})[0] == 400
+
+    (elsewhere / "My clip.mp4").write_bytes(b"x")
+    shown = []
+    monkeypatch.setattr(clip_browser, "reveal_in_file_manager", shown.append)
+    path = str(elsewhere / "My clip.mp4")
+    assert _post(server, "api/reveal", {"path": path})[0] == 404  # not one of ours yet
+    on_done([path])
+    assert _post(server, "api/reveal", {"path": path})[0] == 200 and shown == [path]
+
+
+def test_export_job_reports_its_files_when_done(tmp_path):
+    partial, final = tmp_path / ".x.mp4.partial", tmp_path / "x.mp4"
+    partial.write_bytes(b"x")
+    done = []
+    job = clip_edit.ExportJob()
+    job._run([], {str(partial): str(final)}, 1.0, (), on_done=done.append)
+    assert job.status["state"] == "done" and done == [[str(final)]]
+    assert job.status["sizes"] == [1]  # the page shows the real size
+
+
+def test_playing_and_revealing_an_export(server, monkeypatch):
+    calls = []
+    monkeypatch.setattr(clip_browser, "open_with_default_app", lambda path: calls.append(("play", path)))
+    monkeypatch.setattr(clip_browser, "reveal_in_file_manager", lambda path: calls.append(("reveal", path)))
+    assert _post(server, "api/play", {"name": "a.mp4"})[0] == 200
+    assert _post(server, "api/reveal", {"name": "a.mp4"})[0] == 200
+    assert [(what, os.path.basename(path)) for what, path in calls] == [("play", "a.mp4"), ("reveal", "a.mp4")]
+    assert _post(server, "api/play", {"name": "../a.mp4"})[0] == 404
+    assert _post(server, "api/play", {"name": "gone.mp4"})[0] == 404
+    assert len(calls) == 2
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")

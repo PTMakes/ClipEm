@@ -145,6 +145,8 @@ class Wizard(tk.Tk):
         # One choice for both: the tray widget is required, so it always
         # starts at boot alongside OBS.
         self.autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
+        # Off for new installs (the shipped run_config.json says so).
+        self.clip_notification_var = tk.BooleanVar(value=bool(run_config.get("clip_saved_notification", True)))
         self.check_updates_var = tk.BooleanVar(value=controller["load_update_config"]()["check_for_updates"])
 
         ctrl0, alt0, shift0, key0 = controller["load_clip_hotkey"]()
@@ -1179,6 +1181,11 @@ class Wizard(tk.Tk):
 
         set_sound_section_state(self.sound_enabled_var.get())
 
+        self._make_toggle(
+            self.container, self.clip_notification_var,
+            "Show a notification when a clip is saved from the tray menu",
+        )
+
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_hotkey)
         ttk.Button(bar, text="Continue", command=self._apply_sound).pack(side="right")
 
@@ -1389,10 +1396,14 @@ class Wizard(tk.Tk):
             self.log_text.see("end")
 
         def work():
-            self.controller["save_run_config"]({
+            # Merged into what's there - Settings keeps more in this file.
+            run_config = self.controller["load_run_config"]()
+            run_config.update({
                 "autostart_obs": self.autostart_var.get(),
                 "autostart_tray": self.autostart_var.get(),
+                "clip_saved_notification": self.clip_notification_var.get(),
             })
+            self.controller["save_run_config"](run_config)
             self.controller["change_update_config"](check_for_updates=self.check_updates_var.get())
             # Before this install's own entry is written - one of these may
             # sit at the same path.

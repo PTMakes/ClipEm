@@ -95,6 +95,22 @@ function clipItem(clip) {
   size.className = "size muted";
   const badges = document.createElement("span");
   badges.className = "badges";
+  // The clip's newest export, shown in its folder - see updateItem. On
+  // its own row under the thumbnail: the text beside it is too narrow.
+  const exported = document.createElement("button");
+  exported.className = "clip-export";
+  exported.innerHTML = LINK_ICON + "<span></span>";
+  exported.addEventListener("click", async (e) => {
+    e.stopPropagation();
+    const name = exported.dataset.file;
+    if (!name) return;
+    try {
+      await api("api/reveal", { name, path: exported.dataset.path });
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+  exported.addEventListener("keydown", (e) => e.stopPropagation());
   text.append(when, size, badges);
 
   const remove = document.createElement("button");
@@ -108,7 +124,10 @@ function clipItem(clip) {
   });
   remove.addEventListener("keydown", (e) => e.stopPropagation());
 
-  li.append(thumb, text, remove);
+  const exportRow = document.createElement("div");
+  exportRow.className = "clip-export-row";
+  exportRow.append(exported);
+  li.append(thumb, text, exportRow, remove);
   li.addEventListener("click", () => select(clip.name));
   li.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(clip.name); }
@@ -135,8 +154,21 @@ function updateItem(li, clip) {
       badges.append(badge);
     }
   }
+  const exported = li.querySelector(".clip-export");
+  const last = clip.last_export;
+  exported.hidden = !last;
+  exported.parentElement.hidden = !last;
+  if (last) {
+    exported.dataset.file = last.name;
+    exported.dataset.path = last.path;
+    exported.title = `Show ${last.name} in its folder`;
+    exported.querySelector("span").textContent = `Last exported ${new Date(last.time * 1000).toLocaleString(
+      undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`;
+  }
   li.classList.toggle("selected", clip.name === state.selected);
 }
+
+const LINK_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.8 9.2a2.6 2.6 0 0 0 3.7 0l2.3-2.3a2.6 2.6 0 0 0-3.7-3.7l-1 1M9.2 6.8a2.6 2.6 0 0 0-3.7 0L3.2 9.1a2.6 2.6 0 0 0 3.7 3.7l1-1"/></svg>';
 
 const TRASH_NAME = /Windows/.test(navigator.userAgent) ? "Recycle Bin" : "Trash";
 const TRASH_ICON = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4h11M6 4V2.5h4V4M4 4l.7 9.5h6.6L12 4M6.6 6.5v4.5M9.4 6.5v4.5"/></svg>';
@@ -319,6 +351,7 @@ async function loadClips() {
     const hadNewest = state.clips[0] && state.clips[0].name;
     const first = state.clips.length === 0 && state.selected === null;
     state.clips = data.clips;
+    state.folder = data.folder;
     renderList();
     if (!selectedClip()) {
       // First load (or the selected clip was deleted): open the latest one.

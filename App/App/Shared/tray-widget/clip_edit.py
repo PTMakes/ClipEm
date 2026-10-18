@@ -10,7 +10,11 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
                  "volume_db": 0,      # whole-track gain
                  "offset": 0.0,       # seconds to shift the track (+ later)
                  "muted": false,
-                 "regions": [{"start": s, "end": e, "db": g}]}]}
+                 "level": false,      # auto-level: loudnorm to LEVEL_TARGET_LUFS
+                 "gate_db": null,     # noise gate threshold (dBFS), null: off
+                 "mono": false,       # left and right combined, on both sides
+                 "regions": [{"start": s, "end": e, "db": g,
+                              "channel": null}]}]}  # 0 left / 1 right only, null both
 
 Trims and cuts both just shorten `keep`. Gain regions are in the clip's own
 timeline (before cuts), so a region keeps its place when a cut is added.
@@ -43,6 +47,35 @@ REQUIRED_FILTERS = (
     "volume", "amix", "adelay", "apad", "afade",
 )
 REQUIRED_MUXERS = ("mp4", "matroska", "null", "s16le")
+# Only for "Level" (older ClipEm ffmpeg builds lack them - the button is
+# then unavailable, everything else still works).
+LEVEL_FILTERS = ("loudnorm", "alimiter")
+# Only for the noise gate, likewise.
+GATE_FILTERS = ("agate",)
+# Noise gate: below the threshold, sound is turned down by GATE_RANGE_DB -
+# the hiss and hum between words. After Level, so the threshold is relative
+# to the leveled track (and Level doesn't boost the gated noise back up).
+GATE_DEFAULT_DB = -45
+GATE_MIN_DB, GATE_MAX_DB = -70, -10
+GATE_RANGE_DB = -30
+GATE_RATIO = 8
+GATE_ATTACK_MS = 5
+GATE_RELEASE_MS = 150
+# Only for "Mono" and one-channel volume changes, likewise.
+CHANNEL_FILTERS = ("pan", "channelsplit", "join")
+MONO_PAN = "pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1"
+
+# "Level": loudnorm's dynamic mode evens a track out - quiet parts up, loud
+# parts down - to the loudness most web video is mastered to (YouTube and
+# the streaming services normalize to about -14 LUFS; Discord plays files
+# as they are, so that's a good level there too), with true peaks kept
+# under -1.5 dBTP so the AAC encode doesn't clip.
+LEVEL_TARGET_LUFS = -14
+LEVEL_TRUE_PEAK_DB = -1.5
+LEVEL_RANGE_LU = 7
+# Leveled tracks are each at the target, so a mix of several is louder -
+# a limiter on the mix keeps its peaks at the same ceiling.
+MIX_LIMIT = 10 ** (LEVEL_TRUE_PEAK_DB / 20)
 
 KBIT_PER_MB = 8000  # decimal MB, as Discord counts them
 SIZE_HEADROOM = 0.95
@@ -87,8 +120,8 @@ _TITLE_RE = re.compile(r"^\s*title\s*:\s*(.*?)\s*$")
 
 def parse_probe(stderr):
     """{"duration", "width", "height", "fps", "video_codec", "audio": [{"index",
-    "codec", "title"}]} from what `ffmpeg -i <file>` prints. "index" counts
-    audio streams only (ffmpeg's 0:a:N)."""
+    "codec", "title", "channels"}]} from what `ffmpeg -i <file>` prints.
+    "index" counts audio streams only (ffmpeg's 0:a:N)."""
     info = {"duration": None, "width": None, "height": None, "fps": None, "video_codec": None, "audio": []}
     match = _DURATION_RE.search(stderr or "")
     if match:
@@ -109,7 +142,8 @@ def parse_probe(stderr):
                 if fps:
                     info["fps"] = float(fps.group(1))
             elif kind == "Audio":
-                current = {"index": len(info["audio"]), "codec": codec, "title": None}
+                current = {"index": len(info["audio"]), "codec": codec, "title": None,
+                           "channels": _channel_count(rest)}
                 info["audio"].append(current)
             continue
         title = _TITLE_RE.match(line)
@@ -118,6 +152,21 @@ def parse_probe(stderr):
         elif line.strip().startswith(("Input #", "Output #", "Chapters")):
             current = None
     return info
+
+
+def _channel_count(stream_details):
+    """1 for "mono", 2 for "stereo" (or unknown), 6 for "5.1"..."""
+    layout = re.search(r"\bHz, ([^,]+)", stream_details)
+    name = layout.group(1).strip() if layout else ""
+    count = re.match(r"(\d+) channels", name)
+    if count:
+        return int(count.group(1))
+    return {"mono": 1, "stereo": 2, "2.1": 3, "quad": 4, "5.0": 5, "5.1": 6, "6.1": 7, "7.1": 8}.get(
+        name.split("(")[0], 2)
+
+
+def channel_count(info, index):
+    return info["audio"][index].get("channels", 2)
 
 
 def probe(ffmpeg, path, run=subprocess.run):
@@ -129,9 +178,8 @@ def probe(ffmpeg, path, run=subprocess.run):
     return info
 
 
-def missing_features(ffmpeg, run=subprocess.run):
-    """The REQUIRED_FILTERS/REQUIRED_MUXERS this ffmpeg lacks (an older
-    ClipEm ffmpeg build) - empty when it can do everything."""
+def ffmpeg_features(ffmpeg, run=subprocess.run):
+    """The names of every filter and muxer this ffmpeg has."""
     found = set()
     for kind in ("-filters", "-muxers"):
         result = run([ffmpeg, "-hide_banner", kind], capture_output=True, text=True, errors="replace",
@@ -140,6 +188,13 @@ def missing_features(ffmpeg, run=subprocess.run):
             parts = line.split()
             if len(parts) >= 2:
                 found.add(parts[1])
+    return found
+
+
+def missing_features(ffmpeg, run=subprocess.run, found=None):
+    """The REQUIRED_FILTERS/REQUIRED_MUXERS this ffmpeg lacks (an older
+    ClipEm ffmpeg build) - empty when it can do everything."""
+    found = ffmpeg_features(ffmpeg, run) if found is None else found
     return [name for name in REQUIRED_FILTERS + REQUIRED_MUXERS if name not in found]
 
 
@@ -161,7 +216,8 @@ def default_project(info):
         "version": PROJECT_VERSION,
         "keep": [[0.0, round(info["duration"], 3)]],
         "tracks": [
-            {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "regions": []}
+            {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "level": False,
+             "gate_db": None, "mono": False, "regions": []}
             for track in info["audio"]
         ],
     }
@@ -217,6 +273,7 @@ def normalize_project(project, info):
     tracks = []
     for default in base["tracks"]:
         given = by_index.get(default["index"], {})
+        stereo = channel_count(info, default["index"]) >= 2
         regions = []
         for region in given.get("regions") or []:
             if not isinstance(region, dict):
@@ -224,13 +281,18 @@ def normalize_project(project, info):
             span = merge_ranges([[region.get("start"), region.get("end")]], duration, min_length=0.01)
             if span:
                 db = _clamp(_number(region.get("db")), MUTE_DB, MAX_GAIN_DB)
-                regions.append({"start": span[0][0], "end": span[0][1], "db": round(db, 2)})
+                channel = region.get("channel")
+                channel = channel if stereo and channel in (0, 1) and not isinstance(channel, bool) else None
+                regions.append({"start": span[0][0], "end": span[0][1], "db": round(db, 2), "channel": channel})
         regions.sort(key=lambda r: r["start"])
         tracks.append({
             "index": default["index"],
             "volume_db": round(_clamp(_number(given.get("volume_db")), MUTE_DB, MAX_GAIN_DB), 2),
             "offset": round(_clamp(_number(given.get("offset")), -MAX_OFFSET_SECONDS, MAX_OFFSET_SECONDS), 3),
             "muted": bool(given.get("muted", False)),
+            "level": bool(given.get("level", False)),
+            "gate_db": _gate_db(given.get("gate_db")),
+            "mono": stereo and bool(given.get("mono", False)),
             "regions": regions,
         })
     if _number(project.get("version"), PROJECT_VERSION) < 2 and is_split_layout(info):
@@ -241,6 +303,13 @@ def normalize_project(project, info):
         if source == "tracks" or (source is None and any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)):
             tracks[0]["muted"] = True
     return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks}
+
+
+def _gate_db(value):
+    """A noise gate threshold, whole dB within range - None: no gate."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return int(round(_clamp(value, GATE_MIN_DB, GATE_MAX_DB)))
 
 
 def _containers(index):
@@ -267,7 +336,14 @@ def mix_inputs(project, info):
 
 
 def _is_edited(track):
-    return bool(track["volume_db"] or track["offset"] or track["muted"] or track["regions"])
+    return bool(track["volume_db"] or track["offset"] or track["muted"] or track.get("level") or track.get("mono")
+                or track.get("gate_db") is not None or track["regions"])
+
+
+def uses_channels(project):
+    """Whether the project needs CHANNEL_FILTERS (Mono, one-channel changes)."""
+    return any(track.get("mono") or any(r.get("channel") is not None for r in track["regions"])
+               for track in project["tracks"])
 
 
 def kept_duration(project):
@@ -300,9 +376,36 @@ def _gain(db):
     return "0" if db <= MUTE_DB else f"{db:g}dB"
 
 
+def level_filters():
+    """The "Level" chain - loudnorm works at 192 kHz, so back to 48 kHz after."""
+    return [f"loudnorm=I={LEVEL_TARGET_LUFS}:TP={LEVEL_TRUE_PEAK_DB}:LRA={LEVEL_RANGE_LU}",
+            "aresample=48000", "aformat=sample_rates=48000:channel_layouts=stereo"]
+
+
+def gate_filters(threshold_db):
+    return [f"agate=threshold={10 ** (threshold_db / 20):.6f}:range={10 ** (GATE_RANGE_DB / 20):.6f}"
+            f":ratio={GATE_RATIO}:attack={GATE_ATTACK_MS}:release={GATE_RELEASE_MS}"]
+
+
+def effect_filters(level=False, gate_db=None):
+    """Level, then the noise gate - as the editor previews them
+    (track_audio()/track_peaks() with the same arguments)."""
+    filters = level_filters() if level else []
+    if gate_db is not None:
+        filters += gate_filters(gate_db)
+    return filters
+
+
 def _track_chain(track, duration):
-    """Filters for one track in the clip's own timeline: shift, gain, mute."""
+    """Filters for one track in the clip's own timeline: level, noise gate,
+    mono, shift, gain, mute (one-channel changes are added by _add_track).
+    The effects come first, on the whole recorded track - what the editor
+    previews - then it's made mono the way the editor does."""
     filters = ["aformat=sample_rates=48000:channel_layouts=stereo"]
+    if not track["muted"]:
+        filters += effect_filters(track.get("level"), track.get("gate_db"))
+    if track.get("mono") and not track["muted"]:
+        filters.append(MONO_PAN)
     offset = track["offset"]
     if offset > 0:
         filters.append(f"adelay=delays={round(offset * 1000)}:all=1")
@@ -320,12 +423,35 @@ def _gain_filters(track):
         return ["volume=0"]
     if track["volume_db"]:
         filters.append(f"volume={_gain(track['volume_db'])}")
-    for region in track["regions"]:
-        if region["db"]:
-            filters.append(
-                f"volume=enable='between(t,{region['start']:g},{region['end']:g})':volume={_gain(region['db'])}"
-            )
-    return filters
+    return filters + _region_filters(track, None)
+
+
+def _region_filters(track, channel):
+    """The volume changes on both channels (None), or on just one."""
+    return [
+        f"volume=enable='between(t,{region['start']:g},{region['end']:g})':volume={_gain(region['db'])}"
+        for region in track["regions"] if region["db"] and region.get("channel") == channel
+    ]
+
+
+def _add_track(graph, track, duration):
+    """Adds one track's chain to graph; returns its output label. One-channel
+    volume changes split it into left and right, change each, and join them."""
+    label = graph.label("t")
+    chain = _track_chain(track, duration)
+    sides = [] if track["muted"] else [_region_filters(track, channel) for channel in (0, 1)]
+    if not any(sides):
+        graph.add([f"0:a:{track['index']}"], chain, [label])
+        return label
+    left, right = graph.label("l"), graph.label("r")
+    graph.add([f"0:a:{track['index']}"], chain + ["channelsplit=channel_layout=stereo"], [left, right])
+    joined = []
+    for side, filters in zip((left, right), sides, strict=True):
+        out = graph.label("c")
+        graph.add([side], filters or ["anull"], [out])
+        joined.append(out)
+    graph.add(joined, ["join=inputs=2:channel_layout=stereo"], [label])
+    return label
 
 
 class _Graph:
@@ -410,8 +536,7 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
     edited = {}
     for track in tracks:
         if uses[track["index"]]:  # never for a rebuilt clip's Mix - it isn't used
-            label = graph.label("t")
-            graph.add([f"0:a:{track['index']}"], _track_chain(track, duration), [label])
+            label = _add_track(graph, track, duration)
             edited[track["index"]] = graph.split(label, uses[track["index"]], audio=True)
 
     outputs = []
@@ -420,8 +545,10 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
         mixed = sources[0]
         if len(sources) > 1:
             mixed = graph.label("m")
-            graph.add(sources, [f"amix=inputs={len(sources)}:normalize=0:duration=longest:dropout_transition=0"],
-                      [mixed])
+            mix = [f"amix=inputs={len(sources)}:normalize=0:duration=longest:dropout_transition=0"]
+            if any(track.get("level") for track in tracks if track["index"] in inputs):
+                mix.append(f"alimiter=limit={MIX_LIMIT:.4f}:level=false:latency=1")  # no lookahead delay
+            graph.add(sources, mix, [mixed])
         outputs.append(_cut(graph, mixed, keep, audio=True))
     for track in tracks:
         if edited.get(track["index"]):
@@ -549,26 +676,42 @@ def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
 # Preview audio and waveforms
 # ---------------------------------------------------------------------------
 
-def track_audio_command(ffmpeg, source, index, codec, out_path):
+def track_audio_command(ffmpeg, source, index, codec, out_path, level=False, gate_db=None):
     """One audio track as an .m4a the page can play next to the (muted)
-    video - copied when it's already AAC."""
+    video - copied when it's already AAC. level/gate_db: with those effects."""
     cmd = [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", source,
            "-map", f"0:a:{index}", "-vn"]
-    cmd += ["-c:a", "copy"] if codec == "aac" else ["-c:a", "aac", "-b:a", f"{PREVIEW_AUDIO_KBPS}k"]
+    effects = effect_filters(level, gate_db)
+    if effects:
+        cmd += ["-af", ",".join(effects)]
+    cmd += ["-c:a", "copy"] if codec == "aac" and not effects else ["-c:a", "aac", "-b:a", f"{PREVIEW_AUDIO_KBPS}k"]
     return cmd + ["-f", "mp4", out_path]
 
 
-def peaks_command(ffmpeg, source, index):
-    return [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", source, "-map", f"0:a:{index}",
-            "-ac", "1", "-ar", str(PEAK_SAMPLE_RATE), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]
+def peaks_command(ffmpeg, source, index, level=False, channels=1, gate_db=None):
+    cmd = [ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", source, "-map", f"0:a:{index}"]
+    effects = effect_filters(level, gate_db)
+    if effects:
+        cmd += ["-af", ",".join(effects)]
+    return cmd + ["-ac", str(channels), "-ar", str(PEAK_SAMPLE_RATE), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]
 
 
-def peaks_from_pcm(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECOND):
-    """0-255 loudness peaks, per_second of them per second of audio."""
+def peaks_from_pcm(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECOND, channels=1):
+    """0-255 loudness peaks, per_second of them per second of audio - of
+    interleaved PCM's first channel (peaks_by_channel() for the others)."""
+    return peaks_by_channel(pcm, sample_rate, per_second, channels)[0]
+
+
+def peaks_by_channel(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECOND, channels=1):
+    """peaks_from_pcm() for each channel of interleaved PCM."""
     samples = array.array("h")
-    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    samples.frombytes(pcm[: len(pcm) // (2 * channels) * 2 * channels])
     if sys.byteorder == "big":
         samples.byteswap()
+    return [_peaks(samples[channel::channels], sample_rate, per_second) for channel in range(channels)]
+
+
+def _peaks(samples, sample_rate, per_second):
     step = max(1, sample_rate // per_second)
     peaks = []
     for start in range(0, len(samples), step):
@@ -605,22 +748,32 @@ def _cache_lock(key):
         return _locks.setdefault(key, threading.Lock())
 
 
-def track_audio(ffmpeg, source, info, index, cache_path, run=subprocess.run):
+def track_audio(ffmpeg, source, info, index, cache_path, run=subprocess.run, level=False, gate_db=None):
     def make(partial):
-        result = run(track_audio_command(ffmpeg, source, index, info["audio"][index]["codec"], partial),
+        result = run(track_audio_command(ffmpeg, source, index, info["audio"][index]["codec"], partial, level,
+                                         gate_db),
                      capture_output=True, text=True, errors="replace", **_no_window_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"Couldn't extract audio track {index + 1}: {result.stderr.strip()[-300:]}")
     return _cached(cache_path, make)
 
 
-def track_peaks(ffmpeg, source, index, cache_path, run=subprocess.run):
+def track_peaks(ffmpeg, source, index, cache_path, run=subprocess.run, level=False, channels=1, gate_db=None):
+    """{"per_second", "peaks", "channels": [left peaks, right peaks]} - the
+    loudest of both in "peaks", and "channels" only for a stereo track."""
+    channels = 2 if channels >= 2 else 1
+
     def make(partial):
-        result = run(peaks_command(ffmpeg, source, index), capture_output=True, **_no_window_kwargs())
+        result = run(peaks_command(ffmpeg, source, index, level, channels, gate_db), capture_output=True,
+                     **_no_window_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"Couldn't read audio track {index + 1}: {result.stderr.decode(errors='replace')[-300:]}")
+        sides = peaks_by_channel(result.stdout, channels=channels)
+        data = {"per_second": PEAKS_PER_SECOND, "peaks": [max(values) for values in zip(*sides, strict=True)]}
+        if channels == 2:
+            data["channels"] = sides
         with open(partial, "w", encoding="utf-8") as f:
-            json.dump({"per_second": PEAKS_PER_SECOND, "peaks": peaks_from_pcm(result.stdout)}, f)
+            json.dump(data, f)
     with open(_cached(cache_path, make), "r", encoding="utf-8") as f:
         return json.load(f)
 
@@ -661,15 +814,17 @@ class ExportJob:
     def running(self):
         return self.status["state"] == "running"
 
-    def start(self, steps, outputs, total_seconds, cleanup=()):
+    def start(self, steps, outputs, total_seconds, cleanup=(), on_done=None):
         """steps: [(command, label, weight)] writing to the partial paths in
-        outputs ({partial: final}). Returns False if one is already running."""
+        outputs ({partial: final}). on_done([final paths]) runs once they're
+        all in place. Returns False if one is already running."""
         with self._lock:
             if self.running():
                 return False
             self._cancel = False
             self.status = {"state": "running", "message": "Starting...", "progress": 0.0, "files": []}
-        threading.Thread(target=self._run, args=(steps, outputs, total_seconds, cleanup), daemon=True).start()
+        threading.Thread(target=self._run, args=(steps, outputs, total_seconds, cleanup, on_done),
+                         daemon=True).start()
         return True
 
     def cancel(self):
@@ -678,7 +833,7 @@ class ExportJob:
             if self._proc and self._proc.poll() is None:
                 self._proc.terminate()
 
-    def _run(self, steps, outputs, total_seconds, cleanup):
+    def _run(self, steps, outputs, total_seconds, cleanup, on_done=None):
         done_weight = 0.0
         try:
             for cmd, label, weight in steps:
@@ -686,8 +841,15 @@ class ExportJob:
                 done_weight += weight
             for partial, final in outputs.items():
                 os.replace(partial, final)
+            if on_done:
+                try:
+                    on_done(list(outputs.values()))
+                except Exception as exc:  # the export itself worked
+                    self._log(f"After the export: {exc}")
             self.status = {"state": "done", "message": "Exported.", "progress": 1.0,
-                           "files": [os.path.basename(final) for final in outputs.values()]}
+                           "files": [os.path.basename(final) for final in outputs.values()],
+                           "paths": list(outputs.values()),
+                           "sizes": [os.path.getsize(final) for final in outputs.values()]}
         except ExportCancelled:
             self.status = {"state": "cancelled", "message": "Export cancelled.", "progress": 0.0, "files": []}
         except Exception as exc:

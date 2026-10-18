@@ -152,3 +152,43 @@ def test_remove_linux_menu_entry_only_removes_this_install(menu_dir):
     other = _write(menu_dir, "clipem.desktop", '[Desktop Entry]\nExec="/py" "/elsewhere/run.py"\n')
     autostart.remove_start_menu_shortcut()
     assert os.path.exists(other)
+
+
+def test_start_menu_entry_is_added_once_for_updated_installs(monkeypatch):
+    config = {}
+    made = []
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(autostart, "load_run_config", lambda: dict(config))
+
+    def create():
+        made.append(True)
+        config["start_menu_registered"] = autostart.START_MENU_REGISTRATION
+        return "C:\\Start Menu\\ClipEm.lnk"
+
+    monkeypatch.setattr(autostart, "create_start_menu_shortcut", create)
+    assert autostart.ensure_start_menu_entry() == "C:\\Start Menu\\ClipEm.lnk"  # updated from before it existed
+    assert autostart.ensure_start_menu_entry() is None and made == [True]  # done - not again
+    config["start_menu_registered"] = "junk"
+    assert autostart.ensure_start_menu_entry() and len(made) == 2
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    config.clear()
+    assert autostart.ensure_start_menu_entry() is None and len(made) == 2
+
+
+def test_start_menu_entry_gives_up_after_a_few_failed_launches(monkeypatch):
+    config = {}
+    tries = []
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(autostart, "load_run_config", lambda: dict(config))
+    monkeypatch.setattr(autostart, "save_run_config", lambda new: (config.clear(), config.update(new)))
+
+    def fail():
+        tries.append(True)
+        raise OSError("PowerShell is blocked")
+
+    monkeypatch.setattr(autostart, "create_start_menu_shortcut", fail)
+    for _ in range(autostart.START_MENU_MAX_ATTEMPTS):
+        with pytest.raises(OSError):
+            autostart.ensure_start_menu_entry()
+    assert autostart.ensure_start_menu_entry() is None
+    assert len(tries) == autostart.START_MENU_MAX_ATTEMPTS

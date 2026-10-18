@@ -102,7 +102,8 @@ def test_normalize_cleans_up_whatever_the_page_sends():
     mic = clean["tracks"][1]
     assert mic["volume_db"] == clip_edit.MAX_GAIN_DB and mic["offset"] == -clip_edit.MAX_OFFSET_SECONDS
     assert mic["muted"] is True
-    assert mic["regions"] == [{"start": 1.0, "end": 3.0, "db": 0.0}, {"start": 2.0, "end": 4.0, "db": -60.0}]
+    assert mic["regions"] == [{"start": 1.0, "end": 3.0, "db": 0.0, "channel": None},
+                              {"start": 2.0, "end": 4.0, "db": -60.0, "channel": None}]
     assert [t["index"] for t in clean["tracks"]] == [0, 1, 2, 3]  # no track 42
     assert clip_edit.kept_duration(clean) == pytest.approx(5.0)
     assert clean["version"] == clip_edit.PROJECT_VERSION and "mix_source" not in clean
@@ -213,6 +214,87 @@ def test_what_is_heard_is_what_is_mixed():
     assert clip_edit.mix_inputs(plain, _info(PROBE_PLAIN)) == [0]
 
 
+def test_level_runs_first_on_each_leveled_track_and_limits_the_mix():
+    info = _info()
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True  # Mic + Desktop
+    project["tracks"][1]["level"] = True
+    project["tracks"][1]["volume_db"] = 3
+    project = clip_edit.normalize_project(project, info)
+    assert project["tracks"][1]["level"] is True and project["tracks"][2]["level"] is False
+    graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
+    mic = next(line for line in graph.split(";") if line.startswith("[0:a:1]"))
+    assert mic.index("loudnorm=I=-14:TP=-1.5") < mic.index("volume=3dB")  # leveled, then the user's gain
+    assert graph.count("loudnorm") == 1 and "alimiter" in graph
+    project["tracks"][1]["level"] = False
+    assert "alimiter" not in clip_edit.build_graph(project, info, audio="mix")[0]
+    project["tracks"][1].update(level=True, muted=True)  # a muted track isn't leveled
+    assert "loudnorm" not in clip_edit.build_graph(project, info, audio="tracks")[0]
+
+
+def test_probe_reads_channel_counts():
+    assert clip_edit._channel_count(", 48000 Hz, stereo, fltp, 128 kb/s") == 2
+    assert clip_edit._channel_count(", 48000 Hz, mono, fltp") == 1
+    assert clip_edit._channel_count(", 48000 Hz, 5.1(side), fltp") == 6
+    assert clip_edit._channel_count(", 44100 Hz, 3 channels, s16") == 3
+    assert clip_edit._channel_count(" (default)") == 2  # unknown: treated as stereo
+
+
+def test_mono_and_one_channel_changes():
+    info = _info()
+    info["audio"][3]["channels"] = 1
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    mic = project["tracks"][1]
+    mic["mono"] = True
+    mic["regions"] = [{"start": 1, "end": 2, "db": -6, "channel": 0}, {"start": 3, "end": 4, "db": 3},
+                      {"start": 5, "end": 6, "db": 2, "channel": True}]
+    project["tracks"][3].update(mono=True, regions=[{"start": 1, "end": 2, "db": -6, "channel": 1}])
+    project = clip_edit.normalize_project(project, info)
+    mic = project["tracks"][1]
+    assert mic["mono"] is True and [r["channel"] for r in mic["regions"]] == [0, None, None]
+    assert project["tracks"][3]["mono"] is False and project["tracks"][3]["regions"][0]["channel"] is None
+    assert clip_edit.uses_channels(project)
+    graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
+    lines = graph.split(";")
+    split = next(line for line in lines if line.startswith("[0:a:1]"))
+    assert clip_edit.MONO_PAN in split and split.index("pan=") < split.index("volume=enable")
+    assert "between(t,3,4)" in split and "channelsplit=channel_layout=stereo" in split
+    left = [line for line in lines if "between(t,1,2)" in line]
+    assert len(left) == 1 and "channelsplit" not in left[0]  # only on the left side, after the split
+    assert sum("join=inputs=2" in line for line in lines) == 1
+    mic["mono"] = False
+    mic["regions"] = [r for r in mic["regions"] if r["channel"] is None]
+    assert not clip_edit.uses_channels({"tracks": [mic]})
+
+
+def test_noise_gate_comes_after_level_and_before_mono():
+    info = _info()
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    project["tracks"][1].update(level=True, gate_db=-47.6, mono=True)
+    project["tracks"][2]["gate_db"] = True  # not a number: off
+    project = clip_edit.normalize_project(project, info)
+    assert project["tracks"][1]["gate_db"] == -48 and project["tracks"][2]["gate_db"] is None
+    assert clip_edit.normalize_project({"tracks": [{"index": 1, "gate_db": -500}]}, info)["tracks"][1]["gate_db"] == (
+        clip_edit.GATE_MIN_DB)
+    graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
+    mic = next(line for line in graph.split(";") if line.startswith("[0:a:1]"))
+    assert mic.index("loudnorm") < mic.index("agate=threshold=0.003981") < mic.index("pan=")
+    preview = clip_edit.track_audio_command("ffmpeg", "x", 1, "aac", "o", gate_db=-48)
+    assert "copy" not in preview and preview[preview.index("-c:a") + 1] == "aac"  # re-encoded with the gate
+    assert "agate" in " ".join(clip_edit.peaks_command("ffmpeg", "x", 1, gate_db=-48))
+
+
+def test_peaks_by_channel():
+    import array
+    frames = array.array("h", [32767, 0] * 40 + [0, -16384] * 40)  # left loud, then right half
+    if sys.byteorder == "big":
+        frames.byteswap()
+    left, right = clip_edit.peaks_by_channel(frames.tobytes(), sample_rate=40, per_second=1, channels=2)
+    assert left == [255, 0] and right == [0, 127]
+
+
 def test_every_filter_output_is_used_exactly_once():
     import re
     for info, audio, muted in [(_info(text), audio, muted) for text in (PROBE_SPLIT, PROBE_PLAIN)
@@ -222,6 +304,7 @@ def test_every_filter_output_is_used_exactly_once():
             if index < len(project["tracks"]):
                 project["tracks"][index]["muted"] = True
         project["keep"] = [[0.0, 3.0], [4.0, 6.0], [7.0, 10.0]]
+        project["tracks"][-1]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0, "channel": 0}]
         graph, vout, outs = clip_edit.build_graph(project, info, video_height=720, fps=30, audio=audio)
         produced, consumed = [], []
         for line in graph.split(";"):
@@ -469,3 +552,63 @@ def test_real_preview_audio_and_peaks(tracks_clip, tmp_path):
     assert abs(len(data["peaks"]) - 10 * clip_edit.PEAKS_PER_SECOND) <= 2
     assert max(data["peaks"]) > 20
     assert json.loads((tmp_path / "p1.json").read_text()) == data
+
+
+def _integrated_lufs(path):
+    result = subprocess.run([shutil.which("ffmpeg"), "-hide_banner", "-nostats", "-i", str(path),
+                             "-af", "ebur128", "-f", "null", "-"], capture_output=True, text=True)
+    return float(result.stderr.rsplit("I:", 1)[1].split("LUFS")[0])
+
+
+@needs_ffmpeg
+def test_real_level_reaches_the_target(tracks_clip, tmp_path):
+    found = clip_edit.ffmpeg_features(FFMPEG)
+    if not all(name in found for name in clip_edit.LEVEL_FILTERS) or clip_edit.missing_features(FFMPEG, found=found):
+        pytest.skip("this ffmpeg can't level audio")
+    info = clip_edit.probe(FFMPEG, str(tracks_clip))
+    m4a = clip_edit.track_audio(FFMPEG, str(tracks_clip), info, 1, str(tmp_path / "t1.m4a"), level=True)
+    assert _integrated_lufs(m4a) == pytest.approx(clip_edit.LEVEL_TARGET_LUFS, abs=1.0)
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    project["tracks"][1]["level"] = project["tracks"][2]["level"] = True
+    mkv, mp4 = tmp_path / "out.mkv", tmp_path / "out.mp4"
+    _run(clip_edit.full_quality_commands(FFMPEG, str(tracks_clip), project, info, str(mkv), str(mp4)))
+    assert clip_edit.probe(FFMPEG, str(mp4))["duration"] == pytest.approx(10.0, abs=0.1)
+
+
+@needs_ffmpeg
+def test_real_mono_and_left_only_export(tracks_clip, tmp_path):
+    found = clip_edit.ffmpeg_features(FFMPEG)
+    if not all(name in found for name in clip_edit.CHANNEL_FILTERS) or clip_edit.missing_features(FFMPEG, found=found):
+        pytest.skip("this ffmpeg can't split channels")
+    info = clip_edit.probe(FFMPEG, str(tracks_clip))
+    assert all(track["channels"] == 2 for track in info["audio"])
+    project = clip_edit.default_project(info)
+    project["tracks"][0]["muted"] = True
+    project["tracks"][1]["mono"] = True
+    project["tracks"][2]["regions"] = [{"start": 2, "end": 4, "db": -60, "channel": 0}]
+    project = clip_edit.normalize_project(project, info)
+    mkv, mp4 = tmp_path / "out.mkv", tmp_path / "out.mp4"
+    _run(clip_edit.full_quality_commands(FFMPEG, str(tracks_clip), project, info, str(mkv), str(mp4)))
+    assert clip_edit.probe(FFMPEG, str(mp4))["audio"][0]["channels"] == 2
+    data = clip_edit.track_peaks(FFMPEG, str(mkv), 2, str(tmp_path / "desktop.json"), channels=2)
+    left, right = data["channels"]
+    per = data["per_second"]
+    assert max(left[int(2.5 * per):int(3.5 * per)]) < 5 < min(right[int(2.5 * per):int(3.5 * per)])
+
+
+@needs_ffmpeg
+def test_real_noise_gate_turns_down_the_quiet_part(tmp_path):
+    if "agate" not in clip_edit.ffmpeg_features(FFMPEG):
+        pytest.skip("this ffmpeg has no noise gate")
+    maker = shutil.which("ffmpeg")
+    clip = tmp_path / "speech.mkv"
+    # 2 s of hiss (about -34 dB), then 2 s of a loud tone.
+    subprocess.run([maker, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "anoisesrc=d=2:a=0.02:r=48000[n];aevalsrc=0.5*sin(2*PI*440*t):d=2:s=48000[t];[n][t]concat=n=2:v=0:a=1",
+                    "-ac", "2", "-c:a", "pcm_s16le", str(clip)], check=True)
+    plain = clip_edit.track_peaks(FFMPEG, str(clip), 0, str(tmp_path / "plain.json"))["peaks"]
+    gated = clip_edit.track_peaks(FFMPEG, str(clip), 0, str(tmp_path / "gated.json"), gate_db=-25)["peaks"]
+    per = clip_edit.PEAKS_PER_SECOND
+    assert max(gated[per // 2:per * 3 // 2]) < max(plain[per // 2:per * 3 // 2]) / 4  # the hiss, turned down
+    assert max(gated[per * 5 // 2:per * 7 // 2]) >= max(plain[per * 5 // 2:per * 7 // 2]) * 0.9  # the tone, kept

@@ -14,7 +14,8 @@
 // matching the clipem-editor.desktop entry clip_browser.py writes, so the
 // taskbar shows ClipEm's icon.
 
-const { app, BrowserWindow, Menu } = require("electron");
+const path = require("path");
+const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
 
 function arg(name) {
   const prefix = `--clipem-${name}=`;
@@ -75,7 +76,10 @@ function start() {
       icon: icon || undefined,
       autoHideMenuBar: true,
       show: false, // shown maximized, below
-      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false },
+      webPreferences: {
+        contextIsolation: true, nodeIntegration: false, sandbox: true, spellcheck: false,
+        preload: path.join(__dirname, "preload.js"),
+      },
     });
     // Only ClipEm's own page: no pop-ups, no navigating anywhere else.
     win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
@@ -86,6 +90,19 @@ function start() {
     win.maximize();
     win.show();
     win.loadURL(url);
+  });
+
+  // "Export As": the page asks for a save path (preload.js); only ClipEm's
+  // own page, and only one dialog at a time on this window.
+  ipcMain.handle("clipem:save-as", async (event, options) => {
+    if (!win || new URL(event.senderFrame.url).origin !== origin) return null;
+    const result = await dialog.showSaveDialog(win, {
+      title: "Export As",
+      defaultPath: (options && options.defaultPath) || undefined,
+      filters: [{ name: "MP4 video", extensions: ["mp4"] }],
+      properties: ["showOverwriteConfirmation", "createDirectory"],
+    });
+    return result.canceled || !result.filePath ? null : result.filePath;
   });
 
   app.on("window-all-closed", () => app.quit());

@@ -100,7 +100,7 @@ body {
 }
 
 .clip:hover { background: var(--hover); }
-.clip { position: relative; }
+.clip { position: relative; flex-wrap: wrap; row-gap: 4px; }
 
 .clip-delete {
   position: absolute;
@@ -182,6 +182,34 @@ body {
 
 .badges { display: flex; gap: 4px; }
 
+.clip-export-row { flex-basis: 100%; min-width: 0; display: flex; }
+.clip-export-row[hidden] { display: none; }
+.clip-export {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: calc(100% - 32px); /* clear of the delete button below-right */
+  padding: 1px 7px 1px 5px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--accent);
+  background: none;
+}
+.clip-export[hidden] { display: none; }
+.clip-export span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip-export:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); }
+.clip-export svg {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+
 .badge {
   font-size: 11px;
   line-height: 16px;
@@ -237,7 +265,10 @@ body.dragging.resizing { cursor: ns-resize; }
   border-bottom: 1px solid var(--line);
 }
 
-#toolbar .title-row { flex: 1; min-width: 0; flex-wrap: nowrap; align-items: center; }
+/* Sized to its content first (the spacer only gets what's left), so the
+   clip's details show in full; Undo/Redo/Reset are compact to leave room. */
+#toolbar .title-row { flex: 0 1 auto; min-width: 0; overflow: hidden; flex-wrap: nowrap; align-items: center; }
+#toolbar > button:not(#toggle-sidebar) { flex: none; padding: 5px 9px; font-size: 13px; }
 #toggle-sidebar[aria-pressed="true"] { background: var(--selected); }
 #toggle-sidebar { display: inline-flex; align-items: center; gap: 6px; }
 #toggle-sidebar .arrow {
@@ -315,7 +346,7 @@ button.link {
 button.link:hover:not(:disabled) { background: none; text-decoration: underline; }
 #toggle-unused { display: block; } /* no line box around it - its height is measured */
 
-#transport, #export-bar, #panel, #export-progress {
+#transport, #export-bar, #panel, #export-progress, #export-done {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -412,6 +443,9 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
   clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%);
 }
 
+/* As tall as the track's controls beside it - room for left and right. */
+.lane.audio-lane { height: auto; min-height: 56px; }
+
 .lane .wave {
   position: absolute;
   inset: 0;
@@ -486,6 +520,17 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 
 .region.active { box-shadow: 0 0 0 2px var(--accent); }
 
+/* One channel of a stereo lane: left is the top half, right the bottom. */
+.selection.ch-0, .region.ch-0 { bottom: 50%; }
+.selection.ch-1, .region.ch-1 { top: 50%; }
+.region.ch-0 { bottom: calc(50% + 2px); }
+.region.ch-1 { top: calc(50% + 2px); }
+
+/* The track whose effects the panel shows. */
+button.toggle.open { box-shadow: 0 0 0 2px var(--accent); }
+.fx-option { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.fx-option input { margin: 0; }
+
 .handle {
   position: absolute;
   top: 0;
@@ -535,7 +580,7 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
   font: inherit;
   font-size: 15px;
   font-weight: 600;
-  width: 340px;
+  width: 29ch; /* a whole "Replay 2026-10-17 23-08-11" */
   max-width: 100%;
   min-width: 0;
   padding: 3px 6px;
@@ -547,11 +592,15 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 
 #out-name:hover { border-color: var(--muted); }
 #out-name:focus { border-color: var(--accent); background: var(--panel); outline: none; }
-#toolbar #clip-meta { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* When the toolbar is tight the name box gives way (down to its min-width),
+   never the details - any share of the shrink, even a fraction of a pixel,
+   would cut them off with an ellipsis. Past that they're clipped by the
+   title row rather than running under the buttons. */
+#toolbar #clip-meta { flex: none; white-space: nowrap; }
 
 #custom-export { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
-#export-progress { margin-top: 8px; }
+#export-progress, #export-done { margin-top: 8px; }
 
 #export-progress .bar {
   width: 260px;

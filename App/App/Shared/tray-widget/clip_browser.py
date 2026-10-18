@@ -59,8 +59,10 @@ from clipem_common import (  # noqa: E402
     APP_DIR,
     acquire_instance_lock,
     exit_with_parent,
+    load_json,
     release_instance_lock,
     setup_logging,
+    write_json_atomic,
     write_text_atomic,
 )
 
@@ -80,6 +82,9 @@ EDITS_DIR = os.path.join(CACHE_DIR, "edits")
 TRACK_AUDIO_DIR = os.path.join(CACHE_DIR, "track-audio")
 PEAKS_DIR = os.path.join(CACHE_DIR, "peaks")
 PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
+# Each clip's newest export, for the clip list's "Last exported" link:
+# {clip path: {"file": export path, "time": epoch seconds}}.
+EXPORTS_PATH = os.path.join(CACHE_DIR, "exports.json")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.lock")
 LAUNCH_PATH = "clipem-editor"
 # Public (no token): the launch page and the logo it and the editor use.
@@ -284,20 +289,53 @@ class Editor:
     """The editor's per-clip state: what each source file holds (probed once
     per file version), saved projects, and the one export that can run."""
 
-    def __init__(self, ffmpeg=None, edits_dir=EDITS_DIR, track_dir=TRACK_AUDIO_DIR, peaks_dir=PEAKS_DIR):
+    def __init__(self, ffmpeg=None, edits_dir=EDITS_DIR, track_dir=TRACK_AUDIO_DIR, peaks_dir=PEAKS_DIR,
+                 exports_path=EXPORTS_PATH):
         self.ffmpeg = ffmpeg if ffmpeg is not None else find_ffmpeg()
         self.edits_dir, self.track_dir, self.peaks_dir = edits_dir, track_dir, peaks_dir
+        self.exports_path = exports_path
         self.export_job = clip_edit.ExportJob(log=log.warning)
         self._info = {}
         self._missing = None
+        self._found = None
+        self._can_level = None
+        self._can_channels = None
+        self._can_gate = None
         self._lock = threading.Lock()
+
+    def _features(self):
+        if self._found is None:
+            try:
+                self._found = clip_edit.ffmpeg_features(self.ffmpeg, run=subprocess.run)
+            except OSError:
+                self._found = set()
+        return self._found
 
     def missing_features(self):
         if not self.ffmpeg:
             return ["ffmpeg"]
         if self._missing is None:
-            self._missing = clip_edit.missing_features(self.ffmpeg, run=subprocess.run)
+            self._missing = clip_edit.missing_features(self.ffmpeg, found=self._features())
         return self._missing
+
+    def can_level(self):
+        """Whether this ffmpeg has the "Level" filters (newer ClipEm builds)."""
+        if self._can_level is None:
+            self._can_level = bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.LEVEL_FILTERS)
+        return self._can_level
+
+    def can_gate(self):
+        """Whether it has the noise gate filter (newer builds too)."""
+        if self._can_gate is None:
+            self._can_gate = bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.GATE_FILTERS)
+        return self._can_gate
+
+    def can_split_channels(self):
+        """Whether it has the "Mono" / one-channel filters (newer builds too)."""
+        if self._can_channels is None:
+            self._can_channels = bool(self.ffmpeg) and all(
+                f in self._features() for f in clip_edit.CHANNEL_FILTERS)
+        return self._can_channels
 
     def info(self, source):
         key = (source, os.path.getmtime(source))
@@ -329,22 +367,68 @@ class Editor:
         write_text_atomic(self.project_path(clip_path), json.dumps(project))
         return project
 
-    def track_audio(self, source, index):
+    def record_export(self, clip_path, files, now=None):
+        """Remembers files[0] (the .mp4) as clip_path's newest export, and
+        forgets entries whose clip or export is gone."""
+        with self._lock:
+            exports = load_json(self.exports_path, {})
+            if not isinstance(exports, dict):
+                exports = {}
+            exports = {clip: entry for clip, entry in exports.items()
+                       if isinstance(entry, dict) and os.path.isfile(clip)
+                       and os.path.isfile(str(entry.get("file")))}
+            exports[os.path.realpath(clip_path)] = {"file": os.path.realpath(files[0]),
+                                                    "time": time.time() if now is None else now}
+            os.makedirs(os.path.dirname(self.exports_path), exist_ok=True)
+            write_json_atomic(self.exports_path, exports)
+
+    def last_exports(self, folder):
+        """{clip name: {"name", "path", "time"}} for the clips in folder
+        whose newest export (beside them, or wherever "Export As" put it) is
+        still there."""
+        exports = load_json(self.exports_path, {})
+        if not isinstance(exports, dict):
+            return {}
+        root = os.path.realpath(folder)
+        found = {}
+        for clip, entry in exports.items():
+            if not isinstance(entry, dict) or os.path.dirname(clip) != root:
+                continue
+            path = str(entry.get("file"))
+            if os.path.isfile(path):
+                found[os.path.basename(clip)] = {"name": os.path.basename(path), "path": path,
+                                                 "time": entry.get("time")}
+        return found
+
+    def is_recorded_export(self, path):
+        """Whether path is an export this editor wrote (exports.json) - the
+        only files outside the clips folder it will open or show."""
+        exports = load_json(self.exports_path, {})
+        if not isinstance(path, str) or not isinstance(exports, dict):
+            return False
+        path = os.path.realpath(path)
+        return any(isinstance(e, dict) and e.get("file") == path for e in exports.values())
+
+    def track_audio(self, source, index, level=False, gate_db=None):
         info = self.info(source)
-        path = os.path.join(self.track_dir, f"{self._key(source)}-{index}.m4a")
-        return clip_edit.track_audio(self.ffmpeg, source, info, index, path)
+        path = os.path.join(self.track_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}.m4a")
+        return clip_edit.track_audio(self.ffmpeg, source, info, index, path, level=level, gate_db=gate_db)
 
-    def peaks(self, source, index):
-        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}.json")
-        return clip_edit.track_peaks(self.ffmpeg, source, index, path)
+    def peaks(self, source, index, level=False, gate_db=None):
+        # "-ch": per-channel peaks (older cache files have only the combined ones).
+        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}-ch.json")
+        return clip_edit.track_peaks(self.ffmpeg, source, index, path, level=level, gate_db=gate_db,
+                                     channels=clip_edit.channel_count(self.info(source), index))
 
-    def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None, solo=None):
+    def start_export(self, folder, clip_path, source, preset, custom=None, out_name=None, solo=None,
+                     out_path=None):
         """Starts exporting next to the clip. Returns the job's status.
         custom: {"height", "fps", "video_kbps"} for the "custom" preset.
         out_name: the name typed on the page - used as is when it isn't the
         clip's own name; otherwise the export gets a suffix (-edit, -discord...).
         solo: the track indexes soloed on the page - the mix is just those,
-        as it's heard there (solo isn't saved with the project)."""
+        as it's heard there (solo isn't saved with the project).
+        out_path: "Export As" - the custom export goes exactly there."""
         info = self.info(source)
         project = self.load_project(clip_path, info)
         if isinstance(solo, list):
@@ -357,8 +441,11 @@ class Editor:
             settings = clip_edit.custom_settings(info, custom.get("height"), custom.get("fps"),
                                                  custom.get("video_kbps"))
             label = f"{settings['height']}p{round(settings['fps']) if settings['fps'] else ''}"
-            mp4 = clip_edit.unique_path(folder, exact or f"{stem}-{label}", ".mp4")
-            partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
+            if out_path is not None:
+                mp4 = export_as_target(out_path, clip_path, source)
+            else:
+                mp4 = clip_edit.unique_path(folder, exact or f"{stem}-{label}", ".mp4")
+            partial = os.path.join(os.path.dirname(mp4), f".{os.path.basename(mp4)}.partial")
             os.makedirs(CACHE_DIR, exist_ok=True)
             steps = clip_edit.two_pass_commands(self.ffmpeg, source, project, info, settings, partial, PASSLOG_PATH)
             outputs, cleanup = {partial: mp4}, [PASSLOG_PATH]
@@ -380,8 +467,29 @@ class Editor:
                 outputs[mkv_partial] = mkv
             cleanup = []
         log.info(f"Exporting {os.path.basename(clip_path)} ({preset}) to {', '.join(outputs.values())}")
-        self.export_job.start(steps, outputs, clip_edit.kept_duration(project), cleanup=cleanup)
+        self.export_job.start(steps, outputs, clip_edit.kept_duration(project), cleanup=cleanup,
+                              on_done=lambda files: self.record_export(clip_path, files))
         return self.export_job.status
+
+
+def _effects_suffix(level, gate_db):
+    """Cache file names' part for a track's preview effects."""
+    return ("-level" if level else "") + (f"-gate{-gate_db}" if gate_db is not None else "")
+
+
+def export_as_target(path, clip_path, source):
+    """The .mp4 an "Export As" writes: the path picked in the window's save
+    dialog - absolute, in a folder that exists, never the clip itself."""
+    if not isinstance(path, str) or not os.path.isabs(path):
+        raise ValueError("Pick where to save the export.")
+    path = os.path.normpath(path)
+    if os.path.splitext(path)[1].lower() != ".mp4":
+        path += ".mp4"
+    if not os.path.isdir(os.path.dirname(path)):
+        raise ValueError(f"The folder {os.path.dirname(path)} isn't there.")
+    if os.path.realpath(path) in (os.path.realpath(clip_path), os.path.realpath(source)):
+        raise ValueError("Pick another name - that's the clip being exported.")
+    return path
 
 
 def project_payload(clip, source, info, project, missing):
@@ -391,7 +499,8 @@ def project_payload(clip, source, info, project, missing):
         "info": {
             "duration": info["duration"], "width": info["width"], "height": info["height"], "fps": info["fps"],
             "split": clip_edit.is_split_layout(info),
-            "tracks": [{"index": t["index"], "title": clip_edit.track_title(info, t["index"])} for t in info["audio"]],
+            "tracks": [{"index": t["index"], "title": clip_edit.track_title(info, t["index"]),
+                        "channels": clip_edit.channel_count(info, t["index"])} for t in info["audio"]],
         },
         "project": project,
         "discord": clip_edit.discord_settings(info, clip_edit.kept_duration(project)),
@@ -522,6 +631,17 @@ def reveal_in_file_manager(path):
         subprocess.Popen(["open", "-R", path])
     else:
         subprocess.Popen(["xdg-open", os.path.dirname(path)])
+
+
+def open_with_default_app(path):
+    """Opens path in the app the system uses for its type - for an export,
+    the user's own video player."""
+    if _SYSTEM == "Windows":
+        os.startfile(path)  # noqa: S606 - user-initiated, a file in the clips folder
+    elif _SYSTEM == "Darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
 
 
 # ---------------------------------------------------------------------------
@@ -667,9 +787,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_file(os.path.join(UI_DIR, UI_FILES[route]))
         elif route == "api/clips":
             clips = list_clips(folder)
+            exports = self.server.editor.last_exports(folder)
             for clip in clips:
                 path = os.path.join(folder, clip["name"])
                 clip["duration"] = self.server.thumbnailer.info(path).get("duration")
+                clip["last_export"] = exports.get(clip["name"])
             self._json({"folder": folder, "clips": clips})
         elif route == "api/editors":
             self._json(editors_info())
@@ -680,10 +802,16 @@ class Handler(BaseHTTPRequestHandler):
         elif route.startswith(("track/", "peaks/")):
             try:
                 found = self._track_route(folder, route)
-                if found and route.startswith("track/"):
-                    self._send_file(self.server.editor.track_audio(*found), cache=True)
+                level = self._query("level") == "1"
+                gate = self._query("gate")
+                gate_db = clip_edit._gate_db(int(gate)) if gate and gate.lstrip("-").isdigit() else None
+                editor = self.server.editor
+                if found and ((level and not editor.can_level()) or (gate_db is not None and not editor.can_gate())):
+                    self._json({"error": "ClipEm's ffmpeg can't do that effect - update ClipEm."}, 409)
+                elif found and route.startswith("track/"):
+                    self._send_file(editor.track_audio(*found, level=level, gate_db=gate_db), cache=True)
                 elif found:
-                    self._json(self.server.editor.peaks(*found))
+                    self._json(editor.peaks(*found, level=level, gate_db=gate_db))
             except Exception as exc:
                 log.exception(f"{route} failed")
                 self._json({"error": str(exc)}, 500)
@@ -739,12 +867,14 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 log.info(f"Moved to the trash: {', '.join(moved)}")
                 self._json({"files": moved})
-            elif route == "api/reveal":
-                path = resolve_clip(folder, body.get("name"))
+            elif route in ("api/reveal", "api/play"):
+                path = body.get("path")
+                if not (self.server.editor.is_recorded_export(path) and os.path.isfile(path)):
+                    path = resolve_clip(folder, body.get("name"))
                 if not path:
                     self._json({"error": "That clip isn't there any more."}, 404)
                     return
-                reveal_in_file_manager(path)
+                (reveal_in_file_manager if route == "api/reveal" else open_with_default_app)(path)
                 self._json({"ok": True})
             else:
                 self._send(404, b"Not found", "text/plain")
@@ -763,7 +893,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": f"Can't edit this clip: {exc}"}, 422)
             return
         project = editor.load_project(clip, info)
-        self._json(project_payload(os.path.basename(clip), source, info, project, editor.missing_features()))
+        payload = project_payload(os.path.basename(clip), source, info, project, editor.missing_features())
+        payload["can_level"] = editor.can_level()
+        payload["can_channels"] = editor.can_split_channels()
+        payload["can_gate"] = editor.can_gate()
+        payload["gate_default_db"] = clip_edit.GATE_DEFAULT_DB
+        self._json(payload)
 
     def _export(self, folder, body):
         clip, source = self._clip_and_source(folder, body.get("name"))
@@ -778,9 +913,22 @@ class Handler(BaseHTTPRequestHandler):
         if editor.export_job.running():
             self._json({"error": "An export is already running."}, 409)
             return
+        saved = editor.load_project(clip, editor.info(source))
+        if any(t.get("level") for t in saved["tracks"]) and not editor.can_level():
+            self._json({"error": "A track is set to Level, which needs a newer ffmpeg - update ClipEm "
+                                 "or turn Level off."}, 409)
+            return
+        if any(t.get("gate_db") is not None for t in saved["tracks"]) and not editor.can_gate():
+            self._json({"error": "A track has the noise gate on, which needs a newer ffmpeg - update ClipEm "
+                                 "or turn it off."}, 409)
+            return
+        if clip_edit.uses_channels(saved) and not editor.can_split_channels():
+            self._json({"error": "Mono and left/right-only volume changes need a newer ffmpeg - update "
+                                 "ClipEm or undo them."}, 409)
+            return
         try:
             status = editor.start_export(folder, clip, source, body.get("preset"), body.get("custom"),
-                                         body.get("out_name"), body.get("solo"))
+                                         body.get("out_name"), body.get("solo"), body.get("out_path"))
         except ValueError as exc:
             self._json({"error": str(exc)}, 400)
             return

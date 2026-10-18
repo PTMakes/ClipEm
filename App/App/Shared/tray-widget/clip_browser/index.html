@@ -48,7 +48,7 @@
         <span id="time" class="mono"></span>
         <span id="kept-length" class="muted"></span>
         <div class="spacer"></div>
-        <span class="muted hint">Drag on the timeline to select &middot; drag the handles to trim</span>
+        <span class="muted hint" title="Hold Alt while dragging on a stereo track to select just its left (top) or right (bottom) channel - a volume change there only affects that side.">Drag on the timeline to select &middot; drag the handles to trim &middot; Alt-drag a stereo track for one channel</span>
       </div>
       <div id="timeline-scroll">
         <div id="timeline"></div>
@@ -63,7 +63,7 @@
           <select id="custom-height" title="Resolution"></select>
           <select id="custom-fps" title="Frame rate"></select>
           <select id="custom-bitrate" title="Bitrate (estimated file size)"></select>
-          <button id="export-custom" class="primary">Export</button>
+          <button id="export-custom" class="primary" title="Export with these settings - choose where to save it">Export As...</button>
         </div>
         <div class="spacer"></div>
         <button id="edit-custom" hidden></button>
@@ -73,6 +73,11 @@
         <div class="bar"><div class="fill"></div></div>
         <span id="export-message"></span>
         <button id="export-cancel">Cancel</button>
+      </div>
+      <div id="export-done" hidden>
+        <span id="export-done-message"></span>
+        <button id="export-play" title="Open the exported video in your default video player">Play</button>
+        <button id="export-reveal" title="Show the exported video in its folder">Show in folder</button>
       </div>
     </section>
   </main>
