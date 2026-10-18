@@ -31,9 +31,11 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # autostart entry (autostart.apply_boot_autostart).
 sys.path.insert(0, INSTALLER_DIR)
 import bug_report  # noqa: E402
+import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import reinstall  # noqa: E402
+import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
 from app_window import style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
     apply_boot_autostart,
@@ -51,6 +53,7 @@ from clipem_common import (  # noqa: E402
     start_clipem,
     stop_tray_widget,
 )
+from mic_filter_gui import MicFilterWizard  # noqa: E402
 from ui_scale import UiScale, enable_dpi_awareness  # noqa: E402
 
 log = setup_logging("settings")
@@ -162,6 +165,58 @@ def run_in_background(root, work, on_done):
     root.after(100, poll)
 
 
+def load_recording_settings(pending):
+    """What Setup's video, clip length and audio pages last saved - or what's
+    queued for OBS's next start - for the Recording/Audio Devices sections."""
+    video = setup.load_video_settings()
+    queued_video = pending.get("video")
+    if queued_video:
+        video = {"width": queued_video["output_width"], "height": queued_video["output_height"],
+                 "fps": queued_video["fps"]}
+    monitor = pending.get("capture_monitor")
+    return {
+        "width": int(video["width"]), "height": int(video["height"]), "fps": int(video["fps"]),
+        "monitor_index": monitor["index"] if monitor else setup.load_capture_monitor_index(),
+        "replay_buffer_seconds": int(pending.get("replay_buffer_seconds") or setup.load_replay_buffer_seconds()),
+        "bitrate": int(pending.get("recording_bitrate") or setup.load_recording_bitrate()),
+        "audio": pending.get("audio_devices") or setup.load_audio_devices(),
+    }
+
+
+def show_app_tracks(container, px):
+    """Which app owns tracks 4-6 (multitrack audio), with Pin and Reset - as
+    on Setup's Split Audio Tracks page. These apply straight away: the tray
+    widget re-reads the file and re-points OBS's app sources itself."""
+    for child in container.winfo_children():
+        child.destroy()
+    state = setup.load_app_tracks()
+    tk.Label(container, text=f"App tracks (multitrack audio) - unused for {state['expiry_days']} days frees "
+             "a track unless pinned:", fg="gray40").pack(anchor="w")
+    for index, (slot_name, owner) in enumerate(state["slots"].items()):
+        row = tk.Frame(container)
+        row.pack(anchor="w")
+        tk.Label(row, text=f"Track {4 + index}: {owner['label'] if owner else '(free)'}").pack(side="left")
+        if owner:
+            pinned = tk.BooleanVar(value=owner["pinned"])
+            tk.Checkbutton(row, text="Pin", variable=pinned,
+                           command=lambda n=slot_name, v=pinned: setup.set_app_slot_pinned(n, v.get())).pack(
+                side="left", padx=(px(6), 0))
+    if any(state["slots"].values()):
+        def reset():
+            if not messagebox.askyesno("App Tracks", "Free every app track? The next apps heard get them.",
+                                       parent=container.winfo_toplevel()):
+                return
+            if obs_process.obs_running():
+                # The scene collection is OBS's while it runs; the tray points
+                # the app sources at nothing as soon as the file changes.
+                obs_config.save_app_tracks(obs_config.empty_app_tracks())
+            else:
+                setup.reset_app_tracks()
+            show_app_tracks(container, px)
+
+        tk.Button(container, text="Reset app tracks", command=reset).pack(anchor="w", pady=(px(4), 0))
+
+
 def parent_pid_from_args(argv):
     """The tray widget passes --parent-pid <its pid> when it opens this."""
     if "--parent-pid" in argv:
@@ -215,12 +270,23 @@ def main():
         split_tracks = bool(pending.get("split_tracks", obs_config.load_split_tracks()))
     except Exception:
         split_tracks = False
+    try:
+        reexport = pending.get("clip_reexport") or setup.load_clip_reexport()
+        reexport = {"enabled": bool(reexport.get("enabled", reexport.get("reexport_enabled"))),
+                    "target_mb": float(reexport["target_mb"]), "crop_seconds": int(reexport["crop_seconds"])}
+    except Exception:
+        reexport = {"enabled": False, "target_mb": float(setup.DEFAULT_TARGET_FILESIZE_MB), "crop_seconds": 30}
+    try:
+        replay_seconds = int(pending.get("replay_buffer_seconds") or setup.load_replay_buffer_seconds())
+    except Exception:
+        replay_seconds = 60
     initial_obs_settings = {
         "websocket": {"port": port, "password": password},
         "clip_hotkey": list(hotkey),
         "clip_sound": {"enabled": bool(clip_sound["enabled"]), "volume": round(float(clip_sound["volume"]), 2)},
         "clip_folder": clip_folder,
         "split_tracks": split_tracks,
+        "clip_reexport": reexport,
     }
 
     run_config = load_run_config()
@@ -236,6 +302,7 @@ def main():
     style_app_window(root, log=log.warning)
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
     px = UiScale(root).px
+    root.px = px  # MicFilterWizard sizes itself with its parent's px
     root.title("ClipEm Settings")
 
     # Status line and Save/Cancel sit in a footer packed first, so resizing
@@ -405,6 +472,236 @@ def main():
         variable=split_tracks_var, justify="left",
     ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
+
+    # The "-small.mp4" copy (Scripts/clip_reexport.py) - as on Setup's
+    # "Lower-Quality Re-export" page.
+    reexport_var = tk.BooleanVar(value=reexport["enabled"])
+    tk.Checkbutton(
+        frame, text="Also save a smaller copy of each clip (\"-small.mp4\"), for sites\n"
+                    "with a file size limit - the full-quality clip is always kept",
+        variable=reexport_var, justify="left", command=lambda: on_reexport_toggle(),
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+    tk.Label(frame, text="Target size:").grid(row=next_row, column=0, sticky="w")
+    size_row = tk.Frame(frame)
+    size_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    target_mb_var = tk.StringVar(value=f"{reexport['target_mb']:g}")
+    target_entry = tk.Entry(size_row, textvariable=target_mb_var, width=6)
+    target_entry.pack(side="left")
+    tk.Label(size_row, text="MB").pack(side="left", padx=(px(3), 0))
+    recommended_button = tk.Button(
+        size_row, text=f"Use {setup.DEFAULT_TARGET_FILESIZE_MB} MB",
+        command=lambda: target_mb_var.set(str(setup.DEFAULT_TARGET_FILESIZE_MB)),
+    )
+    recommended_button.pack(side="left", padx=(px(6), 0))
+    tk.Label(size_row, text="(Discord's free upload limit)", fg="gray40").pack(side="left", padx=(px(4), 0))
+    next_row += 1
+    tk.Label(frame, text="Keep the last:").grid(row=next_row, column=0, sticky="w")
+    crop_row = tk.Frame(frame)
+    crop_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    crop_var = tk.StringVar(value=str(min(reexport["crop_seconds"], replay_seconds)))
+    crop_spin = tk.Spinbox(crop_row, from_=1, to=max(1, replay_seconds), textvariable=crop_var, width=5)
+    crop_spin.pack(side="left")
+    tk.Label(crop_row, text=f"seconds (of the {replay_seconds} s replay buffer)").pack(side="left", padx=(px(3), 0))
+    next_row += 1
+    bitrate_var = tk.StringVar()
+    tk.Label(frame, textvariable=bitrate_var, fg="gray40").grid(row=next_row, column=1, sticky="w", padx=(px(6), 0))
+    next_row += 1
+
+    def reexport_values():
+        """(target MB, crop seconds), or None if either isn't a number."""
+        try:
+            return float(target_mb_var.get()), max(1, min(int(float(crop_var.get())), replay_seconds))
+        except ValueError:
+            return None
+
+    def update_bitrate(*_args):
+        values = reexport_values()
+        bitrate_var.set(f"-> about {setup.compute_video_bitrate_for_filesize(*values)} kbps video"
+                        if values and values[0] > 0 else "")
+
+    def on_reexport_toggle():
+        state = "normal" if reexport_var.get() else "disabled"
+        for widget in (target_entry, recommended_button, crop_spin):
+            widget.config(state=state)
+
+    target_mb_var.trace_add("write", update_bitrate)
+    crop_var.trace_add("write", update_bitrate)
+    update_bitrate()
+    on_reexport_toggle()
+
+    # --- Recording and audio devices: what Setup's Display & Video Quality,
+    # Clip Length & Quality and Audio Devices pages set. All in OBS's own
+    # files, so saved like the settings above (queued while OBS runs).
+    recording = load_recording_settings(pending)
+    devices = {"displays": None, "audio": None}  # filled in by detect_devices()
+
+    tk.Label(frame, text="Recording", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+
+    def combo_row(label, width):
+        nonlocal next_row
+        tk.Label(frame, text=label).grid(row=next_row, column=0, sticky="w")
+        combo = ttk.Combobox(frame, state="disabled", width=width)
+        combo.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+        next_row += 1
+        return combo
+
+    display_combo = combo_row("Display:", 34)
+    display_combo.set("Detecting displays...")
+    resolution_combo = combo_row("Output resolution:", 12)
+    resolution_combo.set(f"{recording['width']}x{recording['height']}")
+    fps_combo = combo_row("FPS:", 6)
+    fps_combo.configure(values=[str(f) for f in setup.FPS_CHOICES])
+    fps_combo.set(str(recording["fps"]))
+
+    tk.Label(frame, text="Replay buffer:").grid(row=next_row, column=0, sticky="w")
+    buffer_row = tk.Frame(frame)
+    buffer_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    buffer_var = tk.StringVar(value=str(recording["replay_buffer_seconds"]))
+    tk.Spinbox(buffer_row, textvariable=buffer_var, width=6, from_=setup.REPLAY_BUFFER_MIN_SECONDS,
+               to=setup.REPLAY_BUFFER_MAX_SECONDS, increment=setup.REPLAY_BUFFER_STEP_SECONDS).pack(side="left")
+    tk.Label(buffer_row, text="seconds (how far back a clip reaches)").pack(side="left", padx=(px(3), 0))
+    next_row += 1
+
+    tk.Label(frame, text="Recording bitrate:").grid(row=next_row, column=0, sticky="w")
+    bitrate_row = tk.Frame(frame)
+    bitrate_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    recording_bitrate_var = tk.StringVar(value=str(recording["bitrate"]))
+    tk.Spinbox(bitrate_row, textvariable=recording_bitrate_var, width=7, from_=setup.BITRATE_MIN_KBPS,
+               to=setup.BITRATE_MAX_KBPS, increment=setup.BITRATE_STEP_KBPS).pack(side="left")
+    tk.Label(bitrate_row, text="kbps").pack(side="left", padx=(px(3), 0))
+    clip_size_var = tk.StringVar()
+    tk.Label(bitrate_row, textvariable=clip_size_var, fg="gray40").pack(side="left", padx=(px(6), 0))
+    next_row += 1
+
+    def update_clip_size(*_args):
+        try:
+            size = setup.compute_filesize_for_bitrate(int(float(recording_bitrate_var.get())),
+                                                      int(float(buffer_var.get())))
+        except ValueError:
+            clip_size_var.set("")
+            return
+        clip_size_var.set(f"-> ~{size:.0f} MB for a full-length clip")
+
+    recording_bitrate_var.trace_add("write", update_clip_size)
+    buffer_var.trace_add("write", update_clip_size)
+    update_clip_size()
+
+    tk.Label(frame, text="Audio Devices", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    output_combo = combo_row("Desktop audio:", 34)
+    input_combo = combo_row("Microphone:", 34)
+    for combo in (output_combo, input_combo):
+        combo.set("Detecting devices...")
+
+    mic_reading = {"value": None}  # a MicFilterWizard reading, saved with Save
+    mic_button = tk.Button(
+        frame, text="Redo Mic Filter Configuration..." if setup.has_mic_filter() else "Mic Filter Configuration...",
+        state="disabled", command=lambda: start_mic_filter(),
+    )
+    mic_button.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    next_row += 1
+
+    def start_mic_filter():
+        device = devices["audio"]["input"][input_combo.current()]
+        mic_button.config(state="disabled", text="Preparing...")
+
+        def on_deps(ok, exc):
+            mic_button.config(state="normal", text="Mic Filter Configuration...")
+            if exc is not None or not ok:
+                messagebox.showerror("Mic Filter", f"Couldn't set up microphone calibration: {exc or 'install failed'}",
+                                     parent=root)
+                return
+            controller = {
+                "measure_audio_level_db": mic_filter.measure_audio_level_db,
+                "compute_mic_filter_values": mic_filter.compute_mic_filter_values,
+                "noise_floor_sample_seconds": mic_filter.NOISE_FLOOR_SAMPLE_SECONDS,
+                "speech_sample_seconds": mic_filter.SPEECH_SAMPLE_SECONDS,
+                "save_mic_filter_levels": lambda noise, speech: mic_reading.update(
+                    value={"noise_floor_db": noise, "speech_level_db": speech}),
+            }
+            MicFilterWizard(root, controller, device["name"], device["device_id"],
+                            on_applied=lambda: mic_button.config(text="Mic filter: new reading (saved with Save)"))
+
+        run_in_background(root, mic_filter.ensure_mic_filter_deps, on_deps)
+
+    if setup.app_slot_source_id():
+        app_tracks_frame = tk.Frame(frame)
+        app_tracks_frame.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
+        next_row += 1
+        show_app_tracks(app_tracks_frame, px)
+
+    def fill_displays():
+        displays = devices["displays"]
+        display_combo.configure(state="readonly", values=[
+            f"{d['name']} - {d['width']}x{d['height']}" + (" (primary)" if d.get("primary") else "")
+            for d in displays
+        ])
+        index = recording["monitor_index"]
+        if index is None or not 0 <= index < len(displays):
+            index = next((i for i, d in enumerate(displays) if d.get("primary")), 0)
+        display_combo.current(index)
+        devices["initial_display"] = index  # what "changed" is measured against
+        fill_resolutions()
+        resolution_combo.configure(state="readonly")
+        fps_combo.configure(state="readonly")
+
+    def fill_resolutions():
+        display = devices["displays"][display_combo.current()]
+        labels = [f"{w}x{h}" for w, h in setup.resolution_choices(display["width"], display["height"])]
+        current = resolution_combo.get()
+        resolution_combo.configure(values=labels)
+        if current not in labels:
+            resolution_combo.current(0)
+            follow_resolution()
+
+    resolution_shown = {"value": (recording["width"], recording["height"])}
+
+    def follow_resolution(_event=None):
+        """As Setup does: the bitrate follows the output resolution, unless
+        it was set by hand (setup.bitrate_for_new_resolution)."""
+        try:
+            new = tuple(int(v) for v in resolution_combo.get().split("x"))
+            current = int(float(recording_bitrate_var.get()))
+        except ValueError:
+            return
+        recording_bitrate_var.set(str(setup.bitrate_for_new_resolution(current, resolution_shown["value"], new)))
+        resolution_shown["value"] = new
+
+    display_combo.bind("<<ComboboxSelected>>", lambda _e: fill_resolutions())
+    resolution_combo.bind("<<ComboboxSelected>>", follow_resolution)
+
+    def fill_audio():
+        for combo, flow in ((output_combo, "output"), (input_combo, "input")):
+            entries = devices["audio"][flow]
+            ids = [d["device_id"] for d in entries]
+            combo.configure(state="readonly", values=[d["name"] for d in entries])
+            combo.current(ids.index(recording["audio"][flow]) if recording["audio"][flow] in ids else 0)
+        mic_button.config(state="normal")
+
+    def on_devices(result, exc):
+        result = result if exc is None else {}
+        devices["displays"] = result.get("displays") or [{
+            "name": "Primary display", "width": root.winfo_screenwidth(),
+            "height": root.winfo_screenheight(), "primary": True,
+        }]
+        devices["audio"] = result.get("audio") or {"output": [], "input": []}
+        fill_displays()
+        if devices["audio"]["output"] and devices["audio"]["input"]:
+            fill_audio()
+        else:
+            for combo in (output_combo, input_combo):
+                combo.set("Couldn't list devices")
+
+    # Display/audio detection shells out (PowerShell on Windows) and can take
+    # a few seconds - as in Setup, it runs while the window is up.
+    run_in_background(root, lambda: {"displays": setup.list_displays(), "audio": setup.list_audio_devices()},
+                      on_devices)
 
     # --- The clip editor's "Open in..." button: any editor the user has.
     tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
@@ -1011,7 +1308,48 @@ def main():
             "clip_sound": {"enabled": bool(sound_enabled_var.get()), "volume": round(sound_volume_var.get() / 100, 2)},
             "clip_folder": clip_folder_var.get(),
             "split_tracks": bool(split_tracks_var.get()),
+            "clip_reexport": dict(initial_obs_settings["clip_reexport"], enabled=bool(reexport_var.get())),
         }
+        try:
+            buffer_seconds = int(float(buffer_var.get()))
+            recording_bitrate = int(float(recording_bitrate_var.get()))
+        except ValueError:
+            messagebox.showerror("Recording", "Enter numbers for the replay buffer and bitrate.", parent=root)
+            return
+        buffer_seconds = max(setup.REPLAY_BUFFER_MIN_SECONDS, min(buffer_seconds, setup.REPLAY_BUFFER_MAX_SECONDS))
+        recording_bitrate = max(setup.BITRATE_MIN_KBPS, min(recording_bitrate, setup.BITRATE_MAX_KBPS))
+        if buffer_seconds != recording["replay_buffer_seconds"]:
+            obs_settings["replay_buffer_seconds"] = buffer_seconds
+        if recording_bitrate != recording["bitrate"]:
+            obs_settings["recording_bitrate"] = recording_bitrate
+        if devices["displays"] is not None:
+            display = devices["displays"][display_combo.current()]
+            out_width, out_height = (int(v) for v in resolution_combo.get().split("x"))
+            fps = int(fps_combo.get())
+            display_changed = display_combo.current() != devices["initial_display"]
+            if display_changed or (out_width, out_height, fps) != (recording["width"], recording["height"],
+                                                                   recording["fps"]):
+                obs_settings["video"] = {"base_width": display["width"], "base_height": display["height"],
+                                         "output_width": out_width, "output_height": out_height, "fps": fps}
+            if display_changed:
+                obs_settings["capture_monitor"] = {"index": display_combo.current(),
+                                                   "device_id": display.get("device_id")}
+        if devices["audio"] and devices["audio"]["output"] and devices["audio"]["input"]:
+            chosen_audio = {"output": devices["audio"]["output"][output_combo.current()]["device_id"],
+                            "input": devices["audio"]["input"][input_combo.current()]["device_id"]}
+            if chosen_audio != recording["audio"]:
+                obs_settings["audio_devices"] = chosen_audio
+        if mic_reading["value"]:
+            obs_settings["mic_filter"] = mic_reading["value"]
+
+        values = reexport_values()
+        if reexport_var.get() and (not values or values[0] <= 0):
+            messagebox.showerror("Smaller Copy", "Enter a target size (MB, more than 0) and how many "
+                                 "seconds to keep.", parent=root)
+            return
+        if values and values[0] > 0:
+            # Never longer than the (possibly just changed) replay buffer.
+            obs_settings["clip_reexport"].update(target_mb=values[0], crop_seconds=min(values[1], buffer_seconds))
         if obs_settings["clip_folder"] != initial_obs_settings["clip_folder"]:
             # OBS won't start the replay buffer into a folder that isn't there.
             try:

@@ -1563,6 +1563,16 @@ def save_split_tracks(enabled):
         print("Split audio tracks on: mix, mic and desktop on their own tracks (no per-app capture here).")
 
 
+def save_mic_filter(noise_floor_db, speech_level_db):
+    """The mic's Noise Gate and Gain filters from a MicFilterWizard reading."""
+    mic_filter.save_mic_filter_levels(SCENE_COLLECTION_JSON, AUDIO_DEVICE_SCENE_KEYS["input"],
+                                      noise_floor_db, speech_level_db)
+
+
+def has_mic_filter():
+    return mic_filter.has_mic_filter_been_configured(SCENE_COLLECTION_JSON, AUDIO_DEVICE_SCENE_KEYS["input"])
+
+
 def load_app_tracks():
     return obs_config.load_app_tracks()
 

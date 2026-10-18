@@ -636,8 +636,14 @@ def play_clip_sound(volume, wav_path=None):
 def apply_obs_settings(settings):
     """Writes settings - "websocket" {"port", "password"}, "clip_hotkey"
     [ctrl, alt, shift, key], "clip_sound" {"enabled", "volume"},
-    "clip_folder" (a path) and/or "split_tracks" (bool) - to OBS's config
-    files. Only safe while OBS isn't running.
+    "clip_folder" (a path), "split_tracks" (bool), "clip_reexport"
+    {"enabled", "target_mb", "crop_seconds"} (the "-small.mp4" copy), and
+    Setup's recording settings - "video" {"base_width", "base_height",
+    "output_width", "output_height", "fps"}, "capture_monitor" {"index",
+    "device_id"}, "replay_buffer_seconds", "recording_bitrate",
+    "audio_devices" {"output", "input"} and "mic_filter" {"noise_floor_db",
+    "speech_level_db"} - to OBS's config files. Only safe while OBS isn't
+    running.
     ("stuck_check_enabled" is only still accepted for queues left from
     before it stopped being an OBS setting.)"""
     if "websocket" in settings:
@@ -654,8 +660,35 @@ def apply_obs_settings(settings):
         import setup
 
         setup.save_split_tracks(settings["split_tracks"])
+    if "clip_reexport" in settings:
+        import setup
+
+        reexport = settings["clip_reexport"]
+        setup.save_clip_reexport(reexport["enabled"], reexport["target_mb"], reexport["crop_seconds"])
+    if any(key in settings for key in SETUP_RECORDING_KEYS):
+        import setup
+
+        if "video" in settings:
+            video = settings["video"]
+            setup.save_video_settings(video["base_width"], video["base_height"], video["output_width"],
+                                      video["output_height"], video["fps"])
+        if "capture_monitor" in settings:
+            setup.save_capture_monitor(settings["capture_monitor"]["index"], settings["capture_monitor"].get("device_id"))
+        if "replay_buffer_seconds" in settings:
+            setup.save_replay_buffer_seconds(settings["replay_buffer_seconds"])
+        if "recording_bitrate" in settings:
+            setup.save_recording_bitrate(settings["recording_bitrate"])
+        if "audio_devices" in settings:
+            setup.save_audio_devices(settings["audio_devices"]["output"], settings["audio_devices"]["input"])
+        if "mic_filter" in settings:
+            setup.save_mic_filter(settings["mic_filter"]["noise_floor_db"], settings["mic_filter"]["speech_level_db"])
     if "stuck_check_enabled" in settings:
         save_stuck_check_enabled(settings["stuck_check_enabled"])
+
+
+# Setup's recording settings, which Settings queues too (see apply_obs_settings).
+SETUP_RECORDING_KEYS = ("video", "capture_monitor", "replay_buffer_seconds", "recording_bitrate",
+                        "audio_devices", "mic_filter")
 
 
 def load_pending_obs_settings():

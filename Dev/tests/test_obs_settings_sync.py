@@ -143,6 +143,43 @@ def test_queued_split_tracks_goes_through_setup(fake_obs_config, monkeypatch):
     assert calls == [True]
 
 
+def test_queued_small_copy_settings_go_through_setup(fake_obs_config, monkeypatch):
+    import setup
+
+    calls = []
+    monkeypatch.setattr(setup, "save_clip_reexport", lambda *args: calls.append(args))
+    obs_config.queue_obs_settings({"clip_reexport": {"enabled": True, "target_mb": 25.0, "crop_seconds": 20}})
+    assert calls == []  # queued while OBS runs
+    obs_config.apply_pending_obs_settings()
+    assert calls == [(True, 25.0, 20)]
+
+
+def test_queued_recording_settings_go_through_setup(fake_obs_config, monkeypatch):
+    import setup
+
+    calls = []
+    for name in ("save_video_settings", "save_capture_monitor", "save_replay_buffer_seconds",
+                 "save_recording_bitrate", "save_audio_devices", "save_mic_filter"):
+        monkeypatch.setattr(setup, name, lambda *args, n=name: calls.append((n, args)))
+    obs_config.queue_obs_settings({
+        "video": {"base_width": 2560, "base_height": 1440, "output_width": 1920, "output_height": 1080, "fps": 60},
+        "capture_monitor": {"index": 1, "device_id": "\\\\?\\DISPLAY2"},
+        "replay_buffer_seconds": 90, "recording_bitrate": 24000,
+        "audio_devices": {"output": "default", "input": "mic-2"},
+        "mic_filter": {"noise_floor_db": -62.0, "speech_level_db": -24.0},
+    })
+    assert calls == []
+    obs_config.apply_pending_obs_settings()
+    assert calls == [
+        ("save_video_settings", (2560, 1440, 1920, 1080, 60)),
+        ("save_capture_monitor", (1, "\\\\?\\DISPLAY2")),
+        ("save_replay_buffer_seconds", (90,)),
+        ("save_recording_bitrate", (24000,)),
+        ("save_audio_devices", ("default", "mic-2")),
+        ("save_mic_filter", (-62.0, -24.0)),
+    ]
+
+
 def test_split_tracks_defaults_off(fake_obs_config):
     assert obs_config.load_split_tracks() is False
     scenes = fake_obs_config / "scenes.json"
