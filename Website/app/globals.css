@@ -251,7 +251,8 @@ body {
   text-align: left;
 }
 
-.feature-card h2 {
+.feature-card h2,
+.feature-card h3 {
   font-size: 1.05rem;
   margin: 0 0 0.6rem;
 }
@@ -261,6 +262,21 @@ body {
   color: var(--text-muted);
   font-size: 0.92rem;
   line-height: 1.55;
+}
+
+.features-compact {
+  margin-top: 0;
+}
+
+.features-two {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.section-intro {
+  max-width: 620px;
+  margin: -0.75rem auto 1.75rem;
+  color: var(--text-muted);
+  line-height: 1.6;
 }
 
 @media (max-width: 720px) {

@@ -31,7 +31,7 @@ const FEATURES = [
   {
     title: "Tray app",
     description:
-      "Save a clip, open your clips folder, start or stop the replay buffer or a recording, show OBS and change settings from the system tray - without opening OBS.",
+      "Save a clip, open the clip editor or your clips folder, start or stop the replay buffer or a recording, show OBS and change settings from the system tray - without opening OBS.",
   },
   {
     title: "Pre-configured OBS",
@@ -47,6 +47,29 @@ const FEATURES = [
     title: "Update notifications",
     description:
       "ClipEm checks for new releases when it starts and asks before installing anything. Updates keep all of your settings.",
+  },
+];
+
+const EDITOR_FEATURES = [
+  {
+    title: "Browse every clip",
+    description:
+      "All your clips, newest first, in a sidebar you can hide. Hover one to play it with sound and move across it to scrub - no need to open each file.",
+  },
+  {
+    title: "Trim and cut",
+    description:
+      "Drag the handles to trim the start and end, cut out the boring middle, or keep only one part. Undo and redo cover every edit.",
+  },
+  {
+    title: "Edit each audio track",
+    description:
+      "With split audio tracks on, your mic, desktop audio and individual apps are separate tracks - mute, solo, shift or change the volume of each, or of just one section.",
+  },
+  {
+    title: "Export for Discord",
+    description:
+      "One click exports a copy sized to fit Discord's free upload limit. There are also full-quality and custom exports, with your choice of resolution, frame rate and bitrate.",
   },
 ];
 
@@ -95,6 +118,11 @@ const FAQ = [
     question: "Does ClipEm update itself?",
     answer:
       "It can check for new releases each time it starts. When there is one, it asks whether to update now, at the next restart, or not at all.",
+  },
+  {
+    question: "Do I need a separate video editor?",
+    answer:
+      "No. ClipEm's clip editor (Open Clip Editor in the tray menu) trims and cuts clips, edits each audio track and exports full-quality or Discord-sized copies. Your original clips are never changed, and you can still open a clip in your own editor with one button.",
   },
   {
     question: "Is there a macOS version?",
@@ -146,8 +174,9 @@ export default function Home() {
           <h1>ClipEm</h1>
           <p className="subtitle">
             Save your best gaming moments the instant they happen with one
-            hotkey. ClipEm sets up OBS&apos;s replay buffer for you - no editing,
-            no manual re-encoding, no hassle.
+            hotkey. ClipEm sets up OBS&apos;s replay buffer for you, and its
+            built-in editor trims, cuts and exports your clips - no extra
+            software, no hassle.
           </p>
           <DownloadSection />
         </section>
@@ -159,6 +188,23 @@ export default function Home() {
               <p>{feature.description}</p>
             </div>
           ))}
+        </section>
+
+        <section className="section">
+          <h2 className="section-title">Built-in clip editor</h2>
+          <p className="section-intro">
+            Open the editor from the tray to browse, trim and share your clips
+            without leaving ClipEm. Edits are saved per clip and never touch the
+            original file.
+          </p>
+          <div className="features features-compact features-two">
+            {EDITOR_FEATURES.map((feature) => (
+              <div className="feature-card" key={feature.title}>
+                <h3>{feature.title}</h3>
+                <p>{feature.description}</p>
+              </div>
+            ))}
+          </div>
         </section>
 
         <section className="section">
