@@ -114,6 +114,23 @@ def load_clip_folder():
     return DEFAULT_CLIPS_DIR
 
 
+CLIP_FOLDER_INI_KEYS = ("FilePath", "RecFilePath", "FFFilePath")
+
+
+def save_clip_folder(folder):
+    """Points every basic.ini output path (simple, advanced and ffmpeg
+    output) at folder. Doesn't create the folder itself."""
+    if not os.path.exists(BASIC_INI):
+        raise FileNotFoundError(f"Config file not found: {BASIC_INI}")
+    ini_value = folder.replace("\\", "\\\\") if os.name == "nt" else folder
+    lines = read_ini_lines()
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0]
+        if key in CLIP_FOLDER_INI_KEYS:
+            lines[i] = f"{key}={ini_value}\n"
+    write_ini_lines(lines)
+
+
 # ---------------------------------------------------------------------------
 # Scene collection
 # ---------------------------------------------------------------------------
@@ -487,6 +504,14 @@ def save_app_tracks(state):
     write_json_atomic(APP_TRACKS_PATH, state)
 
 
+def load_split_tracks():
+    """Whether split audio tracks are on (clip_reexport.py's
+    split_tracks_enabled) - turned on and off by setup.save_split_tracks."""
+    data = load_scene_collection()
+    entry = find_script_entry(data, "clip_reexport.py") if data else None
+    return bool((entry or {}).get("settings", {}).get("split_tracks_enabled", False))
+
+
 # ---------------------------------------------------------------------------
 # Clip sound: Scripts/replay_buffer_save_sound.py's settings (in the scene
 # collection) and the .wav it plays - a fixed file name that
@@ -610,8 +635,9 @@ def play_clip_sound(volume, wav_path=None):
 
 def apply_obs_settings(settings):
     """Writes settings - "websocket" {"port", "password"}, "clip_hotkey"
-    [ctrl, alt, shift, key] and/or "clip_sound" {"enabled", "volume"} - to
-    OBS's config files. Only safe while OBS isn't running.
+    [ctrl, alt, shift, key], "clip_sound" {"enabled", "volume"},
+    "clip_folder" (a path) and/or "split_tracks" (bool) - to OBS's config
+    files. Only safe while OBS isn't running.
     ("stuck_check_enabled" is only still accepted for queues left from
     before it stopped being an OBS setting.)"""
     if "websocket" in settings:
@@ -620,6 +646,14 @@ def apply_obs_settings(settings):
         save_clip_hotkey(*settings["clip_hotkey"])
     if "clip_sound" in settings:
         save_clip_sound(settings["clip_sound"]["enabled"], settings["clip_sound"]["volume"])
+    if "clip_folder" in settings:
+        save_clip_folder(settings["clip_folder"])
+    if "split_tracks" in settings:
+        # Imported here: setup imports this module, and its split-tracks
+        # writer edits the scene collection's audio sources too.
+        import setup
+
+        setup.save_split_tracks(settings["split_tracks"])
     if "stuck_check_enabled" in settings:
         save_stuck_check_enabled(settings["stuck_check_enabled"])
 

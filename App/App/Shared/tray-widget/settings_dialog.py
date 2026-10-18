@@ -5,8 +5,9 @@ rather than run in-process, since mixing tkinter's own event loop with
 pystray's would be fragile. Edits the same on-disk config files setup.py's
 wizard does.
 
-OBS reads the websocket, hotkey and clip sound settings only at startup
-(the clip sound's .wav file itself is read on every clip), so while
+OBS reads the websocket, hotkey, clip sound, clip folder and multitrack
+audio settings only at startup (the clip sound's .wav file itself is read
+on every clip), so while
 OBS is running those are queued (obs_config.queue_obs_settings) rather than written, and the
 dialog offers to restart OBS to apply them; otherwise run.py applies them
 before it next starts OBS.
@@ -209,10 +210,17 @@ def main():
         clip_sound = pending.get("clip_sound") or obs_config.load_clip_sound()
     except Exception:
         clip_sound = dict(obs_config.DEFAULT_CLIP_SOUND)
+    clip_folder = pending.get("clip_folder") or obs_config.load_clip_folder()
+    try:
+        split_tracks = bool(pending.get("split_tracks", obs_config.load_split_tracks()))
+    except Exception:
+        split_tracks = False
     initial_obs_settings = {
         "websocket": {"port": port, "password": password},
         "clip_hotkey": list(hotkey),
         "clip_sound": {"enabled": bool(clip_sound["enabled"]), "volume": round(float(clip_sound["volume"]), 2)},
+        "clip_folder": clip_folder,
+        "split_tracks": split_tracks,
     }
 
     run_config = load_run_config()
@@ -354,6 +362,40 @@ def main():
             widget.config(state=state)
 
     on_sound_toggle()
+
+    # --- Where clips are saved, and whether audio sources get their own tracks.
+    tk.Label(frame, text="Clip Output", font=("", 10, "bold")).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
+    )
+    next_row += 1
+    tk.Label(frame, text="Save clips to:").grid(row=next_row, column=0, sticky="w")
+    folder_row = tk.Frame(frame)
+    folder_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+    clip_folder_var = tk.StringVar(value=clip_folder)
+    tk.Entry(folder_row, textvariable=clip_folder_var, state="readonly", width=28).pack(side="left")
+
+    def on_choose_clip_folder():
+        current = clip_folder_var.get()
+        path = filedialog.askdirectory(
+            parent=root, title="Choose where clips are saved",
+            initialdir=current if os.path.isdir(current) else os.path.expanduser("~"),
+        )
+        if path:
+            clip_folder_var.set(os.path.normpath(path))
+
+    tk.Button(folder_row, text="Browse...", command=on_choose_clip_folder).pack(side="left", padx=(px(4), 0))
+    tk.Button(
+        folder_row, text="Default", command=lambda: clip_folder_var.set(obs_config.DEFAULT_CLIPS_DIR),
+    ).pack(side="left", padx=(px(4), 0))
+    next_row += 1
+
+    split_tracks_var = tk.BooleanVar(value=split_tracks)
+    tk.Checkbutton(
+        frame, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the mic,\n"
+                    "desktop audio and apps each on their own track, for editing",
+        variable=split_tracks_var, justify="left",
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
 
     # --- The clip editor's "Open in..." button: any editor the user has.
     tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
@@ -914,9 +956,9 @@ def main():
         frame,
         text=(
             "Autostart, screen-detection, update settings and a new clip sound file\n"
-            "apply right away. OBS only reads the websocket, hotkey and clip sound\n"
-            "on/off and volume when it starts - if it's running, you'll be offered\n"
-            "a restart."
+            "apply right away. OBS only reads the websocket, hotkey, clip sound\n"
+            "on/off and volume, clip folder and multitrack audio when it starts -\n"
+            "if it's running, you'll be offered a restart."
         ),
         fg="gray40",
         justify="left",
@@ -953,7 +995,16 @@ def main():
             "websocket": {"port": port_val, "password": password_val},
             "clip_hotkey": hotkey_val,
             "clip_sound": {"enabled": bool(sound_enabled_var.get()), "volume": round(sound_volume_var.get() / 100, 2)},
+            "clip_folder": clip_folder_var.get(),
+            "split_tracks": bool(split_tracks_var.get()),
         }
+        if obs_settings["clip_folder"] != initial_obs_settings["clip_folder"]:
+            # OBS won't start the replay buffer into a folder that isn't there.
+            try:
+                os.makedirs(obs_settings["clip_folder"], exist_ok=True)
+            except OSError as exc:
+                messagebox.showerror("Clip Folder", f"Couldn't create the clip folder: {exc}", parent=root)
+                return
         if chosen_sound["path"]:
             # A plain file OBS's script reads on every clip - takes effect
             # straight away, OBS running or not.
@@ -996,8 +1047,8 @@ def main():
 
         if not messagebox.askyesno(
             "Restart OBS?",
-            "OBS only picks up websocket, hotkey and clip sound settings when it "
-            "starts. Restart OBS now to apply them?\n\n"
+            "OBS only picks up websocket, hotkey, clip sound, clip folder and multitrack "
+            "audio settings when it starts. Restart OBS now to apply them?\n\n"
             "(Choosing No applies them the next time ClipEm starts OBS.)",
         ):
             root.destroy()

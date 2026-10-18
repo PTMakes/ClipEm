@@ -120,3 +120,33 @@ def test_replacing_the_clip_sound_only_accepts_wav(tmp_path, monkeypatch):
     wav.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
     obs_config.replace_clip_sound_wav(str(wav))
     assert target.read_bytes() == wav.read_bytes()
+
+
+def test_queued_clip_folder_reaches_every_output_path(fake_obs_config):
+    ini = fake_obs_config / "basic.ini"
+    ini.write_text("[SimpleOutput]\nFilePath=/old\n\n[AdvOut]\nRecFilePath=/old\nFFFilePath=/old\n")
+    obs_config.queue_obs_settings({"clip_folder": "/new/clips"})
+    assert obs_config.load_clip_folder() == "/old"
+
+    obs_config.apply_pending_obs_settings()
+    assert obs_config.load_clip_folder() == "/new/clips"
+    assert ini.read_text().count("=/new/clips\n") == 3
+
+
+def test_queued_split_tracks_goes_through_setup(fake_obs_config, monkeypatch):
+    import setup
+
+    calls = []
+    monkeypatch.setattr(setup, "save_split_tracks", calls.append)
+    obs_config.queue_obs_settings({"split_tracks": True})
+    obs_config.apply_pending_obs_settings()
+    assert calls == [True]
+
+
+def test_split_tracks_defaults_off(fake_obs_config):
+    assert obs_config.load_split_tracks() is False
+    scenes = fake_obs_config / "scenes.json"
+    scenes.write_text(json.dumps({"modules": {"scripts-tool": [
+        {"path": "/x/clip_reexport.py", "settings": {"split_tracks_enabled": True}},
+    ]}}))
+    assert obs_config.load_split_tracks() is True

@@ -224,23 +224,11 @@ def set_clip_folder(folder):
     ensure_clip_folder_exists / declutter_and_create_shortcut) - so
     picking a folder and then backing out or aborting setup doesn't leave
     a stray directory behind."""
-    if not os.path.exists(BASIC_INI):
-        print(f"Config file not found: {BASIC_INI}", file=sys.stderr)
+    try:
+        obs_config.save_clip_folder(folder)
+    except FileNotFoundError as exc:
+        print(exc, file=sys.stderr)
         return
-
-    ini_value = folder.replace("\\", "\\\\") if platform.system() == "Windows" else folder
-
-    with open(BASIC_INI, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-
-    keys = {"FilePath", "RecFilePath", "FFFilePath"}
-    for i, line in enumerate(lines):
-        key = line.split("=", 1)[0]
-        if key in keys:
-            lines[i] = f"{key}={ini_value}\n"
-
-    obs_config.write_ini_lines(lines)
-
     print(f"Clip output folder set to: {folder}")
 
 
@@ -1549,9 +1537,7 @@ def _apply_app_slots(data, source_id, state):
 
 
 def load_split_tracks():
-    data = load_scene_collection()
-    entry = find_script_entry(data, REEXPORT_SCRIPT_NAME) if data else None
-    return bool((entry or {}).get("settings", {}).get("split_tracks_enabled", False))
+    return obs_config.load_split_tracks()
 
 
 def save_split_tracks(enabled):
