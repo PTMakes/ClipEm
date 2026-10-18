@@ -18,6 +18,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, simpledialog, ttk
@@ -74,6 +75,9 @@ from ui_scale import UiScale, enable_dpi_awareness  # noqa: E402
 log = setup_logging("settings")
 RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".settings.lock")
+# A wheel turn over a combobox this soon after scrolling the page scrolls
+# the page on, instead of changing the combobox.
+COMBOBOX_WHEEL_BUFFER_S = 0.6
 
 try:
     import updater
@@ -356,12 +360,10 @@ def main():
         lambda event: canvas.itemconfigure(frame_window, width=max(event.width, frame.winfo_reqwidth())),
     )
 
-    def on_mouse_wheel(event):
-        # bind_all also fires for other windows (dialogs) and for comboboxes,
-        # which use the wheel to change their value - only scroll for the
-        # settings area itself.
-        if not str(event.widget).startswith(str(canvas)) or isinstance(event.widget, ttk.Combobox):
-            return
+    last_page_scroll = {"time": 0.0}
+
+    def scroll_page(event):
+        last_page_scroll["time"] = time.monotonic()
         if event.num == 4:
             step = -1
         elif event.num == 5:
@@ -372,8 +374,32 @@ def main():
             step = -event.delta // 120
         canvas.yview_scroll(step, "units")
 
+    def on_mouse_wheel(event):
+        # bind_all also fires for other windows (dialogs) and for comboboxes,
+        # which use the wheel to change their value - only scroll for the
+        # settings area itself.
+        if not str(event.widget).startswith(str(canvas)) or isinstance(event.widget, ttk.Combobox):
+            return
+        scroll_page(event)
+
+    def on_combobox_wheel(event):
+        # The page was just being scrolled: the pointer is passing over the
+        # combobox - keep scrolling the page, don't change the value.
+        if time.monotonic() - last_page_scroll["time"] < COMBOBOX_WHEEL_BUFFER_S:
+            scroll_page(event)
+            return "break"
+        return None
+
     for sequence in ("<MouseWheel>", "<Button-4>", "<Button-5>"):
         root.bind_all(sequence, on_mouse_wheel, add="+")
+        # Ahead of the combobox's own wheel binding (see guard_combobox_wheel).
+        root.bind_class("ComboboxWheelGuard", sequence, on_combobox_wheel)
+
+    def guard_combobox_wheel(widget):
+        for child in widget.winfo_children():
+            if isinstance(child, ttk.Combobox) and "ComboboxWheelGuard" not in child.bindtags():
+                child.bindtags(("ComboboxWheelGuard",) + child.bindtags())
+            guard_combobox_wheel(child)
     # Rows spanning both columns (checkboxes, update text) are wider than
     # Port/Password; give that extra width to the field column so the labels
     # and fields stay flush left instead of being spread apart.
@@ -1537,6 +1563,7 @@ def main():
     root.minsize(width, min(footer.winfo_reqheight() + px(120), max_height))
     root.maxsize(root.winfo_screenwidth(), content_height)
 
+    guard_combobox_wheel(frame)
     root.deiconify()
     # Opened from the tray menu - make sure it isn't hidden behind whatever
     # window had focus.
