@@ -391,6 +391,10 @@ body {
   padding: 0;
 }
 
+.site-footer ul + p {
+  margin-top: 1rem;
+}
+
 .site-footer a {
   color: var(--accent-text);
 }

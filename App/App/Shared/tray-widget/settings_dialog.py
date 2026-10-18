@@ -635,45 +635,7 @@ def main():
         ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
         next_row += 1
 
-        channel_labels = {updater.CHANNEL_RELEASES: "Releases", updater.CHANNEL_LATEST: "Latest (dev builds)"}
-        channel_var = tk.StringVar(value=channel_labels.get(update_config["update_channel"], "Releases"))
-        saved_channel = {"label": channel_var.get()}
-
-        def on_channel_selected(_event=None):
-            label = channel_var.get()
-            if label == saved_channel["label"]:
-                return
-            channel = next(key for key, text in channel_labels.items() if text == label)
-            if channel == updater.CHANNEL_LATEST:
-                explanation = (
-                    "The Latest channel installs development builds published for testing (the \"dev\" "
-                    "pre-release on GitHub) before they become a release. They may be unfinished or "
-                    "broken.\n\nSwitch to Latest?"
-                )
-            else:
-                explanation = (
-                    "The Releases channel installs only published releases. If you're on a dev build, "
-                    "the next update check offers the current release instead.\n\nSwitch to Releases?"
-                )
-            if not messagebox.askyesno("Update Channel", explanation, parent=root):
-                channel_var.set(saved_channel["label"])
-                return
-            try:
-                updater.change_update_config(update_channel=channel, skipped_version=None)
-            except Exception as exc:
-                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
-                channel_var.set(saved_channel["label"])
-                return
-            saved_channel["label"] = label
-
-        tk.Label(frame, text="Update channel:").grid(row=next_row, column=0, sticky="w", pady=px(4))
-        channel_box = ttk.Combobox(frame, textvariable=channel_var, values=list(channel_labels.values()),
-                                   state="readonly", width=18)
-        channel_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
-        channel_box.bind("<<ComboboxSelected>>", on_channel_selected)
-        next_row += 1
-
-        source_repo_var = tk.StringVar(value=update_config["source_repo"])
+        source_repo_var = tk.StringVar(value=updater.repo_url(update_config["source_repo"]))
 
         def save_source_repo(repo):
             try:
@@ -681,37 +643,80 @@ def main():
             except Exception as exc:
                 messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
                 return
-            source_repo_var.set(repo)
+            source_repo_var.set(updater.repo_url(repo))
 
         def on_change_source_repo():
             if not messagebox.askyesno(
-                "Update Source",
+                "Source Repo",
                 "ClipEm downloads its updates from the releases of this GitHub repository.\n\n"
                 "Only change it if you know the repository publishes ClipEm builds - updates must "
                 "still be signed with the official ClipEm release key, so any other repository "
-                "makes update checks fail.\n\nChange the update source?",
+                "makes update checks fail.\n\nChange the source repo?",
                 parent=root,
             ):
                 return
-            repo = simpledialog.askstring(
-                "Update Source", "GitHub repository (owner/name):", initialvalue=source_repo_var.get(), parent=root,
+            text = simpledialog.askstring(
+                "Source Repo", "GitHub repository link (https://github.com/owner/name):",
+                initialvalue=source_repo_var.get(), parent=root,
             )
-            if repo is None:
+            if text is None:
                 return
-            repo = repo.strip()
-            if not updater.is_valid_repo(repo):
-                messagebox.showerror("Update Source", f"\"{repo}\" isn't a GitHub repository like owner/name.")
+            repo = updater.repo_from_url(text)
+            if repo is None:
+                messagebox.showerror(
+                    "Source Repo", f"\"{text.strip()}\" isn't a GitHub repository link like "
+                    "https://github.com/owner/name.", parent=root,
+                )
                 return
             save_source_repo(repo)
 
-        tk.Label(frame, text="Update source:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+        tk.Label(frame, text="Source repo:").grid(row=next_row, column=0, sticky="w", pady=px(4))
         source_row = tk.Frame(frame)
         source_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
-        tk.Entry(source_row, textvariable=source_repo_var, state="readonly", width=22).pack(side="left")
+        tk.Entry(source_row, textvariable=source_repo_var, state="readonly", width=32).pack(side="left")
         tk.Button(source_row, text="Change...", command=on_change_source_repo).pack(side="left", padx=(px(4), 0))
         tk.Button(
             source_row, text="Reset", command=lambda: save_source_repo(updater.DEFAULT_SOURCE_REPO),
         ).pack(side="left", padx=(px(4), 0))
+        next_row += 1
+
+        # Main follows the published releases, Dev the rolling "dev" pre-release.
+        branch_labels = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "Dev"}
+        branch_var = tk.StringVar(value=branch_labels.get(update_config["update_channel"], "Main"))
+        saved_branch = {"label": branch_var.get()}
+
+        def on_branch_selected(_event=None):
+            label = branch_var.get()
+            if label == saved_branch["label"]:
+                return
+            channel = next(key for key, text in branch_labels.items() if text == label)
+            if channel == updater.CHANNEL_LATEST:
+                explanation = (
+                    "The Dev branch installs development builds published for testing (the \"dev\" "
+                    "pre-release on GitHub) before they become a release. They may be unfinished or "
+                    "broken.\n\nSwitch to Dev?"
+                )
+            else:
+                explanation = (
+                    "The Main branch installs only published releases. If you're on a dev build, "
+                    "the next update check offers the current release instead.\n\nSwitch to Main?"
+                )
+            if not messagebox.askyesno("Update Branch", explanation, parent=root):
+                branch_var.set(saved_branch["label"])
+                return
+            try:
+                updater.change_update_config(update_channel=channel, skipped_version=None)
+            except Exception as exc:
+                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                branch_var.set(saved_branch["label"])
+                return
+            saved_branch["label"] = label
+
+        tk.Label(frame, text="Update branch:").grid(row=next_row, column=0, sticky="w", pady=px(4))
+        branch_box = ttk.Combobox(frame, textvariable=branch_var, values=list(branch_labels.values()),
+                                  state="readonly", width=8)
+        branch_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
+        branch_box.bind("<<ComboboxSelected>>", on_branch_selected)
         next_row += 1
 
         def on_check_for_updates():

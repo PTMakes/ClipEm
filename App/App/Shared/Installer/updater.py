@@ -64,6 +64,8 @@ DEFAULT_UPDATE_CONFIG = {
 
 MANIFEST_NAME = "install-manifest.json"
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+_REPO_URL_RE = re.compile(r"^https://(?:www\.)?github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+                          re.IGNORECASE)
 # Short timeout: this may run on every launch of run.py, so a hung or slow
 # network shouldn't noticeably delay starting OBS.
 REQUEST_TIMEOUT_SECONDS = 5
@@ -145,6 +147,21 @@ def get_local_version():
 
 def is_valid_repo(repo):
     return isinstance(repo, str) and bool(_REPO_RE.match(repo)) and ".." not in repo
+
+
+def repo_url(repo):
+    """The repository's GitHub link, as Settings shows it."""
+    return f"https://github.com/{repo}"
+
+
+def repo_from_url(text):
+    """The "owner/name" of a GitHub repository link the user typed
+    (https://github.com/owner/name, with or without www., a trailing "/" or
+    ".git") - or a bare owner/name. None if it isn't one."""
+    text = (text or "").strip()
+    match = _REPO_URL_RE.match(text)
+    repo = match.group(1) if match else text
+    return repo if is_valid_repo(repo) else None
 
 
 def manifest_url(config=None):

@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import DownloadSection from "./DownloadSection";
-import { DESCRIPTION, SITE_URL } from "./site";
+import { DESCRIPTION, REPO_URL, SITE_URL } from "./site";
 import installManifest from "../public/updates/install-manifest.json";
 
 // Only the fields read here - "sources" is absent from manifests published
@@ -256,6 +256,9 @@ export default function Home() {
               </li>
             )}
           </ul>
+          <p>
+            Source code: <a href={REPO_URL}>{REPO_URL.replace("https://", "")}</a>
+          </p>
         </footer>
       </main>
     </>

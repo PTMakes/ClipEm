@@ -156,6 +156,16 @@ def test_manifest_url_follows_repo_and_channel():
             updater.manifest_url({"source_repo": bad})
 
 
+def test_repo_from_url_accepts_github_links():
+    for text in ("https://github.com/me/fork", "https://www.github.com/me/fork/", " https://github.com/me/fork.git ",
+                 "me/fork"):
+        assert updater.repo_from_url(text) == "me/fork"
+    for bad in ("", "http://github.com/me/fork", "https://gitlab.com/me/fork", "https://github.com/me",
+                "https://github.com/me/fork/releases", "https://github.com/../x", "a/b/c"):
+        assert updater.repo_from_url(bad) is None
+    assert updater.repo_url("me/fork") == "https://github.com/me/fork"
+
+
 def test_redirects_must_stay_on_https():
     handler = updater._HttpsOnlyRedirectHandler()
     with pytest.raises(updater.UpdateError):
