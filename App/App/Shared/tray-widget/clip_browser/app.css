@@ -136,6 +136,7 @@ body {
   flex: none;
   width: 160px;
   aspect-ratio: 16 / 9;
+  align-self: flex-start; /* not stretched to the row's height - stays 16:9 */
   border-radius: 6px;
   overflow: hidden;
   background: var(--player-bg);
@@ -179,14 +180,16 @@ body {
   justify-content: flex-start;
   gap: 2px;
 }
-/* Clear of the folder and delete buttons below-right - unless the links row
-   is under the thumbnail, beside them. */
-.clip:not(:has(.clip-export-row:not([hidden]))) .clip-text { padding-bottom: 30px; }
 
 .clip-text .when { font-weight: 600; }
 .clip-text .size { font-size: 12px; }
 
-.badges { display: flex; flex-wrap: wrap; gap: 4px; }
+/* Size and +tracks/+small on one line, so with the title's two lines the
+   text stays clear of the folder and delete buttons below-right and every
+   clip is the thumbnail's height. */
+.clip-meta { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.clip-meta .size { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.badges { flex: none; display: flex; gap: 3px; }
 
 .clip-export-row { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 6px; }
 /* Up to two lines - an export's name ("Replay 2026-10-17 / 22-06-05-discord")
@@ -233,9 +236,9 @@ body {
 }
 
 .badge {
-  font-size: 11px;
-  line-height: 16px;
-  padding: 0 7px;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--hover);
@@ -807,5 +810,7 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
   body { flex-direction: column; overflow: auto; }
   #sidebar { width: 100%; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
   .thumb { width: 128px; }
+  /* The shorter thumbnail leaves no room beside it for the buttons. */
+  .clip:not(:has(.clip-export-row:not([hidden]))) .clip-text { padding-bottom: 30px; }
   .row { grid-template-columns: 1fr; }
 }

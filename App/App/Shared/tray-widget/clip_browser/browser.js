@@ -105,7 +105,10 @@ function clipItem(clip) {
     else revealFile({ name, path: exported.dataset.path });
   });
   const origin = linkButton("clip-origin", () => highlightClip(origin.dataset.clip));
-  text.append(when, size, badges);
+  const meta = document.createElement("div");
+  meta.className = "clip-meta";
+  meta.append(size, badges);
+  text.append(when, meta);
 
   const reveal = document.createElement("button");
   reveal.className = "clip-action clip-reveal";
@@ -181,15 +184,14 @@ function shortWhen(seconds) {
 }
 
 function updateItem(li, clip) {
-  // An export goes by its file name (they'd all show their export time);
-  // its date moves to the size line.
+  // An export goes by its file name (they'd all show their export time).
   const from = clip.exported_from;
   const stem = clip.name.replace(/\.[^.]+$/, "");
   li.querySelector(".when").textContent = from ? stem : formatWhen(clip.mtime);
   li.querySelector(".when").title = from ? clip.name : "";
   li.querySelector(".when").classList.toggle("named", !!from);
-  li.querySelector(".size").textContent = from ? `${formatSize(clip.size)} · ${shortWhen(clip.mtime)}`
-    : formatSize(clip.size);
+  li.querySelector(".size").textContent = formatSize(clip.size);
+  li.querySelector(".size").title = li.querySelector(".size").textContent; // when cut short
   li.querySelector(".length").textContent = formatDuration(clip.duration);
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
