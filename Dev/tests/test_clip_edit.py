@@ -268,7 +268,7 @@ def test_mono_and_one_channel_changes():
     assert not clip_edit.uses_channels({"tracks": [mic]})
 
 
-def test_noise_gate_comes_after_level_and_before_mono():
+def test_noise_gate_comes_before_level_and_mono():
     info = _info()
     project = clip_edit.default_project(info)
     project["tracks"][0]["muted"] = True
@@ -280,10 +280,19 @@ def test_noise_gate_comes_after_level_and_before_mono():
         clip_edit.GATE_MIN_DB)
     graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
     mic = next(line for line in graph.split(";") if line.startswith("[0:a:1]"))
-    assert mic.index("loudnorm") < mic.index("agate=threshold=0.003981") < mic.index("pan=")
+    # Gate first: Level would lift the noise far above any threshold.
+    assert mic.index("agate=threshold=0.003981") < mic.index("loudnorm") < mic.index("pan=")
     preview = clip_edit.track_audio_command("ffmpeg", "x", 1, "aac", "o", gate_db=-48)
     assert "copy" not in preview and preview[preview.index("-c:a") + 1] == "aac"  # re-encoded with the gate
     assert "agate" in " ".join(clip_edit.peaks_command("ffmpeg", "x", 1, gate_db=-48))
+
+
+def test_gate_presets_sit_between_noise_and_speech():
+    presets = clip_edit.gate_presets(-75.4, -49.3)  # a real, quiet ClipEm mic track
+    assert presets == {"light": -65, "normal": -61, "strong": -57}
+    close = clip_edit.gate_presets(-50.0, -44.0)  # barely any gap: never within 6 dB of the speech
+    assert all(value <= -50 for value in close.values())
+    assert clip_edit.gate_presets(-120.0, -100.0)["light"] == clip_edit.GATE_MIN_DB
 
 
 def test_peaks_by_channel():
@@ -612,3 +621,15 @@ def test_real_noise_gate_turns_down_the_quiet_part(tmp_path):
     per = clip_edit.PEAKS_PER_SECOND
     assert max(gated[per // 2:per * 3 // 2]) < max(plain[per // 2:per * 3 // 2]) / 4  # the hiss, turned down
     assert max(gated[per * 5 // 2:per * 7 // 2]) >= max(plain[per * 5 // 2:per * 7 // 2]) * 0.9  # the tone, kept
+
+
+@needs_ffmpeg
+def test_real_gate_levels_find_the_noise_and_the_tone(tmp_path):
+    maker = shutil.which("ffmpeg")
+    clip = tmp_path / "speech.mkv"
+    subprocess.run([maker, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "anoisesrc=d=2:a=0.003:r=48000[n];aevalsrc=0.1*sin(2*PI*440*t):d=2:s=48000[t];"
+                    "[n][t]concat=n=2:v=0:a=1", "-ac", "2", "-c:a", "pcm_s16le", str(clip)], check=True)
+    noise, speech = clip_edit.gate_levels(FFMPEG, str(clip), 0)
+    assert -29 < speech < -20  # the tone: -23 dB RMS per channel, ~-26 dB once mixed to mono
+    assert -80 < noise < -55  # the hiss (most of white noise is above 4 kHz, so it reads quieter)

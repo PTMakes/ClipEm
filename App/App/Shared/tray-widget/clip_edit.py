@@ -53,10 +53,18 @@ LEVEL_FILTERS = ("loudnorm", "alimiter")
 # Only for the noise gate, likewise.
 GATE_FILTERS = ("agate",)
 # Noise gate: below the threshold, sound is turned down by GATE_RANGE_DB -
-# the hiss and hum between words. After Level, so the threshold is relative
-# to the leveled track (and Level doesn't boost the gated noise back up).
-GATE_DEFAULT_DB = -45
-GATE_MIN_DB, GATE_MAX_DB = -70, -10
+# the hiss and hum between words. Before Level: leveling boosts quiet parts
+# (by ~40 dB on a quiet mic), lifting the noise far above any fixed gate
+# threshold. Mic levels vary too much for one threshold, so it's set from
+# the track's own noise floor and speech level (gate_levels/gate_presets).
+GATE_DEFAULT_DB = -60  # only when the track can't be measured
+GATE_MIN_DB, GATE_MAX_DB = -80, -10
+# Where between the noise floor (0) and the speech level (1) each strength
+# puts the threshold - measured on real ClipEm mic tracks: about 0.55 cuts
+# the noise ~28 dB with the speech untouched; 0.7+ starts eating quiet words.
+GATE_STRENGTHS = {"light": 0.4, "normal": 0.55, "strong": 0.7}
+GATE_WINDOW_SECONDS = 0.05
+GATE_SAMPLE_RATE = 8000
 GATE_RANGE_DB = -30
 GATE_RATIO = 8
 GATE_ATTACK_MS = 5
@@ -101,6 +109,7 @@ MAX_OFFSET_SECONDS = 30.0
 
 PEAK_SAMPLE_RATE = 2000
 PEAKS_PER_SECOND = 50
+PEAK_FULL_SCALE = 32767
 
 _SYSTEM_WINDOWS = os.name == "nt"
 
@@ -388,12 +397,45 @@ def gate_filters(threshold_db):
 
 
 def effect_filters(level=False, gate_db=None):
-    """Level, then the noise gate - as the editor previews them
+    """The noise gate, then Level - as the editor previews them
     (track_audio()/track_peaks() with the same arguments)."""
-    filters = level_filters() if level else []
-    if gate_db is not None:
-        filters += gate_filters(gate_db)
+    filters = gate_filters(gate_db) if gate_db is not None else []
+    if level:
+        filters += level_filters()
     return filters
+
+
+def gate_levels(ffmpeg, source, index, run=subprocess.run):
+    """(noise floor dB, speech level dB) of a recorded track: the quietest
+    and loudest tenth of its 50 ms stretches. None if it can't be read."""
+    result = run([ffmpeg, "-hide_banner", "-nostdin", "-loglevel", "error", "-i", source, "-map", f"0:a:{index}",
+                  "-ac", "1", "-ar", str(GATE_SAMPLE_RATE), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"],
+                 capture_output=True, **_no_window_kwargs())
+    if result.returncode != 0:
+        return None
+    samples = array.array("h")
+    samples.frombytes(result.stdout[: len(result.stdout) // 2 * 2])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    window = int(GATE_SAMPLE_RATE * GATE_WINDOW_SECONDS)
+    levels = sorted(
+        20 * math.log10(max(math.sqrt(sum(x * x for x in samples[i:i + window]) / window) / 32768, 1e-6))
+        for i in range(0, len(samples) - window + 1, window)
+    )
+    if len(levels) < 10:
+        return None
+    return levels[len(levels) // 10], levels[len(levels) * 9 // 10]
+
+
+def gate_presets(noise_db, speech_db):
+    """{strength: threshold dB} for a track with this noise floor and speech
+    level - always above the noise and at least 6 dB under the speech."""
+    presets = {}
+    for name, fraction in GATE_STRENGTHS.items():
+        threshold = noise_db + fraction * (speech_db - noise_db)
+        threshold = min(threshold, speech_db - 6)
+        presets[name] = int(round(_clamp(threshold, GATE_MIN_DB, GATE_MAX_DB)))
+    return presets
 
 
 def _track_chain(track, duration):
@@ -702,22 +744,22 @@ def peaks_from_pcm(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECON
     return peaks_by_channel(pcm, sample_rate, per_second, channels)[0]
 
 
-def peaks_by_channel(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECOND, channels=1):
+def peaks_by_channel(pcm, sample_rate=PEAK_SAMPLE_RATE, per_second=PEAKS_PER_SECOND, channels=1, full_scale=255):
     """peaks_from_pcm() for each channel of interleaved PCM."""
     samples = array.array("h")
     samples.frombytes(pcm[: len(pcm) // (2 * channels) * 2 * channels])
     if sys.byteorder == "big":
         samples.byteswap()
-    return [_peaks(samples[channel::channels], sample_rate, per_second) for channel in range(channels)]
+    return [_peaks(samples[channel::channels], sample_rate, per_second, full_scale) for channel in range(channels)]
 
 
-def _peaks(samples, sample_rate, per_second):
+def _peaks(samples, sample_rate, per_second, full_scale=255):
     step = max(1, sample_rate // per_second)
     peaks = []
     for start in range(0, len(samples), step):
         chunk = samples[start:start + step]
         peak = max(max(chunk), -min(chunk))
-        peaks.append(min(255, peak * 255 // 32767))
+        peaks.append(min(full_scale, peak * full_scale // 32767))
     return peaks
 
 
@@ -768,8 +810,10 @@ def track_peaks(ffmpeg, source, index, cache_path, run=subprocess.run, level=Fal
                      **_no_window_kwargs())
         if result.returncode != 0:
             raise RuntimeError(f"Couldn't read audio track {index + 1}: {result.stderr.decode(errors='replace')[-300:]}")
-        sides = peaks_by_channel(result.stdout, channels=channels)
-        data = {"per_second": PEAKS_PER_SECOND, "peaks": [max(values) for values in zip(*sides, strict=True)]}
+        # 16-bit peaks: the editor draws them in dB, down to -60 dB and below.
+        sides = peaks_by_channel(result.stdout, channels=channels, full_scale=PEAK_FULL_SCALE)
+        data = {"per_second": PEAKS_PER_SECOND, "scale": PEAK_FULL_SCALE,
+                "peaks": [max(values) for values in zip(*sides, strict=True)]}
         if channels == 2:
             data["channels"] = sides
         with open(partial, "w", encoding="utf-8") as f:

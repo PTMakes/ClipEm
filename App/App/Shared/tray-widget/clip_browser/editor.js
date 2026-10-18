@@ -20,6 +20,7 @@ const EXPORT_POLL_MS = 500;
 const SYNC_TOLERANCE = 0.12;
 const DRAG_THRESHOLD_PX = 4;
 const NUDGE_MS = 10;
+const WAVE_RANGE_DB = 60; // a waveform's height: 0 dBFS at the top, -60 dB at the middle line
 
 const ed = {
   name: null, // the clip being edited
@@ -97,7 +98,6 @@ function isStereo(index) {
 }
 
 const CHANNEL_NAMES = ["left", "right"];
-const GATE_CHOICES = [-70, -65, -60, -55, -50, -45, -40, -35, -30, -25, -20];
 
 function hasEffects(track) {
   return !!(track.level || track.mono || track.gate_db != null);
@@ -105,7 +105,7 @@ function hasEffects(track) {
 
 function effectNames(track, index) {
   const names = [];
-  if (track.level) names.push("Level");
+  if (track.level) names.push("Level Out Audio");
   if (track.gate_db != null) names.push(`Noise gate (${track.gate_db} dB)`);
   if (track.mono && isStereo(index)) names.push("Mono");
   return names;
@@ -298,7 +298,8 @@ async function loadEditor(name) {
   ed.missing = data.missing || [];
   ed.canLevel = !!data.can_level;
   ed.canGate = !!data.can_gate;
-  ed.gateDefault = data.gate_default_db ?? -45;
+  ed.gateDefault = data.gate_default_db ?? -60;
+  ed.gatePresets = {}; // track index -> "pending" | {noise_db, speech_db, presets} | {error}
   ed.fx = null;
   ed.canChannels = !!data.can_channels;
   ed.peaks = {};
@@ -616,7 +617,8 @@ function audioRow(index) {
   const fx = el("button", "toggle", "FX");
   fx.setAttribute("aria-pressed", String(hasEffects(track)));
   fx.classList.toggle("open", ed.fx === index);
-  fx.title = `Effects: ${effectNames(track, index).join(", ") || "Level, Noise gate" + (isStereo(index) ? ", Mono" : "")}`;
+  fx.title = `Effects: ${effectNames(track, index).join(", ") ||
+    "Level Out Audio, Noise gate" + (isStereo(index) ? ", Mono" : "")}`;
   fx.addEventListener("click", () => {
     ed.fx = ed.fx === index ? null : index;
     ed.selection = null;
@@ -638,6 +640,7 @@ function audioRow(index) {
     beginEdit();
     track.volume_db = sliderToDb(slider.value);
     value.textContent = formatDb(track.volume_db);
+    drawWaveform(index);
     scheduleSave();
   });
   slider.addEventListener("change", endEdit);
@@ -711,18 +714,25 @@ function drawWaveform(index) {
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.
   const rows = showsChannels(index) && data.channels ? data.channels : [data.peaks];
   const rowHeight = height / rows.length;
-  // Scaled to the track's own loudest moment, so quiet tracks still show.
-  const loudest = data.peaks.reduce((max, peak) => (peak > max ? peak : max), 24);
-  const scale = (rowHeight - 2) / loudest;
+  // In dB (full height is 0 dBFS, empty WAVE_RANGE_DB below), as it will
+  // sound: with the track's volume, volume changes and mute - so quiet
+  // noise, and what Level Out Audio and the noise gate do to it, show up.
+  const track = trackOf(index);
+  const full = data.scale || 255;
   rows.forEach((peaks, row) => {
     const mid = rowHeight * (row + 0.5);
     for (let x = 0; x < width; x++) {
+      const t = (x + 0.5) * perPixel;
       const from = Math.floor((x * perPixel - offset) * data.per_second);
       const to = Math.max(from + 1, Math.floor(((x + 1) * perPixel - offset) * data.per_second));
       let peak = 0;
       for (let i = Math.max(0, from); i < Math.min(peaks.length, to); i++) peak = Math.max(peak, peaks[i]);
-      const h = Math.max(peak ? 1 : 0, peak * scale);
-      ctx.fillRect(x, mid - h / 2, 1, h);
+      const gain = rows.length === 2 ? gainAt(track, t, row) : Math.max(gainAt(track, t, 0), gainAt(track, t, 1));
+      const level = (peak / full) * gain;
+      if (level <= 0) continue;
+      const fraction = clamp(1 + (20 * Math.log10(level)) / WAVE_RANGE_DB, 0, 1);
+      const h = fraction * (rowHeight - 2);
+      if (h >= 0.5) ctx.fillRect(x, mid - h / 2, 1, h);
     }
   });
   if (rows.length === 2) {
@@ -1004,28 +1014,37 @@ function renderFx(panel, index) {
     return wrap;
   };
   const update = "its ffmpeg is too old - update ClipEm";
-  panel.append(check("Level", !!track.level, ed.canLevel,
+  panel.append(check("Level Out Audio", !!track.level, ed.canLevel,
     ed.canLevel ? "Even out the volume: quiet parts up, loud peaks down, to about -14 LUFS - " +
       "the usual level for videos on Discord and the web" : `Can't level audio: ${update}`,
     (on) => change(() => { track.level = on; })));
 
+  // The gate's threshold comes from this track's own noise floor and speech
+  // level (measured by the server), as Light / Normal / Strong.
   const gateOn = track.gate_db != null;
+  const presets = ed.gatePresets[index];
+  const normal = presets && presets !== "pending" && !presets.error ? presets.presets.normal : ed.gateDefault;
   panel.append(check("Noise gate", gateOn, ed.canGate,
-    ed.canGate ? "Turn down background noise (hiss, hum, keyboard) whenever the track is " +
-      "quieter than the threshold - the gaps between words" : `Can't gate audio: ${update}`,
-    (on) => change(() => { track.gate_db = on ? ed.gateDefault : null; })));
-  const threshold = el("select");
-  threshold.title = "Threshold: sound quieter than this is turned down. Raise it if noise still " +
-    "gets through; lower it if quiet words get cut.";
-  threshold.disabled = !gateOn || !ed.canGate;
-  for (const db of GATE_CHOICES) {
-    const option = el("option", null, `${db} dB`);
+    ed.canGate ? "Turn down background noise (hiss, hum, keyboard) in the quiet moments " +
+      "between words" : `Can't gate audio: ${update}`,
+    (on) => change(() => { track.gate_db = on ? normal : null; })));
+  const strength = el("select");
+  strength.title = "How much counts as noise. Stronger cuts more of it - and, too strong, the " +
+    "ends of quiet words.";
+  strength.disabled = !gateOn || !ed.canGate || !presets || presets === "pending";
+  const options = presets && presets !== "pending" && !presets.error
+    ? Object.entries(presets.presets).map(([name, db]) => [db, `${name[0].toUpperCase()}${name.slice(1)} (${db} dB)`])
+    : [[ed.gateDefault, presets === "pending" ? "Measuring..." : `${ed.gateDefault} dB`]];
+  if (gateOn && !options.some(([db]) => db === track.gate_db)) options.push([track.gate_db, `${track.gate_db} dB`]);
+  for (const [db, label] of options) {
+    const option = el("option", null, label);
     option.value = String(db);
-    threshold.append(option);
+    strength.append(option);
   }
-  threshold.value = String(gateOn ? track.gate_db : ed.gateDefault);
-  threshold.addEventListener("change", () => change(() => { track.gate_db = Number(threshold.value); }));
-  panel.append(threshold);
+  strength.value = String(gateOn ? track.gate_db : normal);
+  strength.addEventListener("change", () => change(() => { track.gate_db = Number(strength.value); }));
+  panel.append(strength);
+  if (presets === undefined) loadGatePresets(index);
 
   if (isStereo(index)) {
     panel.append(check("Mono", !!track.mono, ed.canChannels,
@@ -1034,6 +1053,20 @@ function renderFx(panel, index) {
       (on) => change(() => { track.mono = on; })));
   }
   panel.append(closeButton());
+}
+
+async function loadGatePresets(index) {
+  const name = ed.name;
+  ed.gatePresets[index] = "pending";
+  let result;
+  try {
+    result = await api(`gate/${index}/${encodeURIComponent(name)}`);
+  } catch (err) {
+    result = { error: err.message };
+  }
+  if (ed.name !== name) return;
+  ed.gatePresets[index] = result;
+  if (ed.fx === index) renderPanel();
 }
 
 function closeButton() {

@@ -324,6 +324,20 @@ class Editor:
             self._can_level = bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.LEVEL_FILTERS)
         return self._can_level
 
+    def gate_presets(self, source, index):
+        """{"noise_db", "speech_db", "presets": {strength: threshold}} for a
+        track (measured once per file version), or None if unreadable."""
+        key = ("gate", source, index, os.path.getmtime(source))
+        with self._lock:
+            cached = self._info.get(key)
+        if cached is None:
+            levels = clip_edit.gate_levels(self.ffmpeg, source, index)
+            cached = {"noise_db": round(levels[0], 1), "speech_db": round(levels[1], 1),
+                      "presets": clip_edit.gate_presets(*levels)} if levels else {}
+            with self._lock:
+                self._info[key] = cached
+        return cached or None
+
     def can_gate(self):
         """Whether it has the noise gate filter (newer builds too)."""
         if self._can_gate is None:
@@ -415,8 +429,8 @@ class Editor:
         return clip_edit.track_audio(self.ffmpeg, source, info, index, path, level=level, gate_db=gate_db)
 
     def peaks(self, source, index, level=False, gate_db=None):
-        # "-ch": per-channel peaks (older cache files have only the combined ones).
-        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}-ch.json")
+        # "-v3": per-channel, 16-bit peaks (older cache files are 8-bit, or combined).
+        path = os.path.join(self.peaks_dir, f"{self._key(source)}-{index}{_effects_suffix(level, gate_db)}-v3.json")
         return clip_edit.track_peaks(self.ffmpeg, source, index, path, level=level, gate_db=gate_db,
                                      channels=clip_edit.channel_count(self.info(source), index))
 
@@ -799,6 +813,16 @@ class Handler(BaseHTTPRequestHandler):
             self._get_project(folder)
         elif route == "api/export-status":
             self._json(self.server.editor.export_job.status)
+        elif route.startswith("gate/"):
+            try:
+                found = self._track_route(folder, route)
+                presets = self.server.editor.gate_presets(*found) if found else None
+            except Exception as exc:
+                log.exception(f"{route} failed")
+                self._json({"error": str(exc)}, 500)
+                return
+            if found:
+                self._json(presets or {"error": "Couldn't measure this track."}, 200 if presets else 500)
         elif route.startswith(("track/", "peaks/")):
             try:
                 found = self._track_route(folder, route)
@@ -915,7 +939,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         saved = editor.load_project(clip, editor.info(source))
         if any(t.get("level") for t in saved["tracks"]) and not editor.can_level():
-            self._json({"error": "A track is set to Level, which needs a newer ffmpeg - update ClipEm "
+            self._json({"error": "A track is set to Level Out Audio, which needs a newer ffmpeg - update ClipEm "
                                  "or turn Level off."}, 409)
             return
         if any(t.get("gate_db") is not None for t in saved["tracks"]) and not editor.can_gate():
