@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.1",
   "windows": {
     "obs": {
       "url": "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip",
@@ -22,7 +22,7 @@
       "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e"
     },
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/ffmpeg-9.0.2-r2-windows-x86_64.zip",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/ffmpeg-9.0.2-r2-windows-x86_64.zip",
       "sha256": "12037188214da46c4dfc0b056f4b2601bb7dfeee4060f3e17374330920bccfa9"
     },
     "editor_window": {
@@ -30,25 +30,25 @@
       "sha256": "9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/clipem-shared-1.4.0.zip",
-      "sha256": "a1acded7f4ddb264c622a223a780f223ee5eadacf43ef7d9ee093e999249b12a"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/clipem-shared-1.4.1.zip",
+      "sha256": "83865f651b8fce796c20d526688f202ac3837f627cc3f3cb02f4344980099ec2"
     }
   },
   "linux": {
     "obs": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/linux-obs-install-32.2.2.tar.gz",
-      "sha256": "4db0b38e014ecaf9298cc538b19314fa24b875c4ef219e4981298e18fac14642"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/linux-obs-install-32.2.2.tar.gz",
+      "sha256": "022ddbddf9c3628615ab9f09adcd91b5eca96922d7d5713f6474b1faeb3bcf89"
     },
     "python": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/cpython-3.12.14+20260924-x86_64-unknown-linux-gnu-install_only-xft.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/cpython-3.12.14+20260924-x86_64-unknown-linux-gnu-install_only-xft.tar.gz",
       "sha256": "18545e930bba844486e818c3e86392199bcfe7917da5eed55e0a67337982704f"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/clipem-shared-1.4.0.zip",
-      "sha256": "a1acded7f4ddb264c622a223a780f223ee5eadacf43ef7d9ee093e999249b12a"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/clipem-shared-1.4.1.zip",
+      "sha256": "83865f651b8fce796c20d526688f202ac3837f627cc3f3cb02f4344980099ec2"
     },
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/ffmpeg-9.0.2-r2-linux-x86_64.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/ffmpeg-9.0.2-r2-linux-x86_64.tar.gz",
       "sha256": "a6942437da0302a881320eca4b24e6802c4e84b7cdbfcd9f768dc1aa476e2ee3"
     },
     "editor_window": {
@@ -74,26 +74,26 @@
       "sha256": "e567d13833d0e161d7749727355b98643461df3395b537cfa7bdddf8a8bfedff"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/clipem-shared-1.4.0.zip",
-      "sha256": "a1acded7f4ddb264c622a223a780f223ee5eadacf43ef7d9ee093e999249b12a"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/clipem-shared-1.4.1.zip",
+      "sha256": "83865f651b8fce796c20d526688f202ac3837f627cc3f3cb02f4344980099ec2"
     }
   },
   "sources": {
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/ffmpeg-9.0.2-r2-source.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/ffmpeg-9.0.2-r2-source.tar.gz",
       "sha256": "4ab1bba83bf66058b468f8918bad752fc585c7141721a02ca4eb9dfc29b0d1b8"
     }
   },
   "offline": {
     "linux": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/clipem-linux-portable-1.4.0.zip",
-      "sha256": "956a0515a799f99b57ba40fa817c64f557dc26caec477468381996a57c05ed10",
-      "size": 172840356
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/clipem-linux-portable-1.4.1.zip",
+      "sha256": "6f14458993fe9a5c3a9027ed891b2a799d787ae1115ced9b01f335a99838af10",
+      "size": 172840659
     },
     "windows": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.0/clipem-windows-portable-1.4.0.zip",
-      "sha256": "60c83848f581312e134a6dc4a276f8d0fa57dc7769e6f47f8507713b4dea2ab4",
-      "size": 222030653
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.4.1/clipem-windows-portable-1.4.1.zip",
+      "sha256": "0ba83416e52114dc0209d7dec1f7cfd92186b9ec01d7c7d58f9d4834b233e6a1",
+      "size": 222030956
     }
   }
 }
