@@ -271,17 +271,3 @@ its lifecycle against a stand-in `obspython` that only has the names the real
 one has. Those names are in `Dev/tests/obspython_api.json`, generated from the
 Linux OBS build by `Dev/generate_obspython_api.py`. Re-run that script after
 rebuilding OBS; `release.sh` stops if the snapshot is out of date.
-
-## Not verified on real hardware
-
-The project is developed on Linux, so these are unverified:
-
-- **macOS: everything.** That covers the OBS.app fetch, portable-mode
-  config, the Finder alias and the LaunchAgent. It's the lowest-confidence
-  platform.
-- **Windows:** `bootstrap.ps1`'s signature step, the pip-wheel bootstrap,
-  the tcl/tk extraction, `.lnk` creation via PowerShell `-EncodedCommand`,
-  and the NSIS subfolder and uninstall changes. The logic and quoting are
-  unit-tested, but none of it has run on Windows.
-- **The clip hotkey's `basic.ini` format** was inferred from the shipped
-  profile, not confirmed against OBS reading it back.
