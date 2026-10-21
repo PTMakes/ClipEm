@@ -46,6 +46,8 @@ RING_EXTRA_SECONDS = 8
 # gap in the sound (the app paused), not jitter.
 RESYNC_FRAMES = RATE // 10
 RESYNC_CHUNKS = 5
+# A chunk goes right after the one before it unless it should be this far from there.
+CONTIGUOUS_FRAMES = RATE // 20
 # Don't restart a helper that keeps exiting more often than this.
 RESTART_SECONDS = 10
 
@@ -159,22 +161,25 @@ class StreamPlacer:
     """Where in time a helper's chunks of sound belong. A chunk is read some
     time after it was captured, by an unknown and varying delay - but never
     before, so the smallest (wall clock - frames counted so far) seen is the
-    best estimate of where the stream starts, and chunks go where that says.
-    A gap in the sound (the app paused) makes that difference jump; a jump
-    that lasts is taken as the new start."""
+    best estimate of where the stream starts. That estimate wobbles by a few
+    milliseconds, though, and the sound itself doesn't: a stream's chunks go
+    back to back (no gap, no overlap - either is a click) as long as the
+    estimate stays near, and only jump when it doesn't. A gap in the sound
+    (the app paused) makes the estimate jump for good; a jump that lasts is
+    taken as the new start, and chunks read after it go where the wall clock
+    says."""
 
     def __init__(self):
         self._offset = None
         self._total = 0
         self._late = 0
+        self._next = None
 
     def place(self, now_frame, count):
         """The frame the next `count` frames of this stream start at; now_frame
         is the clock's frame as they were read."""
         after = now_frame - (self._total + count)
-        if self._offset is None:
-            self._offset = after
-        elif after < self._offset:
+        if self._offset is None or after < self._offset:
             self._offset = after
             self._late = 0
         elif after - self._offset > RESYNC_FRAMES:
@@ -182,11 +187,15 @@ class StreamPlacer:
             if self._late >= RESYNC_CHUNKS:
                 self._offset, self._late = after, 0
         else:
-            self._offset += 1  # follows the capture clock drifting later
             self._late = 0
         late = after - self._offset > RESYNC_FRAMES
-        position = (after if late else self._offset) + self._total
+        estimate = (after if late else self._offset) + self._total
+        if self._next is not None and abs(estimate - self._next) <= CONTIGUOUS_FRAMES:
+            position = self._next
+        else:
+            position = estimate
         self._total += count
+        self._next = position + count
         return position
 
 

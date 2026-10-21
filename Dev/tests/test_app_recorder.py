@@ -79,6 +79,16 @@ def test_placer_puts_steady_chunks_back_to_back_despite_jitter():
     assert all(abs(p - (10_000 + i * 960)) < 20 for i, p in enumerate(positions))
 
 
+def test_placer_never_leaves_a_gap_or_an_overlap_in_a_steady_stream():
+    placer = StreamPlacer()
+    rng = random.Random(7)
+    end = None
+    for i in range(2000):  # 40 s of chunks read 0-40 ms late, some in a burst
+        position = placer.place(10_000 + (i + 1) * 960 + rng.choice([0, 0, 50, 300, 900, 1900]), 960)
+        assert end is None or position == end, (i, position - end)
+        end = position + 960
+
+
 def test_placer_follows_a_pause_in_the_sound():
     placer = StreamPlacer()
     for i in range(10):
