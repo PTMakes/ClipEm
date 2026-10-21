@@ -494,6 +494,21 @@ def load_tray_tracks():
     return bool(load_clip_script_settings().get("tray_tracks_enabled", False))
 
 
+def migrate_split_tracks_layout():
+    """Installs that turned Split audio tracks on before the tray recorded the
+    app tracks still have OBS recording 6 tracks through app sources and
+    clip_reexport.py splitting them: moves them to the current layout, once
+    (setup.save_split_tracks writes tray_tracks_enabled either way). Returns
+    True if it changed anything. Must run while OBS is closed."""
+    settings = load_clip_script_settings()
+    if not settings.get("split_tracks_enabled") or "tray_tracks_enabled" in settings:
+        return False
+    import setup  # imported here: setup imports this module
+
+    setup.save_split_tracks(True)
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Clip sound: Scripts/replay_buffer_save_sound.py's settings (in the scene
 # collection) and the .wav it plays - a fixed file name that

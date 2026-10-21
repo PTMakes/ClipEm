@@ -1468,7 +1468,7 @@ def save_split_tracks(enabled):
     if not enabled:
         print("Split audio tracks off.")
     elif tray_tracks:
-        print("Split audio tracks on: mix, mic and desktop, plus every app you set up on its own track.")
+        print("Split audio tracks on: mix, mic and desktop, plus every app that plays sound on its own track in the clip copy.")
     else:
         print("Split audio tracks on: mix, mic and desktop on their own tracks (no per-app capture here).")
 

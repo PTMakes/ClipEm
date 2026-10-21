@@ -742,6 +742,12 @@ def main():
                 log.info(f"Smaller-copy target moved to Discord's new {obs_config.DISCORD_TARGET_MB} MB limit.")
         except Exception as exc:
             log.warning(f"Could not update the smaller-copy target size: {exc}")
+        try:
+            if obs_config.migrate_split_tracks_layout():
+                log.info("Split audio tracks moved to the new layout: OBS records Mix, Mic and Desktop; "
+                         "ClipEm records the apps.")
+        except Exception as exc:
+            log.warning(f"Could not move Split audio tracks to the new layout: {exc}")
     # Before the tray widget starts: it only names its notifications "ClipEm"
     # once this entry exists (tray_widget.use_clipem_notification_name).
     try:
