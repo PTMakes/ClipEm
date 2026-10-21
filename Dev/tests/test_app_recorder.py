@@ -131,20 +131,20 @@ def make_recorder(clock):
 def test_recorder_starts_and_stops_helpers_as_targets_change():
     clock = FakeClock()
     recorder = make_recorder(clock)
-    recorder.set_targets({"t1": (("a",), [("pa", 1, "m")]), "t2": ((), [])})
+    recorder.set_targets({"a": ("A", [("pa", 1, "m")]), "b": ("B", [])})
     assert [s.handle for s in FakeStream.started] == [("pa", 1, "m")]
-    recorder.set_targets({"t1": (("a",), [("pa", 1, "m")])})  # same again: nothing restarts
+    recorder.set_targets({"a": ("A", [("pa", 1, "m")])})  # same again: nothing restarts
     assert len(FakeStream.started) == 1
-    recorder.set_targets({"t1": (("a",), [("pa", 2, "m")])})
+    recorder.set_targets({"a": ("A", [("pa", 2, "m")])})
     assert FakeStream.started[0].stopped and FakeStream.started[1].handle == ("pa", 2, "m")
-    recorder.set_targets({})
-    assert FakeStream.started[1].stopped
+    recorder.stop()
+    assert FakeStream.started[1].stopped and recorder.snapshot().tracks == {}
 
 
 def test_recorder_restarts_a_helper_that_died_but_not_in_a_tight_loop():
     clock = FakeClock()
     recorder = make_recorder(clock)
-    target = {"t1": (("a",), [("pa", 1, "m")])}
+    target = {"a": ("A", [("pa", 1, "m")])}
     recorder.set_targets(target)
     FakeStream.started[0].alive = False
     recorder.set_targets(target)
@@ -154,31 +154,34 @@ def test_recorder_restarts_a_helper_that_died_but_not_in_a_tight_loop():
     assert len(FakeStream.started) == 2
 
 
-def test_recorder_clears_a_track_whose_apps_changed():
+def test_an_app_keeps_what_it_recorded_until_a_clip_could_no_longer_contain_it():
     clock = FakeClock()
-    recorder = make_recorder(clock)
-    recorder.set_targets({"t1": (("a",), [])})
-    ring = recorder._rings["t1"]
-    ring.add(recorder.clock.frame(), pcm([5] * 10))
-    recorder.set_targets({"t1": (("a",), [])})
-    assert any(values(ring.read(0, ring.head)))
-    recorder.set_targets({"t1": (("b",), [])})
-    assert not any(values(ring.read(0, ring.head)))
+    recorder = make_recorder(clock)  # rings hold 1 s + the extra margin
+    recorder.set_targets({"a": ("Alpha", [("pa", 1, "m")])})
+    recorder._rings["a"].add(recorder.clock.frame(), pcm([5] * 10))
+    clock.t += 1.0
+    recorder.set_targets({"b": ("Beta", [("pa", 2, "m")])})  # Alpha closed
+    snapshot = recorder.snapshot()
+    assert list(snapshot.tracks) == ["a", "b"] and snapshot.labels == {"a": "Alpha", "b": "Beta"}
+    assert FakeStream.started[0].stopped  # its helper is gone, its sound isn't
+    clock.t += recorder.ring_seconds() + 1
+    recorder.set_targets({"b": ("Beta", [("pa", 2, "m")])})
+    assert list(recorder.snapshot().tracks) == ["b"]
 
 
 def test_snapshot_windows_cover_what_was_recorded():
     clock = FakeClock()
     recorder = make_recorder(clock)
-    recorder.set_targets({"t1": (("a",), [])})
+    recorder.set_targets({"a": ("A", [("pa", 1, "m")])})
     clock.t += 0.5
     now = recorder.clock.frame()
-    recorder._rings["t1"].add(now - 3, pcm([4, 5, 6]))
+    recorder._rings["a"].add(now - 3, pcm([4, 5, 6]))
     clock.t += 0.25
     snapshot = recorder.snapshot()
     assert snapshot.end_frame == recorder.clock.frame()
-    assert values(snapshot.window("t1", now - 4, now)) == [0, 4, 5, 6]
-    # Before the recording began, and for a track it doesn't have: silence.
-    assert values(snapshot.window("t1", -2, 2)) == [0, 0, 0, 0]
+    assert values(snapshot.window("a", now - 4, now)) == [0, 4, 5, 6]
+    # Before the recording began, and for an app it doesn't have: silence.
+    assert values(snapshot.window("a", -2, 2)) == [0, 0, 0, 0]
     assert values(snapshot.window("nope", 0, 3)) == [0, 0, 0]
 
 

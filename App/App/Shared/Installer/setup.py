@@ -1417,7 +1417,7 @@ def save_clip_reexport(enabled, target_mb, crop_seconds):
 # Split audio tracks: OBS records 3 audio tracks instead of one - the full
 # mix, the mic and desktop audio. Track 1 stays the full mix, so the clip
 # itself is unchanged. The tray widget records the apps itself (one track
-# each from track 4 on - see obs_config's notes on app_tracks.json) and, for
+# each from track 4 on, named after the app - see obs_config's notes) and, for
 # every saved clip, writes a "-tracks.mkv" next to it with all of them and
 # strips the clip back to the mix. Where the tray can't record apps (macOS),
 # Scripts/clip_reexport.py does that for the 3 tracks OBS has.
@@ -1481,47 +1481,6 @@ def save_mic_filter(noise_floor_db, speech_level_db):
 
 def has_mic_filter():
     return mic_filter.has_mic_filter_been_configured(SCENE_COLLECTION_JSON, AUDIO_DEVICE_SCENE_KEYS["input"])
-
-
-def load_app_tracks():
-    return obs_config.load_app_tracks()
-
-
-def set_app_track_pinned(track_id, pinned):
-    state = obs_config.load_app_tracks()
-    for track in state["tracks"]:
-        if track["id"] == track_id and track["owner"]:
-            track["owner"]["pinned"] = bool(pinned)
-            obs_config.save_app_tracks(state)
-            return
-
-
-def save_app_track_rules(tracks, expiry_days=None):
-    """Replaces the track list (rule and auto tracks, in order) - from the
-    settings page; owners of auto tracks that stay are kept."""
-    state = obs_config.load_app_tracks()
-    owners = {t["id"]: t["owner"] for t in state["tracks"]}
-    new_tracks = []
-    for track in tracks:
-        apps = [obs_config.app_key(a) for a in track.get("apps", []) if obs_config.app_key(a)]
-        apps = list(dict.fromkeys(apps))
-        track_id = track.get("id") or obs_config.new_track_id()
-        new_tracks.append({"id": track_id, "name": str(track.get("name") or ""), "apps": apps,
-                           "owner": None if apps else owners.get(track_id)})
-    state["tracks"] = new_tracks
-    if expiry_days is not None:
-        state["expiry_days"] = max(1, int(expiry_days))
-    obs_config.save_app_tracks(state)
-
-
-def reset_app_tracks():
-    """Forgets every auto track's app: the next apps heard get the tracks afresh.
-    Rule tracks stay as they are."""
-    state = obs_config.load_app_tracks()
-    for track in state["tracks"]:
-        track["owner"] = None
-    obs_config.save_app_tracks(state)
-    print("App tracks reset.")
 
 
 def ffmpeg_path():
@@ -2162,10 +2121,6 @@ def try_launch_gui(system):
         "save_clip_reexport": save_clip_reexport,
         "load_split_tracks": load_split_tracks,
         "save_split_tracks": save_split_tracks,
-        "load_app_tracks": load_app_tracks,
-        "set_app_track_pinned": set_app_track_pinned,
-        "save_app_track_rules": save_app_track_rules,
-        "reset_app_tracks": reset_app_tracks,
         "app_capture_supported": app_capture_supported,
         "load_obs_websocket_settings": load_obs_websocket_settings,
         "save_obs_websocket_settings": save_obs_websocket_settings,

@@ -51,3 +51,41 @@ def test_queued_settings_accumulate_until_applied(fake_obs_config, monkeypatch):
     settings_dialog.save_obs_settings(_with(clip_hotkey=[True, False, False, "F9"]), INITIAL)
     settings_dialog.save_obs_settings(_with(websocket={"port": 4460, "password": "new-password"}), INITIAL)
     assert set(obs_config.load_pending_obs_settings()) == {"clip_hotkey", "websocket"}
+
+
+def test_a_second_launch_brings_the_open_dialog_to_the_front(tmp_path, monkeypatch):
+    import time
+    import tkinter as tk
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    raise_path = tmp_path / ".settings.raise"
+    monkeypatch.setattr(settings_dialog, "RAISE_PATH", str(raise_path))
+    monkeypatch.setattr(settings_dialog, "RAISE_POLL_MS", 20)
+    raised = []
+    monkeypatch.setattr(settings_dialog, "bring_to_front", lambda window: raised.append(window))
+    try:
+        settings_dialog.watch_for_reopen(root)
+        deadline = time.time() + 0.2
+        while time.time() < deadline:
+            root.update()
+        assert raised == []  # nobody asked
+        raise_path.write_text("raise")  # what a second launch does
+        deadline = time.time() + 2
+        while not raised and time.time() < deadline:
+            root.update()
+            time.sleep(0.01)
+        assert raised == [root] and not raise_path.exists()
+    finally:
+        root.destroy()
+
+
+def test_a_second_launch_asks_the_first_and_exits(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "RAISE_PATH", str(tmp_path / ".settings.raise"))
+    monkeypatch.setattr(settings_dialog, "acquire_instance_lock", lambda path: False)
+    monkeypatch.setattr(settings_dialog, "exit_with_parent", lambda pid: None)
+    monkeypatch.setattr(sys, "argv", ["settings_dialog.py"])
+    settings_dialog.main()  # returns instead of opening a second dialog
+    assert (tmp_path / ".settings.raise").exists()

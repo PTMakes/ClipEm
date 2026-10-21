@@ -6,6 +6,7 @@ import random
 import shutil
 import subprocess
 import sys
+import threading
 import types
 from array import array
 
@@ -90,7 +91,7 @@ class Recording:
             for i, value in enumerate(signal):
                 pcm[2 * (start + i)] = pcm[2 * (start + i) + 1] = value
             timeline[name] = pcm[:2 * end].tobytes()
-        self.snapshot = Snapshot(end, end, timeline)
+        self.snapshot = Snapshot(end, end, timeline, {"a": "Spotify", "b": "Discord"})
         self.clip_env = track_align.mono_envelope(self.clip_pcm, 8000)
 
 
@@ -161,11 +162,7 @@ def test_tray_split_command_copies_the_obs_tracks_and_encodes_the_rest():
     assert "title=Voice" in cmd and "title=Track-5" in cmd and cmd[-1] == "out.mkv"
 
 
-@needs_ffmpeg
-def test_finish_clip_writes_the_tracks_file_and_strips_the_clip(tmp_path):
-    rec = Recording(shift_ms=40)
-    seconds = rec.seconds
-    # A real clip: video and three AAC tracks - Mix, Mic, Desktop (A+B+C).
+def clip_with_three_tracks(tmp_path, rec):
     desktop = tmp_path / "desktop.wav"
     import wave
     with wave.open(str(desktop), "wb") as w:
@@ -175,22 +172,46 @@ def test_finish_clip_writes_the_tracks_file_and_strips_the_clip(tmp_path):
         w.writeframes(rec.clip_pcm)
     clip = tmp_path / "Replay 2026.mp4"
     subprocess.run([SYSTEM_FFMPEG, "-hide_banner", "-loglevel", "error", "-y",
-                    "-f", "lavfi", "-i", f"color=c=black:s=64x64:r=30:d={seconds}",
+                    "-f", "lavfi", "-i", f"color=c=black:s=64x64:r=30:d={rec.seconds}",
                     "-i", str(desktop), "-i", str(desktop), "-i", str(desktop),
                     "-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a",
                     "-c:v", "libx264", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-shortest", str(clip)],
                    check=True)
+    return clip
+
+
+@needs_ffmpeg
+def test_finish_clip_gives_every_app_heard_its_own_track_named_after_it(tmp_path):
+    rec = Recording(shift_ms=40)
+    # A third app that was open but silent during the clip gets no track.
+    rec.snapshot.tracks["quiet"] = bytes(len(rec.snapshot.tracks["a"]))
+    rec.snapshot.labels["quiet"] = "Quiet"
+    clip = clip_with_three_tracks(tmp_path, rec)
     logs = []
-    tray_tracks.finish_clip(str(clip), rec.snapshot, [("a", "Spotify"), ("b", "Discord"), ("c", "Voice")],
-                            SYSTEM_FFMPEG, {"reexport": False}, logs.append)
+    tray_tracks.finish_clip(str(clip), rec.snapshot, SYSTEM_FFMPEG, {"reexport": False}, logs.append)
     tracks_file = tmp_path / "Replay 2026-tracks.mkv"
     assert tracks_file.exists(), logs
     info = clip_edit.probe(SYSTEM_FFMPEG, str(tracks_file))
-    # Voice recorded nothing during the clip, so it's just "Track-6" here.
-    assert [t["title"] for t in info["audio"]] == ["Mix", "Mic", "Desktop", "Spotify", "Discord", "Track-6"]
-    assert abs(info["duration"] - seconds) < 0.2
+    assert [t["title"] for t in info["audio"]] == ["Mix", "Mic", "Desktop", "Spotify", "Discord"]
+    assert abs(info["duration"] - rec.seconds) < 0.2
     assert len(clip_edit.probe(SYSTEM_FFMPEG, str(clip))["audio"]) == 1  # the clip itself is just the mix
     assert not [p for p in tmp_path.iterdir() if p.suffix in (".partial", ".mov", ".pcm")]
+
+
+@needs_ffmpeg
+def test_finish_clip_with_no_app_heard_still_writes_the_three_tracks(tmp_path):
+    rec = Recording(shift_ms=0)
+    clip = clip_with_three_tracks(tmp_path, rec)
+    tray_tracks.finish_clip(str(clip), Snapshot(rec.snapshot.end_frame, 0, {}), SYSTEM_FFMPEG,
+                            {"reexport": False}, lambda m: None)
+    info = clip_edit.probe(SYSTEM_FFMPEG, str(tmp_path / "Replay 2026-tracks.mkv"))
+    assert [t["title"] for t in info["audio"]] == ["Mix", "Mic", "Desktop"]
+
+
+def test_two_apps_with_the_same_name_get_told_apart():
+    snapshot = Snapshot(0, 0, {}, {"a": "Firefox", "b": "Firefox", "c": "Mpv"})
+    assert tray_tracks.track_titles(snapshot, ["a", "b", "c"]) == ["Firefox", "Firefox 2", "Mpv"]
+    assert tray_tracks.track_titles(snapshot, ["zz"]) == ["zz"]  # no name known: the app's own
 
 
 @needs_ffmpeg
@@ -201,7 +222,7 @@ def test_finish_clip_leaves_a_clip_alone_that_was_recorded_without_split_tracks(
                     "-c:v", "libx264", "-c:a", "aac", "-shortest", str(clip)], check=True)
     before = clip.read_bytes()
     logs = []
-    tray_tracks.finish_clip(str(clip), Snapshot(0, 0, {}), [("a", "x")], SYSTEM_FFMPEG, {"reexport": False}, logs.append)
+    tray_tracks.finish_clip(str(clip), Snapshot(0, 0, {}), SYSTEM_FFMPEG, {"reexport": False}, logs.append)
     assert clip.read_bytes() == before and not (tmp_path / "Replay-tracks.mkv").exists()
     assert "audio track" in logs[0]
 
@@ -211,18 +232,7 @@ class FakeRecorder:
         return "snapshot"
 
 
-class FakeMonitor:
-    def __init__(self, state=None):
-        self._state = state
-
-    def state(self):
-        return self._state
-
-
 def test_clip_finisher_takes_the_snapshot_at_once_and_finishes_on_a_worker(monkeypatch, tmp_path):
-    state = obs_config.empty_app_tracks()
-    state["tracks"][0]["owner"] = {"exe": "spotify", "label": "Spotify", "last_heard": 0, "pinned": False}
-    state["tracks"].insert(0, obs_config.new_app_track("Voice", ["discord"]))
     monkeypatch.setattr(obs_config, "load_clip_script_settings",
                         lambda: {"reexport_enabled": True, "target_mb": 20.0, "crop_seconds": 30})
     done = []
@@ -230,23 +240,22 @@ def test_clip_finisher_takes_the_snapshot_at_once_and_finishes_on_a_worker(monke
     monkeypatch.setattr(tray_tracks, "finish_clip", lambda *args: done.append(args))
     clip = tmp_path / "Replay.mp4"
     clip.write_bytes(b"x")
-    finisher = tray_tracks.ClipFinisher(FakeRecorder(), FakeMonitor(state), enabled=lambda: True)
+    finisher = tray_tracks.ClipFinisher(FakeRecorder(), enabled=lambda: True)
     finisher.on_replay_saved({"savedReplayPath": str(clip)})
-    for thread in __import__("threading").enumerate():
-        if thread is not __import__("threading").current_thread() and thread.daemon:
+    for thread in threading.enumerate():
+        if thread is not threading.current_thread() and thread.daemon:
             thread.join(5)
-    (path, snapshot, tracks, ffmpeg, options, _log), = done
+    (path, snapshot, ffmpeg, options, _log), = done
     assert (path, snapshot, ffmpeg) == (str(clip), "snapshot", "ffmpeg")
-    assert [label for _id, label in tracks] == ["Voice", "Spotify", "Track-6", "Track-7"]
     assert options == {"reexport": True, "target_mb": 20.0, "crop_seconds": 30}
 
 
 def test_clip_finisher_does_nothing_when_tray_tracks_are_off():
-    finisher = tray_tracks.ClipFinisher(FakeRecorder(), FakeMonitor(), enabled=lambda: False)
+    finisher = tray_tracks.ClipFinisher(FakeRecorder(), enabled=lambda: False)
     finisher.on_replay_saved({"savedReplayPath": "/x.mp4"})  # no snapshot, no thread, no error
 
 
-def test_the_obs_script_stands_aside_when_the_tray_finishes_clips(monkeypatch):
+def test_the_obs_script_stands_aside_when_the_tray_finishes_clips():
     # (the script itself is exercised in test_obs_scripts.py; this is the rule)
     source = open(os.path.join(SCRIPTS_DIR, "clip_reexport.py"), encoding="utf-8").read()
     assert "if tray_tracks_enabled:" in source

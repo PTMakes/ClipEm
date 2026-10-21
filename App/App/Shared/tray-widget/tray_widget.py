@@ -303,7 +303,7 @@ class TrayApp:
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
         self.app_recorder = AppRecorder(seconds=replay_buffer_seconds)
         self.app_tracks = AppTrackMonitor(self.app_recorder)
-        self.clip_finisher = ClipFinisher(self.app_recorder, self.app_tracks)
+        self.clip_finisher = ClipFinisher(self.app_recorder)
         self.clip_folder = ClipFolderWatch(
             self._notify,
             fallback_dir=obs_config.load_clip_folder,

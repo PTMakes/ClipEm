@@ -798,7 +798,7 @@ class Wizard(tk.Tk):
         self._clear()
         ttk.Label(self.container, text="Split Audio Tracks", font=("", 13, "bold")).pack(anchor="w")
         per_app = bool(self.controller["app_capture_supported"]())
-        sources = "your mic, desktop audio and the apps you pick" if per_app else "your mic and desktop audio"
+        sources = "your mic, desktop audio and every app that plays sound" if per_app else "your mic and desktop audio"
         ttk.Label(
             self.container,
             text=(
@@ -817,54 +817,9 @@ class Wizard(tk.Tk):
                 text="Per-app tracks aren't available on this system.",
                 foreground="gray", justify="left", wraplength=self.px(WRAP_WIDTH),
             ).pack(anchor="w")
-        else:
-            self._show_app_track_list()
 
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_audio_devices)
         ttk.Button(bar, text="Continue", command=self._apply_split_tracks).pack(side="right")
-
-    def _show_app_track_list(self):
-        """Which app is on each app track (from track 4): an app keeps its
-        track for good (see tray-widget/app_audio.py) unless it goes unheard
-        for a while - Pin stops that; Reset frees every auto track. Apps can
-        be put on named tracks of your own in the tray's Settings."""
-        frame = ttk.Frame(self.container)
-        frame.pack(fill="x", pady=(self.px(PAD // 4), 0))
-        state = self.controller["load_app_tracks"]()
-        ttk.Label(
-            frame,
-            text=(
-                "Apps get a track the first time they play sound while ClipEm "
-                f"runs, and keep it - unused for {state['expiry_days']} days frees it "
-                "for another app unless pinned. Put apps on tracks of your own, or add more "
-                "tracks, in the tray's Settings."
-            ),
-            foreground="gray", justify="left", wraplength=self.px(WRAP_WIDTH),
-        ).pack(anchor="w", pady=(0, self.px(PAD // 4)))
-        for index, track in enumerate(state["tracks"]):
-            row = ttk.Frame(frame)
-            row.pack(fill="x")
-            owner = track["owner"]
-            if track["apps"]:
-                text = f"Track {4 + index}: {track['name'] or ', '.join(track['apps'])} ({', '.join(track['apps'])})"
-            else:
-                text = f"Track {4 + index}: {owner['label'] if owner else '(free)'}"
-            ttk.Label(row, text=text).pack(side="left")
-            if owner and not track["apps"]:
-                pinned = tk.BooleanVar(value=owner["pinned"])
-                ttk.Checkbutton(
-                    row, text="Pin", variable=pinned,
-                    command=lambda n=track["id"], v=pinned: self._call_logged(
-                        self.controller["set_app_track_pinned"], n, v.get()
-                    ),
-                ).pack(side="left", padx=(self.px(PAD // 2), 0))
-
-        def reset():
-            self._call_logged(self.controller["reset_app_tracks"])
-            self._show_split_tracks()
-
-        if any(t["owner"] for t in state["tracks"]):
-            ttk.Button(frame, text="Reset app tracks", command=reset).pack(anchor="w", pady=(self.px(4), 0))
 
     def _apply_split_tracks(self):
         try:

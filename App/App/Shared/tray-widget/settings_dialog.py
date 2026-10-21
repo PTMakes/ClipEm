@@ -70,6 +70,7 @@ from clipem_common import (  # noqa: E402
     start_clipem,
     stop_clip_editor,
     stop_tray_widget,
+    write_text_atomic,
 )
 from mic_filter_gui import MicFilterWizard  # noqa: E402
 from ui_scale import UiScale, enable_dpi_awareness  # noqa: E402
@@ -77,6 +78,10 @@ from ui_scale import UiScale, enable_dpi_awareness  # noqa: E402
 log = setup_logging("settings")
 RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".settings.lock")
+# Written by a second launch (the tray menu's Settings clicked again) to ask
+# the open dialog to come to the front.
+RAISE_PATH = os.path.join(SCRIPT_DIR, ".settings.raise")
+RAISE_POLL_MS = 300
 # A wheel turn over a combobox this soon after scrolling the page scrolls
 # the page on, instead of changing the combobox.
 COMBOBOX_WHEEL_BUFFER_S = 0.6
@@ -221,105 +226,30 @@ def load_recording_settings(pending):
     }
 
 
-def known_audio_apps(state):
-    """App names to offer for a rule: the ones on a track already, and any
-    playing sound right now."""
-    import app_audio
-
-    names = []
-    for track in state["tracks"]:
-        names += track["apps"] + ([obs_config.app_key(track["owner"]["exe"])] if track["owner"] else [])
+def bring_to_front(root):
+    root.deiconify()
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(500, lambda: root.attributes("-topmost", False))
     try:
-        names += [stream.key for stream in app_audio.list_audio_streams()]
-    except Exception:
-        pass  # the page works without the list
-    return sorted(set(names))
+        root.focus_force()
+    except tk.TclError:
+        pass
 
 
-def show_app_tracks(container, px):
-    """The app tracks of multitrack audio, from track 4: each is a rule (the
-    apps listed always go on it) or, with no apps, an auto track that the
-    next app heard takes and keeps (Pin stops it losing it after a while).
-    These apply straight away: the tray widget re-reads the file."""
-    for child in container.winfo_children():
-        child.destroy()
-    state = setup.load_app_tracks()
-    tk.Label(container, text="App tracks (multitrack audio) - on top of Mix, Mic and Desktop. List the apps "
-             "for a track (e.g. discord, teamspeak), or leave it empty for the next app heard. "
-             f"An unused auto track frees up after {state['expiry_days']} days unless pinned.",
-             fg="gray40", justify="left", wraplength=px(520)).pack(anchor="w")
-    grid = tk.Frame(container)
-    grid.pack(anchor="w", pady=(px(4), 0))
-    rows = []
+def watch_for_reopen(root):
+    """Brings the dialog to the front whenever another launch asks (see
+    RAISE_PATH) - the same hand-over the clip editor does."""
+    def check():
+        if os.path.exists(RAISE_PATH):
+            try:
+                os.remove(RAISE_PATH)
+            except OSError:
+                pass
+            bring_to_front(root)
+        root.after(RAISE_POLL_MS, check)
 
-    def commit(*_args):
-        setup.save_app_track_rules([
-            {"id": row["id"], "name": row["name"].get().strip(),
-             "apps": [a.strip() for a in row["apps"].get().split(",") if a.strip()]}
-            for row in rows
-        ])
-
-    def rebuild():
-        commit()
-        show_app_tracks(container, px)
-
-    for index, track in enumerate(state["tracks"]):
-        owner = track["owner"]
-        tk.Label(grid, text=f"Track {obs_config.FIRST_APP_TRACK + index}").grid(row=index, column=0, sticky="w")
-        name_var = tk.StringVar(value=track["name"])
-        apps_var = tk.StringVar(value=", ".join(track["apps"]))
-        rows.append({"id": track["id"], "name": name_var, "apps": apps_var})
-        tk.Entry(grid, textvariable=name_var, width=14).grid(row=index, column=1, padx=(px(6), 0))
-        tk.Entry(grid, textvariable=apps_var, width=30).grid(row=index, column=2, padx=(px(6), 0))
-        # Saved as it's typed, so closing the dialog never loses an edit.
-        name_var.trace_add("write", commit)
-        apps_var.trace_add("write", commit)
-        if not track["apps"]:
-            tk.Label(grid, text=f"auto: {owner['label'] if owner else '(free)'}", fg="gray40").grid(
-                row=index, column=3, sticky="w", padx=(px(6), 0))
-            if owner:
-                pinned = tk.BooleanVar(value=owner["pinned"])
-                tk.Checkbutton(grid, text="Pin", variable=pinned,
-                               command=lambda i=track["id"], v=pinned: setup.set_app_track_pinned(i, v.get())
-                               ).grid(row=index, column=4)
-
-        def remove(i=index):
-            del rows[i]
-            setup.save_app_track_rules([
-                {"id": row["id"], "name": row["name"].get().strip(),
-                 "apps": [a.strip() for a in row["apps"].get().split(",") if a.strip()]}
-                for row in rows
-            ])
-            show_app_tracks(container, px)
-
-        tk.Button(grid, text="Remove", command=remove).grid(row=index, column=5, padx=(px(6), 0))
-
-    buttons = tk.Frame(container)
-    buttons.pack(anchor="w", pady=(px(4), 0))
-
-    def add_track():
-        rows.append({"id": obs_config.new_track_id(), "name": tk.StringVar(), "apps": tk.StringVar()})
-        rebuild()
-
-    tk.Button(buttons, text="Add track", command=add_track).pack(side="left")
-    known = known_audio_apps(state)
-    if known:
-        tk.Label(buttons, text="Apps heard:", fg="gray40").pack(side="left", padx=(px(10), px(4)))
-        tk.Label(buttons, text=", ".join(known), fg="gray40", wraplength=px(380), justify="left").pack(side="left")
-
-    if len(state["tracks"]) > obs_config.WARN_APP_TRACKS:
-        tk.Label(container, text=f"More than {obs_config.WARN_APP_TRACKS} app tracks: each one is recorded "
-                 "all the time, which takes memory and a little CPU.", fg="firebrick").pack(anchor="w")
-
-    if any(t["owner"] for t in state["tracks"]):
-        def reset():
-            if not messagebox.askyesno("App Tracks", "Free every auto track? The next apps heard get them.",
-                                       parent=container.winfo_toplevel()):
-                return
-            setup.reset_app_tracks()
-            show_app_tracks(container, px)
-
-        tk.Button(container, text="Reset auto tracks", command=reset).pack(anchor="w", pady=(px(4), 0))
+    root.after(RAISE_POLL_MS, check)
 
 
 def parent_pid_from_args(argv):
@@ -335,8 +265,16 @@ def main():
     # Close along with the tray widget that opened this, however it ends.
     exit_with_parent(parent_pid_from_args(sys.argv[1:]))
     if not acquire_instance_lock(LOCK_PATH):
-        log.info("Settings dialog already open; not opening another.")
+        log.info("Settings dialog already open; asking it to come to the front.")
+        try:
+            write_text_atomic(RAISE_PATH, "raise")
+        except OSError as exc:
+            log.warning(f"Couldn't ask the open Settings dialog to come to the front: {exc}")
         return
+    try:
+        os.remove(RAISE_PATH)  # left from a dialog that has since closed
+    except OSError:
+        pass
     ws_load_error = None
     try:
         ws_settings = obs_config.load_obs_websocket_settings()
@@ -760,10 +698,10 @@ def main():
         run_in_background(root, mic_filter.ensure_mic_filter_deps, on_deps)
 
     if setup.app_capture_supported():
-        app_tracks_frame = tk.Frame(frame)
-        app_tracks_frame.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
+        tk.Label(frame, text="Split audio tracks: every app that plays sound during a clip gets its own "
+                 "track in the \"-tracks\" copy, named after the app.", fg="gray40", justify="left",
+                 wraplength=px(520)).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
         next_row += 1
-        show_app_tracks(app_tracks_frame, px)
 
     def fill_displays():
         displays = devices["displays"]
@@ -1635,12 +1573,10 @@ def main():
     root.maxsize(root.winfo_screenwidth(), content_height)
 
     guard_combobox_wheel(frame)
-    root.deiconify()
     # Opened from the tray menu - make sure it isn't hidden behind whatever
-    # window had focus.
-    root.lift()
-    root.attributes("-topmost", True)
-    root.after(500, lambda: root.attributes("-topmost", False))
+    # window had focus, now and whenever the menu item is clicked again.
+    bring_to_front(root)
+    watch_for_reopen(root)
     root.mainloop()
 
 

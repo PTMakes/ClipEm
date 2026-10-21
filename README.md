@@ -244,11 +244,10 @@ records Mix, Mic and Desktop (tracks 1-3). The tray widget records the apps
 itself (`app_recorder.py`; `parec` on Linux, `clipem-app-capture.exe` on
 Windows 10 2004+) and, when a clip is saved, `tray_tracks.py` lines them up
 with the clip's Desktop track and writes `<clip>-tracks.mkv` with one extra
-track per app track, then strips the clip itself back to the mix. Which
-apps go on which track is set in the tray's Settings (named tracks with a
-list of apps, or auto tracks that the next app heard takes and keeps), and
-stored in `App/Shared/app_tracks.json`. Where the tray can't record apps
-(macOS), `clip_reexport.py` splits the three OBS tracks itself.
+track for every app that made sound during the clip, named after the app
+(nothing to configure; the order is the order the apps were first heard),
+then strips the clip itself back to the mix. Where the tray can't record
+apps (macOS), `clip_reexport.py` splits the three OBS tracks itself.
 `build/build-app-capture.sh` cross-compiles the Windows helper from
 `Dev/app-capture/` into `App/Shared/Tools/` (`release.sh` runs it).
 

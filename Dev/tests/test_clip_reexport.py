@@ -205,7 +205,6 @@ def _shipped_config(tmp_path, monkeypatch):
     monkeypatch.setattr(setup.obs_config, "SCENE_COLLECTION_JSON", str(scene))
     monkeypatch.setattr(setup, "BASIC_INI", str(ini))
     monkeypatch.setattr(setup.obs_config, "BASIC_INI", str(ini))
-    monkeypatch.setattr(setup.obs_config, "APP_TRACKS_PATH", str(tmp_path / "app_tracks.json"))
     return scene
 
 
@@ -267,28 +266,3 @@ def test_turning_split_tracks_on_removes_the_app_sources_older_versions_added(tm
     assert not any(s["name"].startswith("ClipEm App") for s in data["sources"])
     scene_source = next(s for s in data["sources"] if s["id"] == "scene")
     assert [i["name"] for i in scene_source["settings"]["items"]] == ["Display Capture"]
-
-
-def test_app_track_rules_pin_and_reset(tmp_path, monkeypatch):
-    _shipped_config(tmp_path, monkeypatch)
-    state = setup.obs_config.empty_app_tracks()
-    first, second, third = state["tracks"]
-    second["owner"] = {"exe": "spotify", "label": "Spotify", "last_heard": 5.0, "pinned": False}
-    setup.obs_config.save_app_tracks(state)
-    setup.set_app_track_pinned(second["id"], True)
-    assert setup.load_app_tracks()["tracks"][1]["owner"]["pinned"] is True
-
-    # Settings: a rule track in front, a bare entry (an auto track), the others kept.
-    setup.save_app_track_rules([
-        {"name": "Voice", "apps": ["Discord.exe", "discord", "TeamSpeak"]},
-        {"id": second["id"], "apps": []},
-        {"id": third["id"], "name": "ignored", "apps": []},
-    ])
-    tracks = setup.load_app_tracks()["tracks"]
-    assert [(t["name"], t["apps"]) for t in tracks] == [("Voice", ["discord", "teamspeak"]), ("", []), ("ignored", [])]
-    assert tracks[1]["owner"]["exe"] == "spotify"  # an auto track keeps its app
-    assert tracks[0]["id"] not in (first["id"], second["id"], third["id"])
-
-    setup.reset_app_tracks()
-    assert all(t["owner"] is None for t in setup.load_app_tracks()["tracks"])
-    assert setup.load_app_tracks()["tracks"][0]["apps"] == ["discord", "teamspeak"]  # rules stay

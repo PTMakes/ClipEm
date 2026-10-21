@@ -1,21 +1,13 @@
 """Per-app audio tracks for "Split audio tracks" (see obs_config's notes on
-app_tracks.json and setup.save_split_tracks).
+the layout).
 
 Driven from the tray's poll loop: every CHECK_INTERVAL_SECONDS, asks the OS
-which apps have an audio stream, works out which track each belongs on and
-tells the recorder (app_recorder.py) which streams to record for each track:
+which apps have an audio stream and tells the recorder (app_recorder.py) to
+record each one. Nothing is assigned or remembered: when a clip is saved,
+every app that made sound during it becomes a track, named after the app.
 
-- A rule track lists the apps that always go on it (Setup's / the settings
-  page's track list) - however many, e.g. "Voice" = Discord + TeamSpeak.
-- An auto track (no apps listed) goes to the first app heard that has no rule
-  and no track yet, and that app keeps it - across clips, restarts and
-  reboots. The owner is only replaced once it hasn't been heard for
-  expiry_days (and isn't pinned) - and then it drops to the Desktop track
-  only, it doesn't move to another track.
-- An app with neither is on the Desktop track only.
-
-"Heard" means a stream that isn't paused. Streams are recorded whether or not
-they're paused, so the start of an app's sound isn't lost.
+Streams are recorded whether or not they're paused, so the start of an app's
+sound isn't lost.
 
 Apps playing sound: on Windows, the WASAPI sessions on the default output
 device (pycaw); on Linux, PulseAudio/PipeWire sink inputs (`pactl`), labelled
@@ -36,9 +28,6 @@ import obs_config
 log = logging.getLogger("tray")
 
 CHECK_INTERVAL_SECONDS = 3
-# last_heard is only written to disk this often while nothing else changes -
-# expiry is measured in days, so minute-level precision is plenty.
-LAST_HEARD_SAVE_SECONDS = 60
 
 # Never given a track: OBS itself, ClipEm's own clip sound players and its
 # clip editor window (editor_window.EXE_NAMES - its preview would otherwise
@@ -67,19 +56,6 @@ Stream = namedtuple("Stream", "key exe label handle corked")
 
 def is_ignored(exe, label=None):
     return _app_key(exe) in IGNORED_APPS or (label or "").strip().lower() in IGNORED_APP_LABELS
-
-
-def drop_ignored_owners(state):
-    """Frees auto tracks owned by apps that are ignored now (e.g. the clip
-    editor, which got one before it was). Returns the freed track ids."""
-    freed = []
-    for track in state["tracks"]:
-        owner = track["owner"]
-        if owner and is_ignored(owner["exe"], owner["label"]):
-            log.info(f"App tracks: {owner['label']} is ignored now - its track is free again.")
-            track["owner"] = None
-            freed.append(track["id"])
-    return freed
 
 
 # What some apps put in application.name - the audio library's or engine's
@@ -273,86 +249,14 @@ def list_active_audio_apps(system=None):
     return active_apps(list_audio_streams(system))
 
 
-def _claimable_track(state, now, buffer_seconds):
-    """An auto track nobody has had yet (first in order), else the expired,
-    unpinned one heard from longest ago, else None."""
-    auto = [t for t in state["tracks"] if not t["apps"]]
-    for track in auto:
-        if track["owner"] is None:
-            return track
-    # Never take a track while its owner's audio could still be in the replay
-    # buffer - that clip would have two apps on one track.
-    min_silence = max(state["expiry_days"] * 86400, buffer_seconds)
-    expired = [
-        (t["owner"]["last_heard"], index, t) for index, t in enumerate(auto)
-        if not t["owner"].get("pinned") and now - t["owner"]["last_heard"] > min_silence
-    ]
-    return min(expired, key=lambda e: e[:2])[2] if expired else None
-
-
-def rule_track_for(state, key):
-    return next((t for t in state["tracks"] if key in t["apps"]), None)
-
-
-def assign_tracks(state, active, now, buffer_seconds):
-    """Updates state in place for the apps playing sound now. Returns the ids
-    of auto tracks whose owner changed."""
-    owned = {_app_key(t["owner"]["exe"]): t for t in state["tracks"] if t["owner"] and not t["apps"]}
-    changed = []
-    newcomers = []
-    for exe, label in active:
-        key = _app_key(exe)
-        track = owned.get(key)
-        if track:
-            owner = track["owner"]
-            owner["last_heard"] = now
-            # Owners saved before labels skipped library names ("WEBRTC
-            # VoiceEngine" for Discord) pick up the app's real name.
-            if owner["label"].lower() in GENERIC_APP_NAMES and label != owner["label"]:
-                owner["label"] = label
-                changed.append(track["id"])
-        elif not is_ignored(exe, label) and rule_track_for(state, key) is None:
-            newcomers.append((exe, label))
-
-    for exe, label in newcomers:
-        key = _app_key(exe)
-        if key in owned:  # listed twice
-            continue
-        track = _claimable_track(state, now, buffer_seconds)
-        if track is None:
-            continue
-        previous = track["owner"]
-        if previous:
-            owned.pop(_app_key(previous["exe"]), None)
-            log.info(f"App tracks: {previous['label']} hasn't been heard for {state['expiry_days']} days - "
-                     f"its track goes to {label}.")
-        track["owner"] = {"exe": exe, "label": label, "last_heard": now, "pinned": False}
-        owned[key] = track
-        changed.append(track["id"])
-    return changed
-
-
-def track_targets(state, streams):
-    """{track id: (signature, [stream handles])} - what the recorder should
-    capture for each track. The signature changes when the apps a track is
-    for do, which tells the recorder to drop what it has of the old ones."""
+def app_targets(streams):
+    """{app key: (label, [stream handles])} - what the recorder captures,
+    in the order the apps are listed."""
     targets = {}
-    for track in state["tracks"]:
-        if track["apps"]:
-            keys = tuple(track["apps"])
-        elif track["owner"]:
-            keys = (_app_key(track["owner"]["exe"]),)
-        else:
-            keys = ()
-        handles = []
-        for stream in streams:
-            if stream.key in keys and stream.handle not in handles:
-                # An app on a rule track and (stale) on an auto track too is
-                # recorded on the rule track only.
-                if not track["apps"] and rule_track_for(state, stream.key) is not None:
-                    continue
-                handles.append(stream.handle)
-        targets[track["id"]] = (keys, handles)
+    for stream in streams:
+        label, handles = targets.setdefault(stream.key, (stream.label, []))
+        if stream.handle not in handles:
+            handles.append(stream.handle)
     return targets
 
 
@@ -366,31 +270,19 @@ def replay_buffer_seconds():
 class AppTrackMonitor:
     """Call tick() from the poll loop. Does nothing unless `enabled()` - split
     audio tracks are on and this system can record apps. recorder:
-    app_recorder.AppRecorder (or anything with set_targets(targets))."""
+    app_recorder.AppRecorder (or anything with set_targets(targets) and stop())."""
 
-    def __init__(self, recorder, list_streams=list_audio_streams, clock=time.time, monotonic=time.monotonic,
-                 load_state=obs_config.load_app_tracks, save_state=obs_config.save_app_tracks,
-                 buffer_seconds=replay_buffer_seconds, interval_seconds=CHECK_INTERVAL_SECONDS,
+    def __init__(self, recorder, list_streams=list_audio_streams, monotonic=time.monotonic,
+                 interval_seconds=CHECK_INTERVAL_SECONDS,
                  enabled=lambda: obs_config.load_tray_tracks() and obs_config.app_capture_supported()):
         self._recorder = recorder
         self._list_streams = list_streams
-        self._clock = clock
         self._monotonic = monotonic
-        self._load_state = load_state
-        self._save_state = save_state
-        self._buffer_seconds = buffer_seconds
         self._interval = interval_seconds
         self._enabled = enabled
         self._next_check = None
-        self._last_saved = None
         self._detect_failed = False
-        self._state_mtime = None
-        self._state = None
         self._was_enabled = False
-
-    def state(self):
-        """The current assignments (the same dict tick() updates), or None."""
-        return self._state
 
     def forget(self):
         """After a reconnect: check again straight away."""
@@ -408,58 +300,19 @@ class AppTrackMonitor:
             # tray's poll loop (which would drop and reconnect, silently).
             log.exception("App track check crashed")
 
-    def _reload_state_if_changed(self):
-        """Setup's Reset / Pin and the settings page write the state file
-        while the tray runs."""
-        try:
-            mtime = os.path.getmtime(obs_config.APP_TRACKS_PATH)
-        except OSError:
-            mtime = None
-        if self._state is None or mtime != self._state_mtime:
-            self._state = self._load_state()
-            self._state_mtime = mtime
-            return True
-        return False
-
-    def _save(self):
-        self._save_state(self._state)
-        try:
-            self._state_mtime = os.path.getmtime(obs_config.APP_TRACKS_PATH)
-        except OSError:
-            self._state_mtime = None
-        self._last_saved = self._monotonic()
-
     def _tick(self):
-        enabled = bool(self._enabled())
-        if not enabled:
+        if not self._enabled():
             if self._was_enabled:
-                self._recorder.set_targets({})
+                self._recorder.stop()
             self._was_enabled = False
             return
         self._was_enabled = True
-        reloaded = self._reload_state_if_changed()
-        if reloaded and drop_ignored_owners(self._state):
-            self._save()
-
         try:
             streams = self._list_streams()
         except Exception as exc:
             if not self._detect_failed:
-                log.warning(f"Can't tell which apps are playing sound ({exc}) - app tracks won't fill in.")
+                log.warning(f"Can't tell which apps are playing sound ({exc}) - app tracks won't be recorded.")
                 self._detect_failed = True
             return
         self._detect_failed = False
-
-        active = active_apps(streams)
-        changed = assign_tracks(self._state, active, self._clock(), self._buffer_seconds())
-        for track_id in changed:
-            track = next(t for t in self._state["tracks"] if t["id"] == track_id)
-            owner = track["owner"]
-            log.info(f"App tracks: {owner['label']} ({owner['exe']}) now records to track "
-                     f"{self._state['tracks'].index(track) + obs_config.FIRST_APP_TRACK}.")
-        owners = {_app_key(t["owner"]["exe"]) for t in self._state["tracks"] if t["owner"] and not t["apps"]}
-        owner_heard = any(_app_key(exe) in owners for exe, _label in active)
-        if changed or (owner_heard and (
-                self._last_saved is None or self._monotonic() - self._last_saved >= LAST_HEARD_SAVE_SECONDS)):
-            self._save()
-        self._recorder.set_targets(track_targets(self._state, streams))
+        self._recorder.set_targets(app_targets(streams))

@@ -3,8 +3,9 @@ obs_config's notes on app_tracks.json) - the work Scripts/clip_reexport.py
 does inside OBS when it doesn't:
 
 1. "<clip>-tracks.mkv": the clip's own tracks (Mix, Mic, Desktop) plus one
-   track per app track, each cut from what the tray recorded and lined up
-   with the clip (track_align.py), named after the app or the track's rule.
+   track for every app that made sound during the clip, each cut from what
+   the tray recorded and lined up with the clip (track_align.py), named
+   after the app.
 2. The clip itself is stripped back to the mix, so it plays the same everywhere.
 3. The smaller copy, if that's on.
 
@@ -66,8 +67,8 @@ def desktop_pcm_command(ffmpeg, clip_path, rate=ANALYSIS_RATE):
 
 
 def align_tracks(snapshot, track_ids, clip_env, duration, log=log.info):
-    """Where each track's sound for the clip starts, from the snapshot of
-    what the tray recorded: {track id: (start frame, silent)}. clip_env: the
+    """Where each app's sound for the clip starts, from the snapshot of
+    what the tray recorded: {app key: (start frame, silent)}. clip_env: the
     clip's Desktop envelope (track_align)."""
     count = round(duration * RATE)
     nominal_start = snapshot.end_frame - round(EVENT_LATENCY_SECONDS * RATE) - count
@@ -104,9 +105,9 @@ def align_tracks(snapshot, track_ids, clip_env, duration, log=log.info):
     return starts
 
 
-def finish_clip(clip_path, snapshot, tracks, ffmpeg, options, log=log.info, run=subprocess.run):
-    """Everything for one saved clip. tracks: [(track id, label)] for the app
-    tracks, in order; options: {"reexport", "target_mb", "crop_seconds"}."""
+def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subprocess.run):
+    """Everything for one saved clip. options: {"reexport", "target_mb",
+    "crop_seconds"}."""
     kwargs = clip_tracks.low_priority_kwargs()
     info = clip_edit.probe(ffmpeg, clip_path)
     duration = info["duration"]
@@ -123,26 +124,38 @@ def finish_clip(clip_path, snapshot, tracks, ffmpeg, options, log=log.info, run=
                 clip_env = track_align.mono_envelope(result.stdout, ANALYSIS_RATE)
         except Exception as exc:
             log(f"couldn't read the clip's Desktop track ({exc}) - lining the app tracks up by the clock")
-        starts = align_tracks(snapshot, [t[0] for t in tracks], clip_env, duration, log)
-        split_tracks(clip_path, snapshot, tracks, starts, duration, ffmpeg, log)
+        starts = align_tracks(snapshot, list(snapshot.tracks), clip_env, duration, log)
+        split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log)
     if options.get("reexport"):
         clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log)
 
 
-def split_tracks(clip_path, snapshot, tracks, starts, duration, ffmpeg, log):
-    """Writes the "-tracks.mkv", then strips the clip to the mix. The clip
+def track_titles(snapshot, heard):
+    """Titles for the apps in `heard` (keys, in order): the app's name, with
+    a number added to a name already used."""
+    titles, used = [], {}
+    for key in heard:
+        name = snapshot.labels.get(key) or key
+        used[name] = used.get(name, 0) + 1
+        titles.append(name if used[name] == 1 else f"{name} {used[name]}")
+    return titles
+
+
+def split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log):
+    """Writes the "-tracks.mkv" - the clip's three tracks, then a track for
+    each app heard during the clip - and strips the clip to the mix. The clip
     keeps every track if the copy couldn't be made."""
     out_path = clip_tracks.tracks_path_for(clip_path)
     count = round(duration * RATE)
-    titles = list(clip_tracks.FIXED_TRACK_TITLES)
+    heard = [key for key in snapshot.tracks if not starts[key][1]]
+    titles = list(clip_tracks.FIXED_TRACK_TITLES) + track_titles(snapshot, heard)
     with tempfile.TemporaryDirectory(prefix="clipem-tracks-") as temp:
         pcm_paths = []
-        for number, (track_id, label) in enumerate(tracks, start=clip_tracks.FIRST_APP_TRACK):
-            start, quiet = starts[track_id]
-            path = os.path.join(temp, f"{track_id}.mov")
-            clip_tracks.write_pcm_mov(path, snapshot.window(track_id, start, start + count))
+        for number, key in enumerate(heard):
+            start = starts[key][0]
+            path = os.path.join(temp, f"{number}.mov")
+            clip_tracks.write_pcm_mov(path, snapshot.window(key, start, start + count))
             pcm_paths.append(path)
-            titles.append(f"Track-{number}" if quiet or not label else label)
         if not clip_tracks.run_to(
                 lambda partial: clip_tracks.build_tray_split_command(ffmpeg, clip_path, partial, titles, pcm_paths),
                 out_path, f"splitting the audio tracks of {clip_path}", log):
@@ -159,10 +172,9 @@ def split_tracks(clip_path, snapshot, tracks, starts, duration, ffmpeg, log):
 class ClipFinisher:
     """Hooks the tray up to OBS's ReplayBufferSaved event."""
 
-    def __init__(self, recorder, monitor, enabled=lambda: obs_config.load_tray_tracks()
+    def __init__(self, recorder, enabled=lambda: obs_config.load_tray_tracks()
                  and obs_config.app_capture_supported()):
         self._recorder = recorder
-        self._monitor = monitor
         self._enabled = enabled
 
     def on_replay_saved(self, event):
@@ -175,11 +187,6 @@ class ClipFinisher:
             if not clip_path:
                 return
             snapshot = self._recorder.snapshot()
-            state = self._monitor.state() or obs_config.load_app_tracks()
-            tracks = [
-                (track["id"], obs_config.track_label(track, number))
-                for number, track in enumerate(state["tracks"], start=obs_config.FIRST_APP_TRACK)
-            ]
             settings = obs_config.load_clip_script_settings()
         except Exception:
             log.exception("Couldn't start finishing the saved clip")
@@ -189,10 +196,10 @@ class ClipFinisher:
             "target_mb": float(settings.get("target_mb", clip_tracks.DEFAULT_TARGET_MB)),
             "crop_seconds": int(settings.get("crop_seconds", clip_tracks.DEFAULT_CROP_SECONDS)),
         }
-        threading.Thread(target=self._finish, args=(clip_path, snapshot, tracks, options), daemon=True).start()
+        threading.Thread(target=self._finish, args=(clip_path, snapshot, options), daemon=True).start()
 
     @staticmethod
-    def _finish(clip_path, snapshot, tracks, options):
+    def _finish(clip_path, snapshot, options):
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
             log.warning("No ffmpeg found (re-run ClipEm Setup to install it) - not finishing the saved clip.")
@@ -201,7 +208,6 @@ class ClipFinisher:
             log.warning(f"Saved clip not found ({clip_path!r}) - skipping.")
             return
         try:
-            finish_clip(clip_path, snapshot, tracks, ffmpeg, options, log.info)
+            finish_clip(clip_path, snapshot, ffmpeg, options, log.info)
         except Exception:
             log.exception(f"Finishing {clip_path} failed")
-

@@ -56,6 +56,7 @@ __pycache__/
 /App/App/Shared/update_config.json
 /App/App/Shared/tray-widget/.tray.lock
 /App/App/Shared/tray-widget/.settings.lock
+/App/App/Shared/tray-widget/.settings.raise
 /App/App/Shared/tray-widget/.clip_browser.lock
 /App/App/Shared/tray-widget/.clip_browser.url
 # Clip Browser thumbnails and its browser profile.

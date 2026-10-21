@@ -87,8 +87,6 @@ MAX_ZIP_ENTRIES = 5000
 OBS_SETTINGS_PATHS = {
     "OBS-Config",
     "pending_obs_settings.json",
-    # Which apps are on which audio track - goes with the OBS settings that turn split tracks on.
-    "app_tracks.json",
 }
 CLIPEM_SETTINGS_PATHS = {
     "run_config.json",

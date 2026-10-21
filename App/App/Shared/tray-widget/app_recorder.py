@@ -1,12 +1,12 @@
-"""Records each app track in memory, for the clip editor's multitrack output
-(see obs_config's notes on app_tracks.json).
+"""Records every app that plays sound in memory, for the clip editor's
+multitrack output (see obs_config's notes on the layout).
 
-app_audio.AppTrackMonitor says which audio streams belong on which track;
-this module captures them - one helper process per stream, each writing raw
-16-bit stereo 48 kHz audio to its stdout - and keeps the last minute or so of
-every track in a ring buffer. When a clip is saved, tray_tracks.py takes a
-snapshot of the rings, lines it up with the clip's own audio and adds the
-tracks to the clip.
+app_audio.AppTrackMonitor says which apps have audio streams; this module
+captures them - one helper process per stream, each writing raw 16-bit stereo
+48 kHz audio to its stdout - and keeps the last minute or so of every app in
+a ring buffer. When a clip is saved, tray_tracks.py takes a snapshot of the
+rings, lines them up with the clip's own audio and makes a track of each app
+that was heard.
 
 - Linux: `parec --monitor-stream`, which records one PulseAudio/PipeWire
   stream's own sound wherever it's playing, without touching the routing.
@@ -277,17 +277,18 @@ class CaptureStream:
 
 class Snapshot:
     """What the rings held at one moment: the clock's frame then, and each
-    track's audio for the `frames` before it."""
+    app's audio for the `frames` before it."""
 
-    def __init__(self, end_frame, frames, tracks):
+    def __init__(self, end_frame, frames, tracks, labels=None):
         self.end_frame = end_frame
         self.frames = frames
-        self.tracks = tracks  # track id -> bytes, `frames` long, ending at end_frame
+        self.tracks = tracks  # app key -> bytes, `frames` long, ending at end_frame; in first-heard order
+        self.labels = labels or {}  # app key -> the app's name
 
-    def window(self, track_id, start, end):
-        """Frames [start, end) (the clock's) of a track, silence where the
+    def window(self, key, start, end):
+        """Frames [start, end) (the clock's) of an app, silence where the
         snapshot has nothing."""
-        pcm = self.tracks.get(track_id)
+        pcm = self.tracks.get(key)
         first = self.end_frame - self.frames
         out = bytearray((end - start) * BYTES_PER_FRAME)
         if pcm:
@@ -299,7 +300,7 @@ class Snapshot:
 
 
 class AppRecorder:
-    """Keeps a ring per track and a helper per stream. set_targets() is the
+    """Keeps a ring per app and a helper per stream. set_targets() is the
     only thing that starts and stops helpers."""
 
     def __init__(self, seconds=lambda: 60, monotonic=time.monotonic, command_for=capture_command,
@@ -310,67 +311,76 @@ class AppRecorder:
         self._popen = popen
         self._stream_class = stream_class
         self.clock = SampleClock(monotonic)
-        self._rings = {}  # track id -> TrackRing
-        self._signatures = {}  # track id -> what the track is for (clears the ring when it changes)
-        self._streams = {}  # (track id, handle) -> CaptureStream
-        self._failed_at = {}  # (track id, handle) -> when its helper last stopped by itself
+        self._rings = {}  # app key -> TrackRing, in the order the apps were first heard
+        self._labels = {}  # app key -> name
+        self._seen = {}  # app key -> when it last had a stream
+        self._streams = {}  # (app key, handle) -> CaptureStream
+        self._failed_at = {}  # (app key, handle) -> when its helper last stopped by itself
         self._lock = threading.Lock()
 
     def ring_seconds(self):
         return int(self._seconds()) + RING_EXTRA_SECONDS
 
     def set_targets(self, targets):
-        """targets: {track id: (signature, [stream handles])} - see
-        app_audio.track_targets. Tracks not listed are forgotten."""
+        """targets: {app key: (label, [stream handles])} - see
+        app_audio.app_targets. An app that has no streams any more keeps what
+        it recorded until the clip it could be in has passed."""
         with self._lock:
             now = self._monotonic()
-            for track_id in list(self._rings):
-                if track_id not in targets:
-                    del self._rings[track_id]
-                    self._signatures.pop(track_id, None)
-            for track_id, (signature, _handles) in targets.items():
-                seconds = self.ring_seconds()
-                ring = self._rings.get(track_id)
-                if ring is None or ring.capacity != seconds * RATE:
-                    self._rings[track_id] = TrackRing(seconds)
-                elif self._signatures.get(track_id) not in (None, signature):
-                    ring.clear()
-                self._signatures[track_id] = signature
+            seconds = self.ring_seconds()
+            for key, (label, handles) in targets.items():
+                if handles:
+                    self._seen[key] = now
+                    self._labels[key] = label
+                    ring = self._rings.get(key)
+                    if ring is None or ring.capacity != seconds * RATE:
+                        self._rings[key] = TrackRing(seconds)
+            for key in list(self._rings):
+                if now - self._seen.get(key, now) > seconds:
+                    del self._rings[key]
+                    self._labels.pop(key, None)
+                    self._seen.pop(key, None)
 
-            wanted = {(track_id, handle) for track_id, (_s, handles) in targets.items() for handle in handles}
-            for key in list(self._streams):
-                stream = self._streams[key]
-                if key not in wanted:
+            wanted = {(key, handle) for key, (_label, handles) in targets.items() for handle in handles}
+            for stream_key in list(self._streams):
+                stream = self._streams[stream_key]
+                if stream_key not in wanted:
                     stream.stop()
-                    del self._streams[key]
+                    del self._streams[stream_key]
                 elif not stream.alive:
-                    self._failed_at[key] = now
-                    del self._streams[key]
-            for key in wanted - set(self._streams):
-                if now - self._failed_at.get(key, -RESTART_SECONDS) < RESTART_SECONDS:
+                    self._failed_at[stream_key] = now
+                    del self._streams[stream_key]
+            for stream_key in wanted - set(self._streams):
+                if now - self._failed_at.get(stream_key, -RESTART_SECONDS) < RESTART_SECONDS:
                     continue
-                command = self._command_for(key[1])
+                command = self._command_for(stream_key[1])
                 if command is None:
                     continue
-                self._streams[key] = self._stream_class(
-                    key[1], command, self._rings[key[0]], self.clock, popen=self._popen)
+                self._streams[stream_key] = self._stream_class(
+                    stream_key[1], command, self._rings[stream_key[0]], self.clock, popen=self._popen)
             self._failed_at = {k: t for k, t in self._failed_at.items() if k in wanted}
 
     def snapshot(self):
         """A copy of every ring's contents up to now."""
         with self._lock:
             rings = dict(self._rings)
+            labels = dict(self._labels)
         end = self.clock.frame()
         tracks = {}
         frames = 0
-        for track_id, ring in rings.items():
+        for key, ring in rings.items():
             ring.advance(end)
             frames = ring.capacity
-            tracks[track_id] = ring.read(end - frames, end)
-        return Snapshot(end, frames, tracks)
+            tracks[key] = ring.read(end - frames, end)
+        return Snapshot(end, frames, tracks, labels)
 
     def stop(self):
+        """Stops every helper and forgets everything recorded."""
         with self._lock:
             for stream in self._streams.values():
                 stream.stop()
             self._streams.clear()
+            self._failed_at.clear()
+            self._rings.clear()
+            self._labels.clear()
+            self._seen.clear()
