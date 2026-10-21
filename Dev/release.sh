@@ -114,7 +114,7 @@ LINUX_PYTHON_PBS_TAG="20260924"
 
 # --- 1. Preflight ----------------------------------------------------------
 step "Preflight"
-required_tools=(git jq zip tar gzip openssl curl python3 makensis)
+required_tools=(git jq zip tar gzip openssl curl python3 makensis x86_64-w64-mingw32-g++)
 for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required (see Dev/README.md)"
 done
@@ -238,6 +238,8 @@ SOURCE_DATE_EPOCH="$(git -C "$ROOT_DIR" log -1 --format=%ct)"
 export SOURCE_DATE_EPOCH
 
 step "Shared resources"
+# The Windows app-capture helper ships inside them (see build/build-app-capture.sh).
+"$SCRIPT_DIR/build/build-app-capture.sh"
 # A dev build doesn't change the source tree: VERSION and checksums.json
 # are put back once the shared zip is built.
 DEV_RESTORE_DIR="$RELEASE_DIR/restore"

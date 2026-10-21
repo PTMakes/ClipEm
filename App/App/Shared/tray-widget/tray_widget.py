@@ -54,7 +54,8 @@ import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import obs_window  # noqa: E402
-from app_audio import AppTrackMonitor  # noqa: E402
+from app_audio import AppTrackMonitor, replay_buffer_seconds  # noqa: E402
+from app_recorder import AppRecorder  # noqa: E402
 from app_window import use_windows_app_id  # noqa: E402
 from clip_folder import ClipFolderWatch  # noqa: E402
 from clipem_common import (  # noqa: E402
@@ -71,6 +72,7 @@ from clipem_common import (  # noqa: E402
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
 from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
+from tray_tracks import ClipFinisher  # noqa: E402
 
 log = setup_logging("tray")
 
@@ -299,7 +301,9 @@ class TrayApp:
             PipeWireStreamWatch(obs_config.OBS_LOG_DIR),
         )
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
-        self.app_tracks = AppTrackMonitor()
+        self.app_recorder = AppRecorder(seconds=replay_buffer_seconds)
+        self.app_tracks = AppTrackMonitor(self.app_recorder)
+        self.clip_finisher = ClipFinisher(self.app_recorder, self.app_tracks)
         self.clip_folder = ClipFolderWatch(
             self._notify,
             fallback_dir=obs_config.load_clip_folder,
@@ -571,6 +575,7 @@ class TrayApp:
 
     def _quit(self, icon, item):
         self.stop_children()
+        self.app_recorder.stop()
         if self.client:
             self.client.close()
         icon.stop()
@@ -608,6 +613,7 @@ class TrayApp:
 
     def _shutdown(self, reason):
         log.warning(f"Shutting down: {reason}")
+        self.app_recorder.stop()
         if self.client:
             self.client.close()
         self.icon.stop()
@@ -622,6 +628,7 @@ class TrayApp:
             log=log.info,
         )
         self.client.on_event("InputSettingsChanged", self._on_input_settings_changed)
+        self.client.on_event("ReplayBufferSaved", self.clip_finisher.on_replay_saved)
         self.connected = True
         log.info(f"Connected to OBS at {url}.")
         self.stuck_screen.forget()
@@ -693,7 +700,7 @@ class TrayApp:
                 self.stuck_screen.tick(self.client, self._stuck_check_enabled, self._black_check_enabled)
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
-                self.app_tracks.tick(self.client)
+                self.app_tracks.tick()
                 missing_before = self.clip_folder.missing_dir
                 self.clip_folder.tick(self.client, self.replay_active)
                 if self.clip_folder.missing_dir != missing_before:

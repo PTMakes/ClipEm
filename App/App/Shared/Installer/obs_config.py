@@ -8,9 +8,12 @@ clipem_common.write_text_atomic).
 
 import json
 import os
+import platform
 import re
 import secrets
+import shutil
 import string
+import sys
 
 import clipem_common
 from clipem_common import ROOT_DIR, SHARED_DIR, load_json, write_json_atomic, write_text_atomic
@@ -429,50 +432,88 @@ PENDING_OBS_SETTINGS_PATH = os.path.join(SHARED_DIR, "pending_obs_settings.json"
 
 
 # ---------------------------------------------------------------------------
-# Split audio tracks: with it on, the replay buffer records 6 tracks - 1 the
-# full mix, 2 the mic, 3 desktop audio, 4-6 one app each via the
-# APP_SLOT_SOURCE_NAMES sources (setup.save_split_tracks creates them). The
-# tray widget (tray-widget/app_audio.py) points free slots at apps as they
-# start playing sound and records who owns which slot here, so an app always
-# lands on the same track - across clips, OBS restarts and reboots.
-# Scripts/clip_reexport.py reads each slot source's APP_SLOT_LABEL_KEY to
-# name the tracks of the "-tracks.mkv" copy.
+# Split audio tracks: with it on, OBS records 3 tracks - 1 the full mix, 2
+# the mic, 3 desktop audio - and the tray widget (tray-widget/app_recorder.py)
+# records the apps itself, one MKV track each from track 4 on, then adds them
+# to the clip's "-tracks.mkv" (tray-widget/tray_tracks.py). Which apps are on
+# which track is app_tracks.json: a list of tracks, each either
+#
+# - a rule track: a name and the apps that always go on it (several apps can
+#   share one, e.g. "Voice" = Discord + TeamSpeak), or
+# - an auto track (no apps): the first app heard with no rule gets it and
+#   keeps it - across clips, restarts and reboots - until it hasn't been
+#   heard for expiry_days (unless pinned).
 # ---------------------------------------------------------------------------
 
 APP_TRACKS_PATH = os.path.join(SHARED_DIR, "app_tracks.json")
-APP_SLOT_SOURCE_NAMES = ("ClipEm App A", "ClipEm App B", "ClipEm App C")
-APP_SLOT_FIRST_TRACK = 4  # 1-based: slot A records to track 4, B to 5, C to 6
-APP_SLOT_LABEL_KEY = "clipem_label"
-DEFAULT_APP_SLOT_EXPIRY_DAYS = 14
+APP_TRACKS_VERSION = 2
+FIXED_TRACK_TITLES = ("Mix", "Mic", "Desktop")  # what OBS records itself
+FIRST_APP_TRACK = len(FIXED_TRACK_TITLES) + 1  # 1-based: the first app track
+DEFAULT_AUTO_TRACKS = 3
+WARN_APP_TRACKS = 8  # past this the settings page warns about memory and CPU
+DEFAULT_APP_TRACK_EXPIRY_DAYS = 14
+# Built by Dev/build/build-app-capture.sh when a release is made (the source
+# is Dev/app-capture) and shipped with the shared files.
+APP_CAPTURE_HELPER_PATH = os.path.join(SHARED_DIR, "Tools", "clipem-app-capture.exe")
+WINDOWS_APP_CAPTURE_MIN_BUILD = 19041  # process loopback capture: Windows 10 2004
 
 
-WINDOW_PRIORITY_EXE = 2  # win-wasapi's window_priority enum
+def app_key(exe):
+    """How apps are matched: the executable's name, lowercase, without ".exe"."""
+    name = os.path.basename(exe or "").lower()
+    return name[:-4] if name.endswith(".exe") else name
 
 
-def app_slot_settings(source_id, owner):
-    """OBS settings pointing an app slot source (wasapi_process_output_capture
-    or pipewire_audio_application_capture) at owner's process - or at
-    nothing when owner is None."""
-    exe = owner["exe"] if owner else ""
-    if source_id == "wasapi_process_output_capture":
-        # "title:class:exe" - with exe priority the title and class can be empty.
-        settings = {"window": f"::{exe}" if exe else "", "priority": WINDOW_PRIORITY_EXE}
-    else:
-        settings = {"CaptureMode": 0, "MatchPriorty": 0, "ExceptApp": False, "TargetName": exe}
-    settings[APP_SLOT_LABEL_KEY] = owner["label"] if owner else ""
-    return settings
+def new_track_id():
+    return secrets.token_hex(4)
+
+
+def new_app_track(name="", apps=()):
+    return {"id": new_track_id(), "name": str(name or ""), "apps": [app_key(a) for a in apps if app_key(a)],
+            "owner": None}
 
 
 def empty_app_tracks():
     return {
-        "expiry_days": DEFAULT_APP_SLOT_EXPIRY_DAYS,
-        "slots": {name: None for name in APP_SLOT_SOURCE_NAMES},
+        "version": APP_TRACKS_VERSION,
+        "expiry_days": DEFAULT_APP_TRACK_EXPIRY_DAYS,
+        "tracks": [new_app_track() for _ in range(DEFAULT_AUTO_TRACKS)],
+    }
+
+
+def is_rule_track(track):
+    return bool(track["apps"])
+
+
+def track_label(track, number):
+    """What a track is called in the clip: a rule track's name, an auto
+    track's owner, else "Track-N" (number: 1-based track number in the clip)."""
+    if track["apps"]:
+        return track["name"] or ", ".join(track["apps"])
+    owner = track["owner"]
+    return owner["label"] if owner else f"Track-{number}"
+
+
+def _load_owner(owner):
+    if not (isinstance(owner, dict) and owner.get("exe")):
+        return None
+    try:
+        last_heard = float(owner.get("last_heard") or 0)
+    except (TypeError, ValueError):
+        last_heard = 0.0
+    return {
+        "exe": str(owner["exe"]),
+        "label": str(owner.get("label") or owner["exe"]),
+        "last_heard": last_heard,
+        "pinned": bool(owner.get("pinned", False)),
     }
 
 
 def load_app_tracks():
-    """{"expiry_days": int, "slots": {slot source name: None | {"exe",
-    "label", "last_heard" (unix time), "pinned"}}}, every slot present."""
+    """{"expiry_days": int, "tracks": [{"id", "name", "apps": [app keys],
+    "owner": None | {"exe", "label", "last_heard" (unix time), "pinned"}}]}.
+    Files from before app tracks were recorded by the tray (three "slots")
+    become three auto tracks with the same owners."""
     state = empty_app_tracks()
     loaded = load_json(APP_TRACKS_PATH)
     if not isinstance(loaded, dict):
@@ -481,27 +522,45 @@ def load_app_tracks():
         state["expiry_days"] = max(1, int(loaded.get("expiry_days", state["expiry_days"])))
     except (TypeError, ValueError):
         pass
-    slots = loaded.get("slots")
-    if isinstance(slots, dict):
-        for name in APP_SLOT_SOURCE_NAMES:
-            owner = slots.get(name)
-            if not (isinstance(owner, dict) and owner.get("exe")):
+    if isinstance(loaded.get("tracks"), list):
+        tracks, seen = [], set()
+        for entry in loaded["tracks"]:
+            if not isinstance(entry, dict):
                 continue
-            try:
-                last_heard = float(owner.get("last_heard") or 0)
-            except (TypeError, ValueError):
-                last_heard = 0.0
-            state["slots"][name] = {
-                "exe": str(owner["exe"]),
-                "label": str(owner.get("label") or owner["exe"]),
-                "last_heard": last_heard,
-                "pinned": bool(owner.get("pinned", False)),
-            }
+            track_id = str(entry.get("id") or new_track_id())
+            if track_id in seen:
+                track_id = new_track_id()
+            seen.add(track_id)
+            apps = entry.get("apps") if isinstance(entry.get("apps"), list) else []
+            apps = list(dict.fromkeys(app_key(str(a)) for a in apps if app_key(str(a))))
+            tracks.append({"id": track_id, "name": str(entry.get("name") or ""), "apps": apps,
+                           "owner": None if apps else _load_owner(entry.get("owner"))})
+        state["tracks"] = tracks
+    elif isinstance(loaded.get("slots"), dict):
+        for track, name in zip(state["tracks"], ("ClipEm App A", "ClipEm App B", "ClipEm App C"), strict=False):
+            track["owner"] = _load_owner(loaded["slots"].get(name))
     return state
 
 
 def save_app_tracks(state):
-    write_json_atomic(APP_TRACKS_PATH, state)
+    write_json_atomic(APP_TRACKS_PATH, {**state, "version": APP_TRACKS_VERSION})
+
+
+def app_capture_supported(system=None, which=shutil.which):
+    """Whether the tray can record apps here: Linux needs pactl and parec
+    (PulseAudio or PipeWire's pulse server), Windows 10 2004+ needs
+    ClipEm's capture helper. macOS has no per-app capture."""
+    system = system or platform.system()
+    if system == "Linux":
+        return bool(which("pactl") and which("parec"))
+    if system == "Windows":
+        try:
+            if sys.getwindowsversion().build < WINDOWS_APP_CAPTURE_MIN_BUILD:
+                return False
+        except AttributeError:
+            pass
+        return os.path.isfile(APP_CAPTURE_HELPER_PATH)
+    return False
 
 
 def load_split_tracks():
@@ -510,6 +569,21 @@ def load_split_tracks():
     data = load_scene_collection()
     entry = find_script_entry(data, "clip_reexport.py") if data else None
     return bool((entry or {}).get("settings", {}).get("split_tracks_enabled", False))
+
+
+def load_clip_script_settings():
+    """clip_reexport.py's saved settings (split_tracks_enabled,
+    tray_tracks_enabled, reexport_enabled, target_mb, crop_seconds) - empty
+    when the scene collection or the script's entry isn't there."""
+    data = load_scene_collection()
+    entry = find_script_entry(data, "clip_reexport.py") if data else None
+    return dict((entry or {}).get("settings", {}))
+
+
+def load_tray_tracks():
+    """Whether the tray widget records the app tracks and finishes each clip
+    (setup.save_split_tracks turns it on where app capture is supported)."""
+    return bool(load_clip_script_settings().get("tray_tracks_enabled", False))
 
 
 # ---------------------------------------------------------------------------

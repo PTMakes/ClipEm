@@ -17,7 +17,6 @@ import re
 import shutil
 import subprocess
 import sys
-import uuid
 import zipfile
 
 # The embeddable Windows Python's ._pth file puts it in isolated mode, which
@@ -1415,140 +1414,34 @@ def save_clip_reexport(enabled, target_mb, crop_seconds):
 
 
 # ---------------------------------------------------------------------------
-# Split audio tracks: the replay buffer records 6 audio tracks instead of
-# one - see obs_config's APP_SLOT_* notes for the layout. Track 1 stays the
-# full mix, so the clip itself is unchanged; Scripts/clip_reexport.py copies
-# every track into a "-tracks.mkv" next to it and strips the clip back to
-# the mix. The app slots (tracks 4-6) are filled in by the tray widget.
+# Split audio tracks: OBS records 3 audio tracks instead of one - the full
+# mix, the mic and desktop audio. Track 1 stays the full mix, so the clip
+# itself is unchanged. The tray widget records the apps itself (one track
+# each from track 4 on - see obs_config's notes on app_tracks.json) and, for
+# every saved clip, writes a "-tracks.mkv" next to it with all of them and
+# strips the clip back to the mix. Where the tray can't record apps (macOS),
+# Scripts/clip_reexport.py does that for the 3 tracks OBS has.
 # ---------------------------------------------------------------------------
 
-ALL_TRACKS_MASK = 0b111111
+ALL_TRACKS_MASK = 0b111
 SPLIT_TRACKS_MIXERS = {"DesktopAudioDevice1": 0b101, "AuxAudioDevice1": 0b011}  # mix+desktop, mix+mic
 SHIPPED_MIXERS = 255
-# Per-platform app capture: Windows' own (Windows 10 2004+), and on Linux
-# the obs-pipewire-audio-capture plugin built into ClipEm's OBS (see
-# Dev/build/build-obs-from-source-for-linux.sh). macOS gets the mic/desktop
-# tracks only.
-APP_SLOT_SOURCE_IDS = {
-    "Windows": "wasapi_process_output_capture",
-    "Linux": "pipewire_audio_application_capture",
-}
-WINDOWS_APP_CAPTURE_MIN_BUILD = 19041
+# Sources earlier versions added so OBS could record 3 apps itself.
+OLD_APP_SLOT_SOURCE_NAMES = ("ClipEm App A", "ClipEm App B", "ClipEm App C")
 
 
-def app_slot_source_id(system=None):
-    system = system or platform.system()
-    if system == "Windows":
-        try:
-            if sys.getwindowsversion().build < WINDOWS_APP_CAPTURE_MIN_BUILD:
-                return None
-        except AttributeError:
-            pass
-    return APP_SLOT_SOURCE_IDS.get(system)
+def app_capture_supported(system=None):
+    return obs_config.app_capture_supported(system)
 
 
-def _new_app_slot_source(name, source_id, track, owner):
-    return {
-        "prev_ver": 520093698,
-        "name": name,
-        "uuid": str(uuid.uuid4()),
-        "id": source_id,
-        "versioned_id": source_id,
-        "settings": obs_config.app_slot_settings(source_id, owner),
-        "mixers": 1 << (track - 1),  # only its own track - never the mix
-        "sync": 0,
-        "flags": 0,
-        "volume": 1.0,
-        "balance": 0.5,
-        "enabled": True,
-        "muted": False,
-        "push-to-mute": False,
-        "push-to-mute-delay": 0,
-        "push-to-talk": False,
-        "push-to-talk-delay": 0,
-        "hotkeys": {},
-        "deinterlace_mode": 0,
-        "deinterlace_field_order": 0,
-        "monitoring_type": 0,
-        "private_settings": {},
-    }
-
-
-def _new_scene_item(source, item_id):
-    return {
-        "name": source["name"],
-        "source_uuid": source["uuid"],
-        "visible": True,
-        "locked": True,
-        "rot": 0.0,
-        "align": 5,
-        "bounds_type": 0,
-        "bounds_align": 0,
-        "crop_left": 0,
-        "crop_top": 0,
-        "crop_right": 0,
-        "crop_bottom": 0,
-        "id": item_id,
-        "group_item_backup": False,
-        "pos": {"x": 0.0, "y": 0.0},
-        "scale": {"x": 1.0, "y": 1.0},
-        "bounds": {"x": 0.0, "y": 0.0},
-        "scale_filter": "disable",
-        "blend_method": "default",
-        "blend_type": "normal",
-        "show_transition": {"duration": 0},
-        "hide_transition": {"duration": 0},
-        "private_settings": {},
-    }
-
-
-def _current_scene(data):
-    name = data.get("current_scene")
-    for source in data.get("sources", []):
-        if source.get("id") == "scene" and source.get("name") == name:
-            return source
-    return next((s for s in data.get("sources", []) if s.get("id") == "scene"), None)
-
-
-def _apply_app_slots(data, source_id, state):
-    """Makes the scene collection's app slot sources match source_id and
-    state (who owns which slot); source_id None removes them."""
-    slot_names = set(obs_config.APP_SLOT_SOURCE_NAMES)
-    sources = data.setdefault("sources", [])
-    existing = {s["name"]: s for s in sources if s.get("name") in slot_names}
-    scene = _current_scene(data)
-    scene_settings = scene.setdefault("settings", {}) if scene else {}
-    items = scene_settings.setdefault("items", []) if scene else []
-
-    if source_id is None:
-        data["sources"] = [s for s in sources if s.get("name") not in slot_names]
-        for other in data["sources"]:
-            other_settings = other.get("settings", {}) if other.get("id") == "scene" else {}
-            if "items" in other_settings:
-                other_settings["items"] = [i for i in other_settings["items"] if i.get("name") not in slot_names]
-        return
-
-    for index, name in enumerate(obs_config.APP_SLOT_SOURCE_NAMES):
-        track = obs_config.APP_SLOT_FIRST_TRACK + index
-        owner = state["slots"].get(name)
-        source = existing.get(name)
-        if source is None or source.get("id") != source_id:
-            if source is not None:
-                sources.remove(source)
-            source = _new_app_slot_source(name, source_id, track, owner)
-            sources.append(source)
-        else:
-            source["settings"] = {**source.get("settings", {}), **obs_config.app_slot_settings(source_id, owner)}
-            source["mixers"] = 1 << (track - 1)
-            source["monitoring_type"] = 0
-        if scene is not None:
-            item = next((i for i in items if i.get("name") == name), None)
-            if item is None:
-                next_id = max([scene_settings.get("id_counter", 0)] + [i.get("id", 0) for i in items]) + 1
-                scene_settings["id_counter"] = next_id
-                items.append(_new_scene_item(source, next_id))
-            else:
-                item["source_uuid"] = source["uuid"]
+def _remove_old_app_slots(data):
+    """Drops the app sources (and their scene items) earlier versions added."""
+    slot_names = set(OLD_APP_SLOT_SOURCE_NAMES)
+    data["sources"] = [s for s in data.get("sources", []) if s.get("name") not in slot_names]
+    for source in data["sources"]:
+        settings = source.get("settings", {}) if source.get("id") == "scene" else {}
+        if "items" in settings:
+            settings["items"] = [i for i in settings["items"] if i.get("name") not in slot_names]
 
 
 def load_split_tracks():
@@ -1561,19 +1454,21 @@ def save_split_tracks(enabled):
         print(f"Scene collection not found: {SCENE_COLLECTION_JSON}", file=sys.stderr)
         return
     enabled = bool(enabled)
-    source_id = app_slot_source_id() if enabled else None
+    tray_tracks = enabled and app_capture_supported()
     for scene_key, mixers in SPLIT_TRACKS_MIXERS.items():
         if scene_key in data:
             data[scene_key]["mixers"] = mixers if enabled else SHIPPED_MIXERS
-    _apply_app_slots(data, source_id, obs_config.load_app_tracks())
-    _reexport_script_entry(data).setdefault("settings", {})["split_tracks_enabled"] = enabled
+    _remove_old_app_slots(data)
+    settings = _reexport_script_entry(data).setdefault("settings", {})
+    settings["split_tracks_enabled"] = enabled
+    settings["tray_tracks_enabled"] = tray_tracks
     save_scene_collection(data)
     if os.path.exists(BASIC_INI):
         update_ini_section(BASIC_INI, "AdvOut", {"RecTracks": ALL_TRACKS_MASK if enabled else 1})
     if not enabled:
         print("Split audio tracks off.")
-    elif source_id:
-        print("Split audio tracks on: mix, mic, desktop and up to 3 apps on their own tracks.")
+    elif tray_tracks:
+        print("Split audio tracks on: mix, mic and desktop, plus every app you set up on its own track.")
     else:
         print("Split audio tracks on: mix, mic and desktop on their own tracks (no per-app capture here).")
 
@@ -1592,22 +1487,40 @@ def load_app_tracks():
     return obs_config.load_app_tracks()
 
 
-def set_app_slot_pinned(slot_name, pinned):
+def set_app_track_pinned(track_id, pinned):
     state = obs_config.load_app_tracks()
-    owner = state["slots"].get(slot_name)
-    if owner:
-        owner["pinned"] = bool(pinned)
-        obs_config.save_app_tracks(state)
+    for track in state["tracks"]:
+        if track["id"] == track_id and track["owner"]:
+            track["owner"]["pinned"] = bool(pinned)
+            obs_config.save_app_tracks(state)
+            return
+
+
+def save_app_track_rules(tracks, expiry_days=None):
+    """Replaces the track list (rule and auto tracks, in order) - from the
+    settings page; owners of auto tracks that stay are kept."""
+    state = obs_config.load_app_tracks()
+    owners = {t["id"]: t["owner"] for t in state["tracks"]}
+    new_tracks = []
+    for track in tracks:
+        apps = [obs_config.app_key(a) for a in track.get("apps", []) if obs_config.app_key(a)]
+        apps = list(dict.fromkeys(apps))
+        track_id = track.get("id") or obs_config.new_track_id()
+        new_tracks.append({"id": track_id, "name": str(track.get("name") or ""), "apps": apps,
+                           "owner": None if apps else owners.get(track_id)})
+    state["tracks"] = new_tracks
+    if expiry_days is not None:
+        state["expiry_days"] = max(1, int(expiry_days))
+    obs_config.save_app_tracks(state)
 
 
 def reset_app_tracks():
-    """Forgets every app's track: the next apps heard get the slots afresh."""
-    state = obs_config.empty_app_tracks()
+    """Forgets every auto track's app: the next apps heard get the tracks afresh.
+    Rule tracks stay as they are."""
+    state = obs_config.load_app_tracks()
+    for track in state["tracks"]:
+        track["owner"] = None
     obs_config.save_app_tracks(state)
-    data = load_scene_collection()
-    if data and any(s.get("name") in obs_config.APP_SLOT_SOURCE_NAMES for s in data.get("sources", [])):
-        _apply_app_slots(data, app_slot_source_id(), state)
-        save_scene_collection(data)
     print("App tracks reset.")
 
 
@@ -2250,9 +2163,10 @@ def try_launch_gui(system):
         "load_split_tracks": load_split_tracks,
         "save_split_tracks": save_split_tracks,
         "load_app_tracks": load_app_tracks,
-        "set_app_slot_pinned": set_app_slot_pinned,
+        "set_app_track_pinned": set_app_track_pinned,
+        "save_app_track_rules": save_app_track_rules,
         "reset_app_tracks": reset_app_tracks,
-        "app_slot_source_id": app_slot_source_id,
+        "app_capture_supported": app_capture_supported,
         "load_obs_websocket_settings": load_obs_websocket_settings,
         "save_obs_websocket_settings": save_obs_websocket_settings,
         "generate_obs_websocket_password": generate_obs_websocket_password,

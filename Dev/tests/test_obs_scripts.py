@@ -22,7 +22,9 @@ import pytest
 from conftest import SCRIPTS_DIR
 
 API = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "obspython_api.json")))
-SCRIPTS = sorted(glob.glob(os.path.join(SCRIPTS_DIR, "*.py")))
+# Modules the scripts import, not scripts OBS loads.
+HELPER_MODULES = {"clip_tracks.py"}
+SCRIPTS = sorted(p for p in glob.glob(os.path.join(SCRIPTS_DIR, "*.py")) if os.path.basename(p) not in HELPER_MODULES)
 
 
 class Data:
@@ -279,7 +281,7 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
     if name == "clip_reexport.py":
         assert len(started) == 1 and started[0][1] == str(clip)
         assert started[0][2]["split_tracks"] and started[0][2]["reexport"]
-        assert started[0][2]["app_labels"] == ["", "", ""]  # no app slot sources in this OBS
+        assert started[0][2]["app_labels"] == []  # OBS records Mix, Mic and Desktop only
     if name == "stuck_output_check.py":
         assert not fake.timers, "script_unload should stop its timers"
         assert abs(20 * math.log10(fake.volumes[fake.audio_source]) - -4.5) < 1e-6, "a +3 dB peak should land at -1.5 dB"

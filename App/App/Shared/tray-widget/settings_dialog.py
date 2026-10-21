@@ -221,38 +221,105 @@ def load_recording_settings(pending):
     }
 
 
+def known_audio_apps(state):
+    """App names to offer for a rule: the ones on a track already, and any
+    playing sound right now."""
+    import app_audio
+
+    names = []
+    for track in state["tracks"]:
+        names += track["apps"] + ([obs_config.app_key(track["owner"]["exe"])] if track["owner"] else [])
+    try:
+        names += [stream.key for stream in app_audio.list_audio_streams()]
+    except Exception:
+        pass  # the page works without the list
+    return sorted(set(names))
+
+
 def show_app_tracks(container, px):
-    """Which app owns tracks 4-6 (multitrack audio), with Pin and Reset - as
-    on Setup's Split Audio Tracks page. These apply straight away: the tray
-    widget re-reads the file and re-points OBS's app sources itself."""
+    """The app tracks of multitrack audio, from track 4: each is a rule (the
+    apps listed always go on it) or, with no apps, an auto track that the
+    next app heard takes and keeps (Pin stops it losing it after a while).
+    These apply straight away: the tray widget re-reads the file."""
     for child in container.winfo_children():
         child.destroy()
     state = setup.load_app_tracks()
-    tk.Label(container, text=f"App tracks (multitrack audio) - unused for {state['expiry_days']} days frees "
-             "a track unless pinned:", fg="gray40").pack(anchor="w")
-    for index, (slot_name, owner) in enumerate(state["slots"].items()):
-        row = tk.Frame(container)
-        row.pack(anchor="w")
-        tk.Label(row, text=f"Track {4 + index}: {owner['label'] if owner else '(free)'}").pack(side="left")
-        if owner:
-            pinned = tk.BooleanVar(value=owner["pinned"])
-            tk.Checkbutton(row, text="Pin", variable=pinned,
-                           command=lambda n=slot_name, v=pinned: setup.set_app_slot_pinned(n, v.get())).pack(
-                side="left", padx=(px(6), 0))
-    if any(state["slots"].values()):
-        def reset():
-            if not messagebox.askyesno("App Tracks", "Free every app track? The next apps heard get them.",
-                                       parent=container.winfo_toplevel()):
-                return
-            if obs_process.obs_running():
-                # The scene collection is OBS's while it runs; the tray points
-                # the app sources at nothing as soon as the file changes.
-                obs_config.save_app_tracks(obs_config.empty_app_tracks())
-            else:
-                setup.reset_app_tracks()
+    tk.Label(container, text="App tracks (multitrack audio) - on top of Mix, Mic and Desktop. List the apps "
+             "for a track (e.g. discord, teamspeak), or leave it empty for the next app heard. "
+             f"An unused auto track frees up after {state['expiry_days']} days unless pinned.",
+             fg="gray40", justify="left", wraplength=px(520)).pack(anchor="w")
+    grid = tk.Frame(container)
+    grid.pack(anchor="w", pady=(px(4), 0))
+    rows = []
+
+    def commit(*_args):
+        setup.save_app_track_rules([
+            {"id": row["id"], "name": row["name"].get().strip(),
+             "apps": [a.strip() for a in row["apps"].get().split(",") if a.strip()]}
+            for row in rows
+        ])
+
+    def rebuild():
+        commit()
+        show_app_tracks(container, px)
+
+    for index, track in enumerate(state["tracks"]):
+        owner = track["owner"]
+        tk.Label(grid, text=f"Track {obs_config.FIRST_APP_TRACK + index}").grid(row=index, column=0, sticky="w")
+        name_var = tk.StringVar(value=track["name"])
+        apps_var = tk.StringVar(value=", ".join(track["apps"]))
+        rows.append({"id": track["id"], "name": name_var, "apps": apps_var})
+        tk.Entry(grid, textvariable=name_var, width=14).grid(row=index, column=1, padx=(px(6), 0))
+        tk.Entry(grid, textvariable=apps_var, width=30).grid(row=index, column=2, padx=(px(6), 0))
+        # Saved as it's typed, so closing the dialog never loses an edit.
+        name_var.trace_add("write", commit)
+        apps_var.trace_add("write", commit)
+        if not track["apps"]:
+            tk.Label(grid, text=f"auto: {owner['label'] if owner else '(free)'}", fg="gray40").grid(
+                row=index, column=3, sticky="w", padx=(px(6), 0))
+            if owner:
+                pinned = tk.BooleanVar(value=owner["pinned"])
+                tk.Checkbutton(grid, text="Pin", variable=pinned,
+                               command=lambda i=track["id"], v=pinned: setup.set_app_track_pinned(i, v.get())
+                               ).grid(row=index, column=4)
+
+        def remove(i=index):
+            del rows[i]
+            setup.save_app_track_rules([
+                {"id": row["id"], "name": row["name"].get().strip(),
+                 "apps": [a.strip() for a in row["apps"].get().split(",") if a.strip()]}
+                for row in rows
+            ])
             show_app_tracks(container, px)
 
-        tk.Button(container, text="Reset app tracks", command=reset).pack(anchor="w", pady=(px(4), 0))
+        tk.Button(grid, text="Remove", command=remove).grid(row=index, column=5, padx=(px(6), 0))
+
+    buttons = tk.Frame(container)
+    buttons.pack(anchor="w", pady=(px(4), 0))
+
+    def add_track():
+        rows.append({"id": obs_config.new_track_id(), "name": tk.StringVar(), "apps": tk.StringVar()})
+        rebuild()
+
+    tk.Button(buttons, text="Add track", command=add_track).pack(side="left")
+    known = known_audio_apps(state)
+    if known:
+        tk.Label(buttons, text="Apps heard:", fg="gray40").pack(side="left", padx=(px(10), px(4)))
+        tk.Label(buttons, text=", ".join(known), fg="gray40", wraplength=px(380), justify="left").pack(side="left")
+
+    if len(state["tracks"]) > obs_config.WARN_APP_TRACKS:
+        tk.Label(container, text=f"More than {obs_config.WARN_APP_TRACKS} app tracks: each one is recorded "
+                 "all the time, which takes memory and a little CPU.", fg="firebrick").pack(anchor="w")
+
+    if any(t["owner"] for t in state["tracks"]):
+        def reset():
+            if not messagebox.askyesno("App Tracks", "Free every auto track? The next apps heard get them.",
+                                       parent=container.winfo_toplevel()):
+                return
+            setup.reset_app_tracks()
+            show_app_tracks(container, px)
+
+        tk.Button(container, text="Reset auto tracks", command=reset).pack(anchor="w", pady=(px(4), 0))
 
 
 def parent_pid_from_args(argv):
@@ -692,7 +759,7 @@ def main():
 
         run_in_background(root, mic_filter.ensure_mic_filter_deps, on_deps)
 
-    if setup.app_slot_source_id():
+    if setup.app_capture_supported():
         app_tracks_frame = tk.Frame(frame)
         app_tracks_frame.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
         next_row += 1

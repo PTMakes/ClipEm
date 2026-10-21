@@ -216,24 +216,17 @@ def _rec_tracks():
 def test_split_tracks_on_routes_each_source_to_its_own_track(tmp_path, monkeypatch):
     scene = _shipped_config(tmp_path, monkeypatch)
     monkeypatch.setattr(setup.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(setup.obs_config.shutil, "which", lambda name: "/usr/bin/" + name)
     assert setup.load_split_tracks() is False
     setup.save_split_tracks(True)
     setup.save_split_tracks(True)  # idempotent
     data = json.loads(scene.read_text())
-    assert setup.load_split_tracks() is True and _rec_tracks() == "63"
+    assert setup.load_split_tracks() is True and _rec_tracks() == "7"  # OBS records Mix, Mic and Desktop
     assert data["DesktopAudioDevice1"]["mixers"] == 0b101  # mix + desktop
     assert data["AuxAudioDevice1"]["mixers"] == 0b011  # mix + mic
-    slots = [s for s in data["sources"] if s["name"] in setup.obs_config.APP_SLOT_SOURCE_NAMES]
-    assert [(s["name"], s["id"], s["mixers"]) for s in slots] == [
-        ("ClipEm App A", "pipewire_audio_application_capture", 0b001000),  # track 4 only, never the mix
-        ("ClipEm App B", "pipewire_audio_application_capture", 0b010000),
-        ("ClipEm App C", "pipewire_audio_application_capture", 0b100000),
-    ]
-    scene_source = next(s for s in data["sources"] if s["id"] == "scene")
-    items = scene_source["settings"]["items"]
-    assert [i["name"] for i in items] == ["Display Capture", "ClipEm App A", "ClipEm App B", "ClipEm App C"]
-    assert len({i["id"] for i in items}) == 4
-    assert {i["source_uuid"] for i in items[1:]} == {s["uuid"] for s in slots}
+    # The tray records the apps, so OBS has no app sources and its script stands aside.
+    assert not any(s["name"].startswith("ClipEm App") for s in data["sources"])
+    assert setup.obs_config.load_tray_tracks() is True
 
 
 def test_split_tracks_off_restores_the_shipped_routing(tmp_path, monkeypatch):
@@ -250,31 +243,52 @@ def test_split_tracks_off_restores_the_shipped_routing(tmp_path, monkeypatch):
     assert data["DesktopAudioDevice1"] == shipped["DesktopAudioDevice1"]
 
 
-def test_split_tracks_on_mac_has_no_app_slots(tmp_path, monkeypatch):
+def test_split_tracks_on_mac_has_no_app_tracks(tmp_path, monkeypatch):
     scene = _shipped_config(tmp_path, monkeypatch)
     monkeypatch.setattr(setup.platform, "system", lambda: "Darwin")
     setup.save_split_tracks(True)
     data = json.loads(scene.read_text())
-    assert _rec_tracks() == "63"
+    assert _rec_tracks() == "7"
     assert not any(s["name"].startswith("ClipEm App") for s in data["sources"])
+    assert setup.obs_config.load_tray_tracks() is False  # clip_reexport.py splits the 3 tracks itself
 
 
-def test_slot_sources_start_out_pointed_at_their_saved_owners_and_reset_clears_them(tmp_path, monkeypatch):
+def test_turning_split_tracks_on_removes_the_app_sources_older_versions_added(tmp_path, monkeypatch):
     scene = _shipped_config(tmp_path, monkeypatch)
     monkeypatch.setattr(setup.platform, "system", lambda: "Linux")
-    state = setup.obs_config.empty_app_tracks()
-    state["slots"]["ClipEm App B"] = {"exe": "spotify", "label": "Spotify", "last_heard": 5.0, "pinned": False}
-    setup.obs_config.save_app_tracks(state)
+    data = json.loads(scene.read_text())
+    scene_source = next(s for s in data["sources"] if s["id"] == "scene")
+    for number, name in enumerate(setup.OLD_APP_SLOT_SOURCE_NAMES, start=90):
+        data["sources"].append({"name": name, "uuid": f"u{number}", "id": "pipewire_audio_application_capture"})
+        scene_source["settings"]["items"].append({"name": name, "source_uuid": f"u{number}", "id": number})
+    scene.write_text(json.dumps(data))
     setup.save_split_tracks(True)
+    data = json.loads(scene.read_text())
+    assert not any(s["name"].startswith("ClipEm App") for s in data["sources"])
+    scene_source = next(s for s in data["sources"] if s["id"] == "scene")
+    assert [i["name"] for i in scene_source["settings"]["items"]] == ["Display Capture"]
 
-    def slot_settings():
-        data = json.loads(scene.read_text())
-        return {s["name"]: s["settings"] for s in data["sources"] if s["name"].startswith("ClipEm App")}
 
-    assert slot_settings()["ClipEm App B"]["TargetName"] == "spotify"
-    assert slot_settings()["ClipEm App B"]["clipem_label"] == "Spotify"
-    setup.set_app_slot_pinned("ClipEm App B", True)
-    assert setup.load_app_tracks()["slots"]["ClipEm App B"]["pinned"] is True
+def test_app_track_rules_pin_and_reset(tmp_path, monkeypatch):
+    _shipped_config(tmp_path, monkeypatch)
+    state = setup.obs_config.empty_app_tracks()
+    first, second, third = state["tracks"]
+    second["owner"] = {"exe": "spotify", "label": "Spotify", "last_heard": 5.0, "pinned": False}
+    setup.obs_config.save_app_tracks(state)
+    setup.set_app_track_pinned(second["id"], True)
+    assert setup.load_app_tracks()["tracks"][1]["owner"]["pinned"] is True
+
+    # Settings: a rule track in front, a bare entry (an auto track), the others kept.
+    setup.save_app_track_rules([
+        {"name": "Voice", "apps": ["Discord.exe", "discord", "TeamSpeak"]},
+        {"id": second["id"], "apps": []},
+        {"id": third["id"], "name": "ignored", "apps": []},
+    ])
+    tracks = setup.load_app_tracks()["tracks"]
+    assert [(t["name"], t["apps"]) for t in tracks] == [("Voice", ["discord", "teamspeak"]), ("", []), ("ignored", [])]
+    assert tracks[1]["owner"]["exe"] == "spotify"  # an auto track keeps its app
+    assert tracks[0]["id"] not in (first["id"], second["id"], third["id"])
+
     setup.reset_app_tracks()
-    assert setup.load_app_tracks() == setup.obs_config.empty_app_tracks()
-    assert all(s["TargetName"] == "" for s in slot_settings().values())
+    assert all(t["owner"] is None for t in setup.load_app_tracks()["tracks"])
+    assert setup.load_app_tracks()["tracks"][0]["apps"] == ["discord", "teamspeak"]  # rules stay

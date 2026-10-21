@@ -64,6 +64,8 @@ __pycache__/
 /App/App/Shared/pending_obs_settings.json
 # Which app owns which split audio track (tray-widget/app_audio.py).
 /App/App/Shared/app_tracks.json
+# Windows app-capture helper, built by Dev/build/build-app-capture.sh at release time.
+/App/App/Shared/Tools/
 # OBS's own logs, written through the linked OBS-Config when OBS runs from
 # a checkout - never ship them in the release zip.
 /App/App/Shared/OBS-Config/logs/
