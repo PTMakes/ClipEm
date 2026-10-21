@@ -398,6 +398,28 @@ document.addEventListener("keydown", (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Changing the folder (ClipEm's own window has a folder dialog)
+// ---------------------------------------------------------------------------
+
+if (window.clipem && window.clipem.chooseFolder) {
+  const button = $("change-folder");
+  button.hidden = false;
+  button.addEventListener("click", async () => {
+    try {
+      const path = await window.clipem.chooseFolder(state.folder);
+      if (!path) return; // cancelled
+      await api("api/folder", { path });
+      state.clips = [];
+      state.selected = null;
+      await loadClips();
+      setStatus(`Viewing clips in ${path}`);
+    } catch (err) {
+      setStatus(err.message, true);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Loading
 // ---------------------------------------------------------------------------
 

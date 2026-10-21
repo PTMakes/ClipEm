@@ -105,6 +105,17 @@ function start() {
     return result.canceled || !result.filePath ? null : result.filePath;
   });
 
+  // The clip list's folder button: pick another folder to view clips from.
+  ipcMain.handle("clipem:choose-folder", async (event, options) => {
+    if (!win || new URL(event.senderFrame.url).origin !== origin) return null;
+    const result = await dialog.showOpenDialog(win, {
+      title: "Choose a clips folder",
+      defaultPath: (options && options.defaultPath) || undefined,
+      properties: ["openDirectory"],
+    });
+    return result.canceled || !result.filePaths.length ? null : result.filePaths[0];
+  });
+
   app.on("window-all-closed", () => app.quit());
 }
 

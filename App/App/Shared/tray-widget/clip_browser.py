@@ -722,10 +722,14 @@ class ClipBrowserServer(ThreadingHTTPServer):
     def __init__(self, folder_fn, token=None, thumbnailer=None, editor=None, port=0):
         super().__init__(("127.0.0.1", port), Handler)
         self.folder_fn = folder_fn
+        self.folder_override = None  # a folder picked in the editor, until it closes
         self.token = token or secrets.token_urlsafe(24)
         self.thumbnailer = thumbnailer or Thumbnailer()
         self.editor = editor or Editor()
         self.on_quit = lambda: None  # api/quit - main() closes the window
+
+    def current_folder(self):
+        return self.folder_override or self.folder_fn()
 
     @property
     def url(self):
@@ -850,7 +854,7 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         if route is None:
             return
-        folder = self.server.folder_fn()
+        folder = self.server.current_folder()
         if route in UI_FILES:
             self._send_file(os.path.join(UI_DIR, UI_FILES[route]))
         elif route == "api/clips":
@@ -925,10 +929,12 @@ class Handler(BaseHTTPRequestHandler):
         route = self._route()
         if route is None:
             return
-        folder = self.server.folder_fn()
+        folder = self.server.current_folder()
         body = self._read_json()
         try:
-            if route == "api/open":
+            if route == "api/folder":
+                self._set_folder(body)
+            elif route == "api/open":
                 self._open_editor(folder, body)
             elif route == "api/project":
                 clip, source = self._clip_and_source(folder, body.get("name"))
@@ -1031,6 +1037,16 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": str(exc)}, 400)
             return
         self._json(status)
+
+    def _set_folder(self, body):
+        """Views another folder's clips (until the editor closes); an empty
+        path goes back to the clips folder."""
+        path = body.get("path")
+        if path and not (isinstance(path, str) and os.path.isabs(path) and os.path.isdir(path)):
+            self._json({"error": f"The folder {path} isn't there."}, 400)
+            return
+        self.server.folder_override = os.path.normpath(path) if path else None
+        self._json({"folder": self.server.current_folder()})
 
     def _open_editor(self, folder, body):
         path = file_to_edit(folder, body.get("name"))
