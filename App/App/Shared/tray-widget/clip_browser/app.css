@@ -471,7 +471,7 @@ the right of the video's space, the video beside it. */
   width: 88px;
   height: 100%;
   display: grid;
-  grid-template-columns: 58px 1fr;
+  grid-template-columns: 58px minmax(0, 1fr);
   grid-template-rows: 1fr auto;
   gap: 4px 2px;
 }
@@ -487,6 +487,7 @@ the right of the video's space, the video beside it. */
   align-items: center;
   gap: 4px;
   min-height: 0;
+  min-width: 0;
 }
 #master-slider {
   flex: 1 1 auto;
@@ -496,7 +497,15 @@ the right of the video's space, the video beside it. */
   width: 20px;
   margin: 0;
 }
-#master-value { white-space: nowrap; font-size: 10px; }
+/* Fixed width, centred (overflowing both sides evenly), so the changing text
+never resizes the column and nudges the slider. */
+#master-value {
+  display: flex;
+  justify-content: center;
+  width: 100%;
+  white-space: nowrap;
+  font-size: 10px;
+}
 #auto-mix {
   grid-column: 1 / -1;
   padding: 3px 6px;
@@ -883,3 +892,64 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
 }
+
+/* Every range slider: a dark grooved bar with tick marks every tenth, a red
+line from the start to the thumb, and a red thumb. --fill (0-100%) is kept
+in step with the value by syncSliderFill() in editor.js. Pressing on the bar
+jumps the thumb there. */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  --fill: 50%;
+  --red: #e8404f;
+  --red-hi: #ff6c78;
+  --tick: rgba(255, 255, 255, 0.2);
+  --fill-size: var(--fill) 2px;
+  --fill-pos: 0 50%;
+  --tick-dir: 90deg;
+  --tick-size: 10% 6px;
+  --tick-pos: 0 50%;
+  background: transparent;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  cursor: pointer;
+}
+input[type="range"]:focus { outline: none; }
+input[type="range"]:disabled { opacity: 0.45; cursor: default; }
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 16px;
+  border-radius: 6px;
+  border: 1px solid #0c0c10;
+  box-sizing: border-box;
+  background:
+    linear-gradient(var(--red), var(--red)) var(--fill-pos) / var(--fill-size) no-repeat,
+    linear-gradient(var(--tick-dir), var(--tick) 1px, transparent 1px) var(--tick-pos) / var(--tick-size) repeat-x,
+    linear-gradient(#202026, #2e2e35);
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  box-sizing: border-box;
+  width: 22px;
+  height: 14px;
+  margin-top: 0;
+  border-radius: 4px;
+  border: 1px solid #8f1d29;
+  background: linear-gradient(var(--red-hi), var(--red) 55%, #c42f3c);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent); }
+
+#master-slider {
+  width: 20px;
+  height: auto;
+  --fill-size: 2px var(--fill);
+  --fill-pos: 50% 100%;
+  --tick-dir: 0deg;
+  --tick-size: 6px 10%;
+  --tick-pos: 50% 100%;
+}
+#master-slider::-webkit-slider-runnable-track { width: 16px; height: auto; }
+#master-slider::-webkit-slider-thumb { width: 14px; height: 22px; margin-left: 0; }

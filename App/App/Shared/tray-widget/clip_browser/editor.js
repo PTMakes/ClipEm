@@ -1331,12 +1331,39 @@ const masterSlider = $("master-slider");
 function renderMaster() {
   if (ed.master_db === undefined) return;
   masterSlider.value = ed.master_db;
+  syncSliderFill(masterSlider);
   $("master-value").textContent = `${ed.master_db > 0 ? "+" : ""}${Math.round(ed.master_db * 10) / 10} dB`;
   $("auto-mix").disabled = !ed.canLevel || ed.autoMixing;
   $("auto-mix").title = ed.canLevel
     ? "Turn on Level Out Audio for every track, set them to equal volumes, then set the master so the mix lands at about -14 LUFS"
     : "Can't level audio: its ffmpeg is too old - update ClipEm";
 }
+
+// Keeps a slider's red fill (the --fill the stylesheet draws) at its value.
+function syncSliderFill(slider) {
+  const span = Number(slider.max) - Number(slider.min);
+  const fraction = span > 0 ? (Number(slider.value) - Number(slider.min)) / span : 0;
+  slider.style.setProperty("--fill", `${clamp(fraction, 0, 1) * 100}%`);
+}
+
+function syncAllSliderFills(root) {
+  for (const slider of root.querySelectorAll('input[type="range"]')) syncSliderFill(slider);
+}
+
+document.addEventListener("input", (e) => {
+  if (e.target instanceof HTMLInputElement && e.target.type === "range") syncSliderFill(e.target);
+}, true);
+// Sliders are rebuilt, and set from code (which fires no event), all over the editor.
+new MutationObserver((records) => {
+  for (const record of records) {
+    for (const node of record.addedNodes) {
+      if (!(node instanceof Element)) continue;
+      if (node.matches('input[type="range"]')) syncSliderFill(node);
+      else syncAllSliderFills(node);
+    }
+  }
+}).observe(document.body, { childList: true, subtree: true });
+syncAllSliderFills(document);
 
 masterSlider.addEventListener("input", () => {
   beginEdit();

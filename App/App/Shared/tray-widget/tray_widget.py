@@ -357,12 +357,15 @@ class TrayApp:
                 ),
                 visible=self._clip_folder_missing,
             ),
-            pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip),
+            pystray.MenuItem(self._save_clip_label, self._save_clip, enabled=self._can_save_clip,
+                             visible=lambda item: self._item_shown("show_save_clip_item")),
             pystray.MenuItem(self._clip_editor_label, self._open_clip_editor, visible=self._clip_editor_shown),
             pystray.MenuItem("Open Clips Folder", self._open_clips_folder),
-            pystray.MenuItem(self._replay_label, self._toggle_replay_buffer),
+            pystray.MenuItem(self._replay_label, self._toggle_replay_buffer,
+                             visible=lambda item: self._item_shown("show_replay_item")),
             pystray.MenuItem(self._recording_label, self._toggle_recording, visible=self._recording_shown),
-            pystray.MenuItem(self._obs_window_label, self._toggle_obs_window),
+            pystray.MenuItem(self._obs_window_label, self._toggle_obs_window,
+                             visible=lambda item: self._item_shown("show_obs_item")),
             pystray.MenuItem("Settings...", self._open_settings),
             pystray.MenuItem(
                 "Quit",
@@ -447,8 +450,13 @@ class TrayApp:
         while a recording is running, or it couldn't be stopped from here."""
         return self.recording_active or load_run_config().get("show_recording_item", True)
 
+    def _item_shown(self, key):
+        """Settings > Tray Menu can hide Save Clip, Start/Stop Replay Buffer
+        and Show/Hide OBS (shown unless the key is False)."""
+        return bool(load_run_config().get(key, True))
+
     def _clip_editor_shown(self, item):
-        return not editor_install.editors_disabled()
+        return not editor_install.editors_disabled() and self._item_shown("show_clip_editor_item")
 
     def _clip_editor_label(self, item):
         editor = editor_install.external_editor()

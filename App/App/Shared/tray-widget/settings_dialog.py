@@ -356,20 +356,22 @@ def main():
     footer = tk.Frame(root, padx=px(16), pady=px(10))
     footer.pack(side="bottom", fill="x")
     ttk.Separator(root, orient="horizontal").pack(side="bottom", fill="x")
+    sidebar = tk.Frame(root, background=dark_theme.PANEL, padx=px(10), pady=px(12))
+    sidebar.pack(side="left", fill="y")
     scroll_area = tk.Frame(root)
-    scroll_area.pack(side="top", fill="both", expand=True)
+    scroll_area.pack(side="left", fill="both", expand=True)
     canvas = tk.Canvas(scroll_area, highlightthickness=0, borderwidth=0)
     scrollbar = ttk.Scrollbar(scroll_area, orient="vertical", command=canvas.yview)
     canvas.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side="right", fill="y")
     canvas.pack(side="left", fill="both", expand=True)
 
-    frame = tk.Frame(canvas, padx=px(16), pady=px(12))
-    frame_window = canvas.create_window(0, 0, window=frame, anchor="nw")
-    frame.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
+    page = tk.Frame(canvas, padx=px(16), pady=px(12))
+    page_window = canvas.create_window(0, 0, window=page, anchor="nw")
+    page.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
     canvas.bind(
         "<Configure>",
-        lambda event: canvas.itemconfigure(frame_window, width=max(event.width, frame.winfo_reqwidth())),
+        lambda event: canvas.itemconfigure(page_window, width=max(event.width, page.winfo_reqwidth())),
     )
 
     last_page_scroll = {"time": 0.0}
@@ -412,21 +414,36 @@ def main():
             if isinstance(child, ttk.Combobox) and "ComboboxWheelGuard" not in child.bindtags():
                 child.bindtags(("ComboboxWheelGuard",) + child.bindtags())
             guard_combobox_wheel(child)
-    # Rows spanning both columns (checkboxes, update text) are wider than
-    # Port/Password; give that extra width to the field column so the labels
-    # and fields stay flush left instead of being spread apart.
-    frame.columnconfigure(1, weight=1)
+    # Each settings group is a rounded card in the page; the sidebar's tabs
+    # choose which cards are shown. The code below adds rows to the current
+    # card ("frame") - section() starts the next one.
+    TAB_BASIC, TAB_OUTPUT, TAB_EDITOR = "Basic Settings", "Clip Output", "Clip Editor"
+    TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET = "Tray Menu/UI Customization", "Scripts/Troubleshooting", "OBS Websocket"
+    TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_EDITOR, TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET)
+    cards = []  # (card, its tab), in page order
+    frame = None
+    next_row = 0
+
+    def section(title, tab):
+        nonlocal frame, next_row
+        card = dark_theme.Card(page, pad=px(14), radius=px(10))
+        cards.append((card, tab))
+        frame = card.body
+        # Rows spanning both columns (checkboxes, update text) are wider than
+        # Port/Password; give that extra width to the field column so the labels
+        # and fields stay flush left instead of being spread apart.
+        frame.columnconfigure(1, weight=1)
+        tk.Label(frame, text=title, font=("", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        next_row = 1
 
     # Clip Hotkey is now the first section - no gap above it.
-    tk.Label(frame, text="Clip Hotkey", font=("", 10, "bold")).grid(
-        row=0, column=0, columnspan=2, sticky="w"
-    )
+    section("Clip Hotkey", TAB_BASIC)
     hotkey_ctrl_var = tk.BooleanVar(value=hotkey[0])
     hotkey_alt_var = tk.BooleanVar(value=hotkey[1])
     hotkey_shift_var = tk.BooleanVar(value=hotkey[2])
     hotkey_key_var = tk.StringVar(value=hotkey[3])
     hotkey_row = tk.Frame(frame)
-    hotkey_row.grid(row=1, column=0, columnspan=2, sticky="w", pady=px(4))
+    hotkey_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=px(4))
     for text, var in (("Ctrl", hotkey_ctrl_var), ("Alt", hotkey_alt_var), ("Shift", hotkey_shift_var)):
         tk.Checkbutton(hotkey_row, text=text, variable=var).pack(side="left")
     tk.Label(hotkey_row, text="+ Key:").pack(side="left", padx=(px(6), 0))
@@ -436,11 +453,7 @@ def main():
     ).pack(side="left", padx=(px(4), 0))
 
     # --- Clip sound: on/off, volume and which .wav plays on each saved clip.
-    next_row = 2
-    tk.Label(frame, text="Clip Sound", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Clip Sound", TAB_BASIC)
     sound_enabled_var = tk.BooleanVar(value=initial_obs_settings["clip_sound"]["enabled"])
     tk.Checkbutton(
         frame, text="Play a sound when a clip is saved", variable=sound_enabled_var,
@@ -452,9 +465,8 @@ def main():
     volume_row = tk.Frame(frame)
     volume_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0))
     sound_volume_var = tk.IntVar(value=round(initial_obs_settings["clip_sound"]["volume"] * 100))
-    volume_scale = tk.Scale(
-        volume_row, from_=0, to=100, orient="horizontal", variable=sound_volume_var,
-        showvalue=False, length=px(150),
+    volume_scale = dark_theme.RedSlider(
+        volume_row, from_=0, to=100, variable=sound_volume_var, width=px(180), height=px(24),
     )
     volume_scale.pack(side="left")
     volume_label = tk.Label(volume_row, width=5, anchor="w")
@@ -508,10 +520,7 @@ def main():
     next_row += 1
 
     # --- Where clips are saved, and whether audio sources get their own tracks.
-    tk.Label(frame, text="Clip Output", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Clip Output", TAB_OUTPUT)
     tk.Label(frame, text="Save clips to:").grid(row=next_row, column=0, sticky="w")
     folder_row = tk.Frame(frame)
     folder_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
@@ -606,10 +615,7 @@ def main():
     recording = load_recording_settings(pending)
     devices = {"displays": None, "audio": None}  # filled in by detect_devices()
 
-    tk.Label(frame, text="Recording", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Recording", TAB_OUTPUT)
 
     def combo_row(label, width):
         nonlocal next_row
@@ -660,10 +666,7 @@ def main():
     buffer_var.trace_add("write", update_clip_size)
     update_clip_size()
 
-    tk.Label(frame, text="Audio Devices", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Audio Devices", TAB_OUTPUT)
     output_combo = combo_row("Desktop audio:", 34)
     input_combo = combo_row("Microphone:", 34)
     for combo in (output_combo, input_combo):
@@ -769,10 +772,7 @@ def main():
 
     # --- Which editor the tray's editor item opens: ClipEm's own, the user's
     # (editor_install.py), or none at all.
-    tk.Label(frame, text="Clip Editor", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Clip Editor", TAB_EDITOR)
     editors_off_var = tk.BooleanVar(value=editor_install.editors_disabled(run_config))
     tk.Checkbutton(
         frame, text="Disable clip editors (no editor in the tray menu)", variable=editors_off_var,
@@ -841,20 +841,22 @@ def main():
 
     show_editor_choice()
 
-    tk.Label(frame, text="Tray Menu", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Tray Menu", TAB_TRAY)
     recording_item_var = tk.BooleanVar(value=bool(run_config.get("show_recording_item", True)))
-    tk.Checkbutton(
-        frame, text="Show \"Start Recording\" in the tray menu", variable=recording_item_var,
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    menu_item_vars = {"show_recording_item": recording_item_var}
+    for key, text in (
+        ("show_save_clip_item", "Show \"Save Clip\" in the tray menu"),
+        ("show_clip_editor_item", "Show \"Open Clip Editor\" in the tray menu"),
+        ("show_replay_item", "Show \"Start/Stop Replay Buffer\" in the tray menu"),
+        ("show_recording_item", "Show \"Start/Stop Recording\" in the tray menu"),
+        ("show_obs_item", "Show \"Show/Hide OBS\" in the tray menu"),
+    ):
+        menu_item_vars.setdefault(key, tk.BooleanVar(value=bool(run_config.get(key, True))))
+        tk.Checkbutton(frame, text=text, variable=menu_item_vars[key]).grid(
+            row=next_row, column=0, columnspan=2, sticky="w")
+        next_row += 1
 
-    tk.Label(frame, text="Scripts", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Scripts", TAB_SCRIPTS)
     stuck_var = tk.BooleanVar(value=stuck_enabled)
     tk.Checkbutton(frame, text="Enable stuck-screen detection", variable=stuck_var).grid(
         row=next_row, column=0, columnspan=2, sticky="w"
@@ -871,10 +873,7 @@ def main():
     )
     next_row += 1
 
-    tk.Label(frame, text="Autostart with PC boot", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Autostart with PC boot", TAB_BASIC)
 
     # The buttons act straight away (no Save needed) on the OS's autostart
     # entry, which starts ClipEm (OBS and the tray icon - one choice for
@@ -985,10 +984,7 @@ def main():
     next_row += 1
     show_autostart_status()
 
-    tk.Label(frame, text="OBS Websocket", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("OBS Websocket", TAB_WEBSOCKET)
 
     tk.Label(frame, text="Port:").grid(row=next_row, column=0, sticky="w", pady=px(4))
     port_var = tk.StringVar(value=str(port))
@@ -1028,15 +1024,21 @@ def main():
 
     copy_button = tk.Button(password_row, text="Copy", command=on_copy_password, width=7)
     copy_button.pack(side="left", padx=(px(4), 0))
+    next_row += 1
+    if ws_load_error:
+        tk.Label(
+            frame,
+            text=f"Warning: couldn't read current websocket settings ({ws_load_error})",
+            fg=dark_theme.ERROR,
+            wraplength=px(280),
+            justify="left",
+        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
 
     if updater is not None:
         update_config = updater.load_update_config()
         local_version = updater.get_local_version()
 
-        tk.Label(frame, text="Updates", font=("", 10, "bold")).grid(
-            row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-        )
-        next_row += 1
+        section("Updates", TAB_SCRIPTS)
 
         tk.Label(frame, text=f"Current version: {local_version}", fg=dark_theme.MUTED).grid(
             row=next_row, column=0, columnspan=2, sticky="w"
@@ -1192,10 +1194,7 @@ def main():
         next_row += 1
 
     # --- Troubleshooting: a bug report (sent, or saved as a zip), and a clean reinstall.
-    tk.Label(frame, text="Troubleshooting", font=("", 10, "bold")).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(14), 0)
-    )
-    next_row += 1
+    section("Troubleshooting", TAB_SCRIPTS)
 
     def on_bug_report():
         dialog = tk.Toplevel(root)
@@ -1380,17 +1379,6 @@ def main():
     reinstall_button.pack(side="left", padx=(px(4), 0))
     next_row += 1
 
-
-    if ws_load_error:
-        tk.Label(
-            frame,
-            text=f"Warning: couldn't read current websocket settings ({ws_load_error})",
-            fg=dark_theme.ERROR,
-            wraplength=px(280),
-            justify="left",
-        ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
-        next_row += 1
-
     def on_save():
         if (not editors_off_var.get() and editor_kind_var.get() == editor_install.EXTERNAL
                 and not editor_path_var.get().strip()):
@@ -1488,7 +1476,8 @@ def main():
             run_config["custom_editor_path"] = editor_path_var.get().strip()
             run_config["clip_editor"] = editor_kind_var.get()
             run_config["clip_editors_disabled"] = bool(editors_off_var.get())
-            run_config["show_recording_item"] = bool(recording_item_var.get())  # read by the tray menu
+            for key, var in menu_item_vars.items():  # read by the tray menu
+                run_config[key] = bool(var.get())
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
         except Exception as exc:
@@ -1545,19 +1534,56 @@ def main():
     tk.Button(button_frame, text="Cancel", command=on_cancel, width=10).pack(side="left", padx=px(4))
     tk.Button(button_frame, text="Save", command=on_save, width=10).pack(side="left", padx=px(4))
 
-    # Size to fit the settings' width, but only a limited height - the rest
-    # scrolls. Never taller than the screen, so the footer stays on it.
     indent_under_text(reexport_box, reexport_check)
-    root.update_idletasks()
-    width = frame.winfo_reqwidth() + scrollbar.winfo_reqwidth()
-    content_height = frame.winfo_reqheight() + footer.winfo_reqheight() + px(2)
-    max_height = root.winfo_screenheight() - px(80)
-    height = min(content_height, px(520), max_height)
-    root.geometry(f"{width}x{height}")
-    root.minsize(width, min(footer.winfo_reqheight() + px(120), max_height))
-    root.maxsize(root.winfo_screenwidth(), content_height)
 
-    guard_combobox_wheel(frame)
+    # Sidebar: one tab per settings group. Picking one shows just its cards
+    # (All shows every card); nothing is rebuilt.
+    tab_labels = {}
+    current_tab = {"name": None}
+
+    def show_tab(name):
+        current_tab["name"] = name
+        for card, _tab in cards:
+            card.pack_forget()
+        for card, tab in cards:
+            if name == "All" or tab == name:
+                card.pack(fill="x", pady=(0, px(10)))
+        for label_name, label in tab_labels.items():
+            selected = label_name == name
+            label.config(background=dark_theme.SELECTED if selected else dark_theme.PANEL,
+                         foreground=dark_theme.TEXT if selected else dark_theme.MUTED)
+        canvas.yview_moveto(0)
+
+    def style_hover(label, entering):
+        if label_name_of(label) != current_tab["name"]:
+            label.config(background=dark_theme.HOVER if entering else dark_theme.PANEL)
+
+    def label_name_of(label):
+        return label.cget("text").strip()
+
+    for name in TABS:
+        label = tk.Label(sidebar, text=name, anchor="w", justify="left", cursor="hand2",
+                         padx=px(12), pady=px(8), wraplength=px(170), background=dark_theme.PANEL)
+        label.config(text=name)
+        label.pack(fill="x", pady=px(2))
+        label.bind("<Button-1>", lambda _e, n=name: show_tab(n))
+        label.bind("<Enter>", lambda _e, w=label: style_hover(w, True))
+        label.bind("<Leave>", lambda _e, w=label: style_hover(w, False))
+        tab_labels[name] = label
+
+    # Opens 16:9, wide enough for the widest card with the sidebar beside it;
+    # the page scrolls when a tab is taller. Never bigger than the screen.
+    show_tab("All")
+    root.update_idletasks()
+    min_width = sidebar.winfo_reqwidth() + page.winfo_reqwidth() + scrollbar.winfo_reqwidth()
+    screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
+    width = min(max(px(1100), min_width), screen_width - px(40))
+    height = min(width * 9 // 16, screen_height - px(80))
+    root.geometry(f"{width}x{height}")
+    root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))
+    show_tab(TAB_BASIC)
+
+    guard_combobox_wheel(page)
     # Opened from the tray menu - make sure it isn't hidden behind whatever
     # window had focus, now and whenever the menu item is clicked again.
     bring_to_front(root)

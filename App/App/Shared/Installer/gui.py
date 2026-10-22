@@ -15,11 +15,20 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
+import dark_theme
+import editor_install
+import file_dialogs
+import updater
 from app_window import style_app_window, use_windows_app_id
 from mic_filter_gui import MicFilterWizard
-from obs_config import HOTKEY_KEY_CHOICES
+from obs_config import (
+    HOTKEY_KEY_CHOICES,
+    load_black_check_enabled,
+    load_disk_space_warnings_enabled,
+    load_stuck_check_enabled,
+)
 from ui_scale import UiScale, enable_dpi_awareness
 
 WINDOW_TITLE = "ClipEm - Setup"
@@ -29,6 +38,40 @@ PAD = 16
 # Once a page is shown, _fit_wraps() rewraps every such label to the page's
 # actual width, so text fills the window the same way on every page.
 WRAP_WIDTH = 520
+
+# run_config.json keys for the tray menu's entries, with their checkbox text
+# (the same ones as Settings > Tray Menu).
+MENU_ITEMS = {
+    "show_save_clip_item": "Show \"Save Clip\" in the tray menu",
+    "show_clip_editor_item": "Show \"Open Clip Editor\" in the tray menu",
+    "show_replay_item": "Show \"Start/Stop Replay Buffer\" in the tray menu",
+    "show_recording_item": "Show \"Start/Stop Recording\" in the tray menu",
+    "show_obs_item": "Show \"Show/Hide OBS\" in the tray menu",
+}
+
+# Update channel -> the name Settings shows for it (Main follows the published
+# releases, Dev the rolling "dev" pre-release).
+UPDATE_BRANCHES = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "Dev"}
+
+# The step list's names for the pages below.
+STEP_TITLES = {
+    "_show_provisioning": "Install",
+    "_show_clip_folder": "Clip Folder",
+    "_show_video_quality": "Display & Video",
+    "_show_audio_devices": "Audio Devices",
+    "_show_split_tracks": "Multitrack Audio",
+    "_show_clip_quality": "Clip Quality",
+    "_show_reexport": "Smaller Copy",
+    "_show_hotkey": "Clip Hotkey",
+    "_show_sound": "Clip Sound",
+    "_show_clip_editor": "Clip Editor",
+    "_show_tray_menu": "Tray Menu",
+    "_show_scripts": "Detection & Warnings",
+    "_show_obs_websocket": "OBS Websocket",
+    "_show_auto_update": "Updates",
+    "_show_autostart": "Autostart",
+    "_show_finish": "Finish",
+}
 
 # The pages after Welcome, in order - numbered "Step N of 13" in the bottom bar.
 STEP_PAGES = (
@@ -41,6 +84,9 @@ STEP_PAGES = (
     "_show_reexport",
     "_show_hotkey",
     "_show_sound",
+    "_show_clip_editor",
+    "_show_tray_menu",
+    "_show_scripts",
     "_show_obs_websocket",
     "_show_auto_update",
     "_show_autostart",
@@ -87,6 +133,7 @@ class Wizard(tk.Tk):
         use_windows_app_id("PTMakes.ClipEm.Setup")
         # className: what Linux desktops match the window to (WM_CLASS).
         super().__init__(className="ClipEm")
+        dark_theme.apply_dark_theme(self)  # before any widget: classic ones take their colors at creation
         # ClipEm logo (also on the folder picker and message boxes), and
         # Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in every text field.
         style_app_window(self, log=print)
@@ -97,12 +144,24 @@ class Wizard(tk.Tk):
         # Tall enough for the OBS Websocket page (the tallest ordinary page,
         # ~522px of real content - see test_gui_layout.py), with a little
         # margin.
-        self.geometry(f"{self.px(640)}x{self.px(560)}")
-        self.minsize(self.px(560), self.px(560))
+        # 16:9, with the step list beside the page's rounded card.
+        self.geometry(f"{self.px(1120)}x{self.px(630)}")
+        self.minsize(self.px(1000), self.px(620))
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        self.container = ttk.Frame(self, padding=self.px(PAD))
-        self.container.pack(fill="both", expand=True)
+        self.sidebar = tk.Frame(self, background=dark_theme.PANEL, padx=self.px(10), pady=self.px(12))
+        self.sidebar.pack(side="left", fill="y")
+        self.step_labels = []
+        for title in ("Welcome",) + tuple(STEP_TITLES[name] for name in STEP_PAGES):
+            label = tk.Label(self.sidebar, text=title, anchor="w", padx=self.px(12), pady=self.px(4),
+                             background=dark_theme.PANEL, foreground=dark_theme.MUTED, width=20)
+            label.pack(fill="x", pady=self.px(1))
+            self.step_labels.append(label)
+        right = tk.Frame(self, padx=self.px(PAD), pady=self.px(PAD))
+        right.pack(side="left", fill="both", expand=True)
+        card = dark_theme.Card(right, pad=self.px(PAD), radius=self.px(10), fill_height=True)
+        card.pack(fill="both", expand=True)
+        self.container = card.body
         self.container.bind("<Configure>", lambda _event: self._fit_wraps())
 
         self.step_var = tk.StringVar(value="")
@@ -142,12 +201,27 @@ class Wizard(tk.Tk):
         self.target_filesize_var = tk.StringVar(value=f"{reexport['target_mb']:g}")
         self.bitrate_preview_var = tk.StringVar(value="")
         run_config = controller["load_run_config"]()
+        # The tray menu's items and the tray widget's checks - the same
+        # settings as Settings > Tray Menu and Scripts.
+        self.menu_item_vars = {
+            key: tk.BooleanVar(value=bool(run_config.get(key, True))) for key in MENU_ITEMS
+        }
+        self.editors_enabled_var = tk.BooleanVar(value=not editor_install.editors_disabled(run_config))
+        self.editor_kind_var = tk.StringVar(value=editor_install.editor_kind(run_config))
+        self.editor_path_var = tk.StringVar(value=run_config.get("custom_editor_path") or "")
+        self.stuck_check_var = tk.BooleanVar(value=self._load_flag(load_stuck_check_enabled))
+        self.black_check_var = tk.BooleanVar(value=self._load_flag(load_black_check_enabled))
+        self.disk_warnings_var = tk.BooleanVar(value=self._load_flag(load_disk_space_warnings_enabled))
         # One choice for both: the tray widget is required, so it always
         # starts at boot alongside OBS.
         self.autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
         # Off for new installs (the shipped run_config.json says so).
         self.clip_notification_var = tk.BooleanVar(value=bool(run_config.get("clip_saved_notification", True)))
-        self.check_updates_var = tk.BooleanVar(value=controller["load_update_config"]()["check_for_updates"])
+        update_config = controller["load_update_config"]()
+        self.check_updates_var = tk.BooleanVar(value=update_config["check_for_updates"])
+        self.source_repo_var = tk.StringVar(value=updater.repo_url(update_config["source_repo"]))
+        self.update_branch_var = tk.StringVar(
+            value=UPDATE_BRANCHES.get(update_config["update_channel"], "Main"))
 
         ctrl0, alt0, shift0, key0 = controller["load_clip_hotkey"]()
         self.hotkey_ctrl_var = tk.BooleanVar(value=ctrl0)
@@ -183,6 +257,19 @@ class Wizard(tk.Tk):
         self._show_welcome()
 
     # -- helpers --------------------------------------------------------
+
+    @staticmethod
+    def _load_flag(load):
+        try:
+            return bool(load())
+        except Exception:
+            return True
+
+    def _highlight_step(self, number):
+        for index, label in enumerate(self.step_labels):
+            current = index == number
+            label.configure(background=dark_theme.SELECTED if current else dark_theme.PANEL,
+                            foreground=dark_theme.TEXT if current else dark_theme.MUTED)
 
     def _start_device_detection(self):
         result = {}
@@ -248,6 +335,7 @@ class Wizard(tk.Tk):
         for child in self.container.winfo_children():
             child.destroy()
         self.step_var.set("")  # Welcome; numbered pages set it (_numbered_page)
+        self._highlight_step(0)
         # After the page now being built has all its labels.
         self.after_idle(self._fit_wraps)
 
@@ -255,6 +343,7 @@ class Wizard(tk.Tk):
         def show():
             result = show_page()
             self.step_var.set(f"Step {number} of {len(STEP_PAGES)}")
+            self._highlight_step(number)
             return result
         return show
 
@@ -264,7 +353,7 @@ class Wizard(tk.Tk):
         that leaves short pages' text bunched up on the left."""
         if not self.container.winfo_exists():
             return
-        width = self.container.winfo_width() - 2 * self.px(PAD)
+        width = self.container.winfo_width() - self.px(PAD)
         if width < self.px(200):
             return  # not laid out yet - <Configure> calls this again when it is
         for child in self.container.winfo_children():
@@ -353,7 +442,7 @@ class Wizard(tk.Tk):
         cursor = "hand2" if enabled else "arrow"
         glyph = tk.Label(
             row, text="☑" if var.get() else "☐", font=("", 20),
-            fg="black" if enabled else "gray", cursor=cursor,
+            fg=dark_theme.TEXT if enabled else dark_theme.MUTED, cursor=cursor,
         )
         glyph.pack(side="left")
         label = ttk.Label(row, text=text, cursor=cursor)
@@ -1106,11 +1195,10 @@ class Wizard(tk.Tk):
         volume_row = ttk.Frame(self.container)
         volume_row.pack(fill="x", pady=(0, self.px(PAD)))
         self.sound_volume_label = ttk.Label(volume_row, width=5)
-        scale = ttk.Scale(
+        scale = dark_theme.RedSlider(
             volume_row, from_=0.0, to=1.0, variable=self.sound_volume_var,
-            orient="horizontal", command=lambda _val: self._update_volume_label(),
+            command=lambda _val: self._update_volume_label(),
         )
-        scale.bind("<Button-1>", self._on_volume_scale_click)
         scale.pack(side="left", fill="x", expand=True)
         self.sound_volume_label.pack(side="left", padx=(self.px(PAD // 2), 0))
         play_btn = ttk.Button(volume_row, text="Play", command=self._play_sound)
@@ -1154,20 +1242,6 @@ class Wizard(tk.Tk):
     def _update_volume_label(self):
         self.sound_volume_label.configure(text=f"{self.sound_volume_var.get():.0%}")
 
-    def _on_volume_scale_click(self, event):
-        widget = event.widget
-        if "slider" in widget.identify(event.x, event.y):
-            return
-        width = widget.winfo_width()
-        if width <= 0:
-            return
-        from_ = float(widget.cget("from"))
-        to = float(widget.cget("to"))
-        frac = min(max(event.x / width, 0.0), 1.0)
-        widget.set(from_ + frac * (to - from_))
-        self._update_volume_label()
-        return "break"
-
     def _play_sound(self):
         try:
             self.controller["play_clip_sound"](
@@ -1194,7 +1268,109 @@ class Wizard(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Setup", f"Could not save the clip sound settings:\n{exc}")
             return
-        self._show_obs_websocket()
+        self._show_clip_editor()
+
+    def _show_clip_editor(self):
+        self._clear()
+        ttk.Label(self.container, text="Clip Editor", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text="Which editor the tray menu's editor entry opens. Settings > Clip Editor changes this any time.",
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        self._make_toggle(
+            self.container, self.editors_enabled_var,
+            "Enable clip editors (off: no editor in the tray menu)",
+            on_toggle=lambda: show_choice(),
+        )
+        kind_row = ttk.Frame(self.container)
+        kind_row.pack(anchor="w")
+        ttk.Label(kind_row, text="Edit clips in:").pack(side="left")
+        kind_buttons = [
+            ttk.Radiobutton(kind_row, text="ClipEm's editor", value=editor_install.INTERNAL,
+                            variable=self.editor_kind_var, command=lambda: show_choice()),
+            ttk.Radiobutton(kind_row, text="External editor", value=editor_install.EXTERNAL,
+                            variable=self.editor_kind_var, command=lambda: show_choice()),
+        ]
+        for button in kind_buttons:
+            button.pack(side="left", padx=(self.px(8), 0))
+
+        editor_row = ttk.Frame(self.container)
+        editor_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
+        ttk.Label(editor_row, text="External editor:").pack(side="left")
+        name_var = tk.StringVar()
+
+        def show_name(*_args):
+            path = self.editor_path_var.get().strip()
+            name = os.path.basename(path.rstrip("/\\")) if path else "None"
+            name_var.set(name if len(name) <= 32 else name[:31] + "\u2026")
+
+        self.editor_path_var.trace_add("write", show_name)
+        show_name()
+        ttk.Label(editor_row, textvariable=name_var, width=32).pack(side="left", padx=(self.px(6), 0))
+
+        def choose():
+            if sys.platform == "darwin":
+                path = file_dialogs.askdirectory(parent=self, title="Choose your video editor (.app)",
+                                                 initialdir="/Applications")
+            else:
+                filetypes = [("Programs", "*.exe")] if sys.platform == "win32" else []
+                path = file_dialogs.askopenfilename(
+                    parent=self, title="Choose your video editor", filetypes=filetypes + [("All files", "*")])
+            if path:
+                self.editor_path_var.set(path)
+
+        ttk.Button(editor_row, text="Choose...", command=choose).pack(side="left", padx=(self.px(4), 0))
+        ttk.Button(editor_row, text="Clear", command=lambda: self.editor_path_var.set("")).pack(
+            side="left", padx=(self.px(4), 0))
+
+        def show_choice():
+            off = not self.editors_enabled_var.get()
+            for button in kind_buttons:
+                button.configure(state="disabled" if off else "normal")
+            if not off and self.editor_kind_var.get() == editor_install.EXTERNAL:
+                editor_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
+            else:
+                editor_row.pack_forget()
+
+        show_choice()
+
+        def next_page():
+            if (self.editors_enabled_var.get() and self.editor_kind_var.get() == editor_install.EXTERNAL
+                    and not self.editor_path_var.get().strip()):
+                messagebox.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.")
+                return
+            self._show_tray_menu()
+
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_sound)
+        ttk.Button(bar, text="Continue", command=next_page).pack(side="right")
+
+    def _show_tray_menu(self):
+        self._clear()
+        ttk.Label(self.container, text="Tray Menu", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text="Choose which entries the tray icon's menu shows. Settings > Tray Menu changes these any time.",
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        for key, text in MENU_ITEMS.items():
+            self._make_toggle(self.container, self.menu_item_vars[key], text)
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_clip_editor)
+        ttk.Button(bar, text="Continue", command=self._show_scripts).pack(side="right")
+
+    def _show_scripts(self):
+        self._clear()
+        ttk.Label(self.container, text="Detection and warnings", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text="Checks the tray widget runs while OBS is open. Settings > Scripts changes these any time.",
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        self._make_toggle(self.container, self.stuck_check_var, "Enable stuck-screen detection")
+        self._make_toggle(self.container, self.black_check_var, "Enable black-screen detection")
+        self._make_toggle(self.container, self.disk_warnings_var, "Enable disk space warnings")
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_tray_menu)
+        ttk.Button(bar, text="Continue", command=self._show_obs_websocket).pack(side="right")
 
     def _show_obs_websocket(self):
         self._clear()
@@ -1244,7 +1420,7 @@ class Wizard(tk.Tk):
             command=self._randomize_ws_password,
         ).pack(anchor="w", pady=(0, self.px(PAD)))
 
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_sound)
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_scripts)
         ttk.Button(bar, text="Continue", command=self._apply_obs_websocket).pack(side="right")
 
     def _randomize_ws_password(self):
@@ -1288,8 +1464,73 @@ class Wizard(tk.Tk):
             "Allow checking for updates",
         )
 
+        source_row = ttk.Frame(self.container)
+        source_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
+        ttk.Label(source_row, text="Source repo:").pack(side="left")
+        ttk.Entry(source_row, textvariable=self.source_repo_var, state="readonly", width=36).pack(
+            side="left", padx=(self.px(6), 0))
+        ttk.Button(source_row, text="Change...", command=self._change_source_repo).pack(
+            side="left", padx=(self.px(4), 0))
+        ttk.Button(
+            source_row, text="Reset",
+            command=lambda: self.source_repo_var.set(updater.repo_url(updater.DEFAULT_SOURCE_REPO)),
+        ).pack(side="left", padx=(self.px(4), 0))
+
+        branch_row = ttk.Frame(self.container)
+        branch_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
+        ttk.Label(branch_row, text="Update branch:").pack(side="left")
+        branch_box = ttk.Combobox(branch_row, textvariable=self.update_branch_var,
+                                  values=list(UPDATE_BRANCHES.values()), state="readonly", width=8)
+        branch_box.pack(side="left", padx=(self.px(6), 0))
+        branch_box.bind("<<ComboboxSelected>>", self._on_branch_selected)
+        self._saved_branch = self.update_branch_var.get()
+
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_obs_websocket)
         ttk.Button(bar, text="Continue", command=self._show_autostart).pack(side="right")
+
+    def _change_source_repo(self):
+        if not messagebox.askyesno(
+            "Source Repo",
+            "ClipEm downloads its updates from the releases of this GitHub repository.\n\n"
+            "Only change it if you know the repository publishes ClipEm builds - updates must "
+            "still be signed with the official ClipEm release key, so any other repository "
+            "makes update checks fail.\n\nChange the source repo?",
+        ):
+            return
+        text = simpledialog.askstring(
+            "Source Repo", "GitHub repository link (https://github.com/owner/name):",
+            initialvalue=self.source_repo_var.get(), parent=self,
+        )
+        if text is None:
+            return
+        repo = updater.repo_from_url(text)
+        if repo is None:
+            messagebox.showerror(
+                "Source Repo",
+                f"\"{text.strip()}\" isn't a GitHub repository link like https://github.com/owner/name.",
+            )
+            return
+        self.source_repo_var.set(updater.repo_url(repo))
+
+    def _on_branch_selected(self, _event=None):
+        label = self.update_branch_var.get()
+        if label == self._saved_branch:
+            return
+        if label == "Dev":
+            explanation = (
+                "The Dev branch installs development builds published for testing (the \"dev\" "
+                "pre-release on GitHub) before they become a release. They may be unfinished or "
+                "broken.\n\nSwitch to Dev?"
+            )
+        else:
+            explanation = (
+                "The Main branch installs only published releases. If you're on a dev build, "
+                "the next update check offers the current release instead.\n\nSwitch to Main?"
+            )
+        if messagebox.askyesno("Update Branch", explanation):
+            self._saved_branch = label
+        else:
+            self.update_branch_var.set(self._saved_branch)
 
     def _show_autostart(self):
         self._clear()
@@ -1364,9 +1605,23 @@ class Wizard(tk.Tk):
                 "autostart_obs": self.autostart_var.get(),
                 "autostart_tray": self.autostart_var.get(),
                 "clip_saved_notification": self.clip_notification_var.get(),
+                "clip_editors_disabled": not self.editors_enabled_var.get(),
+                "clip_editor": self.editor_kind_var.get(),
+                "custom_editor_path": self.editor_path_var.get().strip(),
+                "stuck_check_enabled": self.stuck_check_var.get(),
+                "black_check_enabled": self.black_check_var.get(),
+                "disk_space_warnings_enabled": self.disk_warnings_var.get(),
+                **{key: var.get() for key, var in self.menu_item_vars.items()},
             })
             self.controller["save_run_config"](run_config)
-            self.controller["change_update_config"](check_for_updates=self.check_updates_var.get())
+            channel = next(key for key, text in UPDATE_BRANCHES.items() if text == self.update_branch_var.get())
+            repo = updater.repo_from_url(self.source_repo_var.get()) or updater.DEFAULT_SOURCE_REPO
+            changes = {"check_for_updates": self.check_updates_var.get(),
+                       "source_repo": repo, "update_channel": channel}
+            saved = self.controller["load_update_config"]()
+            if (repo, channel) != (saved["source_repo"], saved["update_channel"]):
+                changes["skipped_version"] = None  # as in Settings: a new source offers its version again
+            self.controller["change_update_config"](**changes)
             # Before this install's own entry is written - one of these may
             # sit at the same path.
             if self.other_autostarts and self.clear_other_autostarts_var.get():
