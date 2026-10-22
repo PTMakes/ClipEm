@@ -868,3 +868,18 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
   .clip:not(:has(.clip-export-row:not([hidden]))) .clip-text { padding-bottom: 30px; }
   .row { grid-template-columns: 1fr; }
 }
+
+/* The box a right-clicked slider's value is typed in, at the cursor. */
+.value-box {
+  position: fixed;
+  z-index: 50;
+  width: 72px;
+  padding: 3px 6px;
+  font: inherit;
+  text-align: right;
+  background: var(--panel);
+  color: inherit;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}

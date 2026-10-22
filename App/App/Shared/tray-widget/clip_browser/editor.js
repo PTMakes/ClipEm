@@ -1764,6 +1764,54 @@ new ResizeObserver(applyEditorHeight).observe($("panel"));
 applyEditorHeight();
 
 // ---------------------------------------------------------------------------
+// Typing a slider's value: right-click it
+// ---------------------------------------------------------------------------
+
+let valueBox = null;
+
+function closeValueBox() {
+  if (!valueBox) return;
+  const box = valueBox;
+  valueBox = null;
+  box.remove();
+}
+
+// A text box at the cursor, for any range slider. Enter sets it (the number
+// in dB, clamped to the slider's range - the same events as dragging it, so
+// the slider's own handlers apply it and it's one undo step); Escape or
+// clicking away cancels.
+document.addEventListener("contextmenu", (e) => {
+  const slider = e.target instanceof Element && e.target.closest('input[type="range"]');
+  if (!slider || slider.disabled) return;
+  e.preventDefault();
+  closeValueBox();
+  const box = el("input", "value-box");
+  box.type = "text";
+  box.value = slider.value;
+  box.title = "Type a value in dB and press Enter";
+  box.style.left = `${Math.min(e.clientX, window.innerWidth - 90)}px`;
+  box.style.top = `${Math.min(e.clientY, window.innerHeight - 34)}px`;
+  valueBox = box;
+  document.body.append(box);
+  box.focus();
+  box.select();
+  box.addEventListener("keydown", (ev) => {
+    ev.stopPropagation(); // not Space (play) or the editor's other keys
+    if (ev.key === "Escape") {
+      closeValueBox();
+    } else if (ev.key === "Enter") {
+      const number = parseFloat(box.value.replace(",", "."));
+      closeValueBox();
+      if (!Number.isFinite(number)) return;
+      slider.value = clamp(number, Number(slider.min), Number(slider.max));
+      slider.dispatchEvent(new Event("input", { bubbles: true }));
+      slider.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+  });
+  box.addEventListener("blur", closeValueBox);
+});
+
+// ---------------------------------------------------------------------------
 // Other buttons and keys
 // ---------------------------------------------------------------------------
 
