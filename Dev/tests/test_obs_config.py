@@ -141,7 +141,20 @@ def test_split_tracks_from_before_tray_recording_move_to_the_new_layout_once(tmp
     assert obs_config.migrate_split_tracks_layout() is True and calls == [True]
     path.write_text(json.dumps({"modules": {"scripts-tool": [
         {"path": "clip_reexport.py", "settings": {"split_tracks_enabled": True, "tray_tracks_enabled": False}}]}}))
+    monkeypatch.setattr(obs_config, "app_capture_supported", lambda: False)
     assert obs_config.migrate_split_tracks_layout() is False  # already decided (e.g. macOS)
     path.write_text(json.dumps({"modules": {"scripts-tool": [
         {"path": "clip_reexport.py", "settings": {"split_tracks_enabled": False}}]}}))
     assert obs_config.migrate_split_tracks_layout() is False and calls == [True]
+
+
+def test_split_tracks_turn_app_tracks_back_on_once_app_capture_is_available(tmp_path, monkeypatch):
+    import setup
+
+    path = _scene_with_reexport(tmp_path, monkeypatch, {"split_tracks_enabled": True, "tray_tracks_enabled": False})
+    calls = []
+    monkeypatch.setattr(setup, "save_split_tracks", lambda enabled: calls.append(enabled))
+    monkeypatch.setattr(obs_config, "app_capture_supported", lambda: False)
+    assert obs_config.migrate_split_tracks_layout() is False and calls == []
+    monkeypatch.setattr(obs_config, "app_capture_supported", lambda: True)
+    assert obs_config.migrate_split_tracks_layout() is True and calls == [True]

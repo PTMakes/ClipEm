@@ -748,6 +748,12 @@ def main():
                          "ClipEm records the apps.")
         except Exception as exc:
             log.warning(f"Could not move Split audio tracks to the new layout: {exc}")
+    try:
+        if obs_config.load_split_tracks() and obs_config.app_capture_helper_missing():
+            log.warning(f"Split audio tracks is on but {obs_config.APP_CAPTURE_HELPER_PATH} is missing - "
+                        "apps won't get their own tracks until it is installed (update ClipEm).")
+    except Exception as exc:
+        log.warning(f"Could not check for the app capture helper: {exc}")
     # Before the tray widget starts: it only names its notifications "ClipEm"
     # once this entry exists (tray_widget.use_clipem_notification_name).
     try:

@@ -11,6 +11,7 @@ import subprocess
 
 from release_common import release_asset_url, sha256_of_file, write_json_atomic
 
+SHIPPED_IGNORED = ("Tools", "clipem-app-capture.exe")
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store"}
 
 # Top-level entries under App/Shared that setup/the updater rewrite or
@@ -34,7 +35,12 @@ def git_listed_files(root_dir):
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
-    return [os.path.join(top, rel) for rel in out.decode().split("\0") if rel]
+    listed = [os.path.join(top, rel) for rel in out.decode().split("\0") if rel]
+    # Built at release time and git-ignored, but shipped (release.sh stages it by hand).
+    helper = os.path.join(root_dir, *SHIPPED_IGNORED)
+    if os.path.isfile(helper) and helper not in listed:
+        listed.append(helper)
+    return listed
 
 
 def iter_files(root_dir, manifest_path):

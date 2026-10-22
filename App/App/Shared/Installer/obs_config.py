@@ -494,14 +494,24 @@ def load_tray_tracks():
     return bool(load_clip_script_settings().get("tray_tracks_enabled", False))
 
 
+def app_capture_helper_missing(system=None):
+    """True where the tray needs ClipEm's capture helper (Windows) and it
+    isn't installed."""
+    return (system or platform.system()) == "Windows" and not os.path.isfile(APP_CAPTURE_HELPER_PATH)
+
+
 def migrate_split_tracks_layout():
-    """Installs that turned Split audio tracks on before the tray recorded the
-    app tracks still have OBS recording 6 tracks through app sources and
-    clip_reexport.py splitting them: moves them to the current layout, once
-    (setup.save_split_tracks writes tray_tracks_enabled either way). Returns
-    True if it changed anything. Must run while OBS is closed."""
+    """Moves Split audio tracks to the current layout (OBS records Mix, Mic
+    and Desktop, the tray records the apps) when it's on and either predates
+    tray recording (no tray_tracks_enabled yet) or was saved with tray
+    recording off only because per-app capture wasn't available then (a
+    missing helper) and is now. Runs on every start, so shipping the helper
+    later turns app tracks back on. Returns True if it changed anything.
+    Must run while OBS is closed."""
     settings = load_clip_script_settings()
-    if not settings.get("split_tracks_enabled") or "tray_tracks_enabled" in settings:
+    if not settings.get("split_tracks_enabled"):
+        return False
+    if "tray_tracks_enabled" in settings and (settings["tray_tracks_enabled"] or not app_capture_supported()):
         return False
     import setup  # imported here: setup imports this module
 
