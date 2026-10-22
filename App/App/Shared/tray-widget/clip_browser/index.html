@@ -68,11 +68,13 @@
           <button id="crop-reset" class="overlay-button" title="Remove the crop" hidden>Uncrop</button>
         </div>
       </div>
-      <canvas id="meter" title="Preview level (RMS, dBFS) - what you hear, after the track edits" hidden></canvas>
-      <div id="master" hidden>
+      <div id="master">
+        <canvas id="meter" title="Preview level (RMS, dBFS) - what you hear, after the track edits" hidden></canvas>
+        <div id="master-fader">
         <input id="master-slider" type="range" min="-30" max="12" step="0.5" value="0" orient="vertical"
                aria-label="Master volume" title="Master volume - the gain on the mix and the Mix track in the export (double-click: 0 dB)">
         <span id="master-value" class="small mono">0 dB</span>
+        </div>
         <button id="auto-mix" title="Level Out Audio on every track, equal volumes, then the master set so the mix lands at about -14 LUFS">Auto Mix</button>
       </div>
       <p id="no-selection" class="muted">Pick a clip on the left.</p>

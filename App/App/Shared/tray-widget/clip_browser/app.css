@@ -460,39 +460,47 @@ body.sidebar-hidden #toggle-sidebar .arrow { transform: scaleX(-1); }
 #player-wrap.zoomed #crop-box:not(.cropped) { cursor: grab; }
 
 
-/* The level meter: on the right of the video's space, the video beside it. */
-#player-wrap:has(#meter:not([hidden])) { padding-right: 118px; }
+/* The level meter, the master volume beside it, and Auto Mix under both: on
+the right of the video's space, the video beside it. */
+#player-wrap:has(#meter:not([hidden])) { padding-right: 92px; }
 
-/* The master volume, beside the meter, and Auto Mix under it. */
 #master {
   position: absolute;
   top: 0;
-  right: 58px;
-  width: 60px;
+  right: 0;
+  width: 88px;
   height: 100%;
+  display: grid;
+  grid-template-columns: 58px 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 4px 2px;
+}
+#master:not(:has(#meter:not([hidden]))) { display: none; }
+#meter {
+  width: 58px;
+  height: 100%;
+  min-height: 0;
+}
+#master-fader {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 6px;
-  padding: 4px 0;
+  gap: 4px;
+  min-height: 0;
 }
-#master[hidden] { display: none; }
 #master-slider {
   flex: 1 1 auto;
   min-height: 40px;
   writing-mode: vertical-lr;
   direction: rtl;
   width: 20px;
+  margin: 0;
 }
-#master-value { white-space: nowrap; }
-#auto-mix { padding: 3px 6px; font-size: 11px; white-space: nowrap; }
-
-#meter {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 58px;
-  height: 100%;
+#master-value { white-space: nowrap; font-size: 10px; }
+#auto-mix {
+  grid-column: 1 / -1;
+  padding: 3px 6px;
+  font-size: 11px;
 }
 
 #no-selection {

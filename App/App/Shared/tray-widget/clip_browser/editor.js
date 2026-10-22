@@ -360,7 +360,6 @@ function renderDetails() {
   $("editor").hidden = !ready;
   $("splitter").hidden = !ready;
   $("meter").hidden = !ready || !audio.out;
-  $("master").hidden = $("meter").hidden;
   renderMaster();
   $("no-selection").hidden = !!clip;
   $("stage").hidden = !clip;
@@ -1687,18 +1686,31 @@ const EDITOR_HEIGHT_KEY = "clipem.editorHeight";
 const MIN_EDITOR_PX = 240;
 const MIN_PLAYER_PX = 180;
 let editorHeight = null; // px, or null: the default (CSS max-height)
+// The selection panel (#panel) appears between the video and the tracks and
+// takes its room from the video. Its room is always kept free (the tallest
+// it has been, at least this much), so opening it never squeezes the video
+// below MIN_PLAYER_PX - however tall the tracks have been dragged.
+const PANEL_RESERVE_PX = 64;
+let panelTallest = PANEL_RESERVE_PX;
+
+// The most the tracks can be: the room left once the video has its minimum,
+// the toolbar and splitter their height, and the panel its (possible) height.
+function maxEditorHeight() {
+  const panel = $("panel");
+  if (!panel.hidden) panelTallest = Math.max(panelTallest, Math.ceil(panel.getBoundingClientRect().height));
+  const main = $("main").getBoundingClientRect().height;
+  const fixed = ["toolbar", "splitter"].reduce((sum, id) => sum + $(id).getBoundingClientRect().height, 0);
+  return main - fixed - panelTallest - MIN_PLAYER_PX;
+}
 
 function applyEditorHeight() {
   const editor = $("editor");
+  let max = maxEditorHeight();
   if (editorHeight == null) {
     editor.style.height = "";
-    editor.style.maxHeight = "";
+    editor.style.maxHeight = editor.hidden ? "" : `${Math.max(Math.min(MIN_EDITOR_PX, max), Math.min(max, window.innerHeight * 0.62))}px`;
     return;
   }
-  // Whatever's above the editor besides the video keeps its room.
-  const main = $("main").getBoundingClientRect().height;
-  const fixed = ["toolbar", "panel", "splitter"].reduce((sum, id) => sum + $(id).getBoundingClientRect().height, 0);
-  let max = main - fixed - MIN_PLAYER_PX;
   if (!editor.hidden) {
     // No taller than it takes to show every track: no empty space below them.
     // Measured from unrounded sizes (and rounded up), so the answer doesn't
