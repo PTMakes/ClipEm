@@ -212,6 +212,7 @@ def prepare(platform_dir, config_link_name="config"):
 
     _link_dir(os.path.join(config_dir, "obs-studio"), shared_config_dir)
     _link_dir(os.path.join(platform_dir, "Scripts"), shared_scripts_dir)
+    obs_config.ensure_clip_sound_wav(shared_scripts_dir)
     _fill_clips_dir(shared_config_dir, clips_dir)
     if os.path.basename(platform_dir) == "Windows":
         _set_windows_python_path(shared_config_dir, platform_dir)

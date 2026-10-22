@@ -479,8 +479,16 @@ def main():
     sound_row = tk.Frame(frame)
     sound_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     chosen_sound = {"path": None}  # a new .wav, copied into place on Save
-    sound_name_var = tk.StringVar(value="Default sound")
-    tk.Label(sound_row, textvariable=sound_name_var, width=16, anchor="w").pack(side="left")
+    obs_config.ensure_clip_sound_wav()
+    sound_name_var = tk.StringVar(value=obs_config.active_clip_sound_name() or "Custom sound")
+    sound_combo = ttk.Combobox(sound_row, textvariable=sound_name_var, state="readonly", width=16,
+                               values=list(obs_config.CLIP_SOUND_PRESETS))
+    sound_combo.pack(side="left")
+
+    def on_pick_preset(_event=None):
+        chosen_sound["path"] = obs_config.clip_sound_preset_path(sound_name_var.get())
+
+    sound_combo.bind("<<ComboboxSelected>>", on_pick_preset)
 
     def on_choose_sound():
         path = file_dialogs.askopenfilename(
@@ -507,6 +515,7 @@ def main():
         state = "normal" if sound_enabled_var.get() else "disabled"
         for widget in (volume_scale, choose_button, play_button):
             widget.config(state=state)
+        sound_combo.config(state="readonly" if sound_enabled_var.get() else "disabled")
 
     on_sound_toggle()
 

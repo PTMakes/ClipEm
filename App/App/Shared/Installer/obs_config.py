@@ -529,6 +529,45 @@ def migrate_split_tracks_layout():
 CLIP_SOUND_SCRIPT_NAME = "replay_buffer_save_sound.py"
 CLIP_SOUND_WAV_PATH = os.path.join(SHARED_DIR, "Scripts", "replay_buffer_save_sound.wav")
 DEFAULT_CLIP_SOUND = {"enabled": True, "volume": 0.5}
+# The sounds shipped with ClipEm, by the name Settings and Setup show. Choosing
+# one copies it over CLIP_SOUND_WAV_PATH (see replace_clip_sound_wav), which is
+# never shipped itself: updates leave an install's sound alone, and a missing
+# one (a new or reset install) starts as the default preset.
+CLIP_SOUND_PRESETS = {
+    "Scissors": "replay_buffer_save_sound-scissors.wav",
+    "Flash": "replay_buffer_save_sound-flash.wav",
+}
+DEFAULT_CLIP_SOUND_PRESET = "Scissors"
+
+
+def clip_sound_preset_path(name):
+    return os.path.join(os.path.dirname(CLIP_SOUND_WAV_PATH), CLIP_SOUND_PRESETS[name])
+
+
+def ensure_clip_sound_wav(scripts_dir=None):
+    """Gives an install without a clip sound the default preset; one that
+    has a sound (any, including a custom one) is left alone."""
+    import shutil
+
+    scripts_dir = scripts_dir or os.path.dirname(CLIP_SOUND_WAV_PATH)
+    target = os.path.join(scripts_dir, os.path.basename(CLIP_SOUND_WAV_PATH))
+    source = os.path.join(scripts_dir, CLIP_SOUND_PRESETS[DEFAULT_CLIP_SOUND_PRESET])
+    if not os.path.exists(target) and os.path.exists(source):
+        shutil.copyfile(source, target)
+
+
+def active_clip_sound_name():
+    """The preset the clip sound is a copy of, or None (a custom sound)."""
+    try:
+        with open(CLIP_SOUND_WAV_PATH, "rb") as f:
+            current = f.read()
+        for name in CLIP_SOUND_PRESETS:
+            with open(clip_sound_preset_path(name), "rb") as f:
+                if f.read() == current:
+                    return name
+    except OSError:
+        pass
+    return None
 
 
 def load_clip_sound():

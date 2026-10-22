@@ -20,6 +20,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 import dark_theme
 import editor_install
 import file_dialogs
+import obs_config
 import updater
 from app_window import style_app_window, use_windows_app_id
 from mic_filter_gui import MicFilterWizard
@@ -1205,16 +1206,21 @@ class Wizard(tk.Tk):
         play_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
         self._update_volume_label()
 
-        file_heading = ttk.Label(self.container, text="Sound file")
+        obs_config.ensure_clip_sound_wav()
+        file_heading = ttk.Label(self.container, text="Sound")
         file_heading.pack(anchor="w", pady=(self.px(PAD // 2), 0))
         file_row = ttk.Frame(self.container)
         file_row.pack(fill="x", pady=(0, self.px(PAD)))
-        self.sound_file_label = ttk.Label(
-            file_row,
-            text=os.path.basename(self.sound_file_var.get())
-            or "replay_buffer_save_sound.wav - default",
+        self.sound_name_var = tk.StringVar(
+            value=os.path.basename(self.sound_file_var.get())
+            or obs_config.active_clip_sound_name() or "Custom sound"
         )
-        self.sound_file_label.pack(side="left", fill="x", expand=True)
+        self.sound_file_label = ttk.Combobox(
+            file_row, textvariable=self.sound_name_var, state="readonly", width=24,
+            values=list(obs_config.CLIP_SOUND_PRESETS),
+        )
+        self.sound_file_label.bind("<<ComboboxSelected>>", self._pick_sound_preset)
+        self.sound_file_label.pack(side="left")
         replace_btn = ttk.Button(file_row, text="Replace .wav...", command=self._browse_sound_file)
         replace_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
 
@@ -1224,7 +1230,7 @@ class Wizard(tk.Tk):
             volume_heading.configure(foreground=fg)
             self.sound_volume_label.configure(foreground=fg)
             file_heading.configure(foreground=fg)
-            self.sound_file_label.configure(foreground=fg)
+            self.sound_file_label.configure(state="readonly" if enabled else "disabled")
             scale.configure(state=state)
             play_btn.configure(state=state)
             replace_btn.configure(state=state)
@@ -1250,6 +1256,9 @@ class Wizard(tk.Tk):
         except Exception as exc:
             messagebox.showerror("Setup", f"Could not play the clip sound:\n{exc}")
 
+    def _pick_sound_preset(self, _event=None):
+        self.sound_file_var.set(obs_config.clip_sound_preset_path(self.sound_name_var.get()))
+
     def _browse_sound_file(self):
         chosen = filedialog.askopenfilename(
             title="Select a replacement .wav file for the clip sound",
@@ -1257,7 +1266,7 @@ class Wizard(tk.Tk):
         )
         if chosen:
             self.sound_file_var.set(chosen)
-            self.sound_file_label.configure(text=os.path.basename(chosen))
+            self.sound_name_var.set(os.path.basename(chosen))
 
     def _apply_sound(self):
         try:

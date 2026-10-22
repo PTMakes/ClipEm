@@ -91,7 +91,9 @@ OBS_SETTINGS_PATHS = {
 CLIPEM_SETTINGS_PATHS = {
     "run_config.json",
     "update_config.json",
-    # Setup's "replace the clip sound" copies the user's .wav over this.
+    # The clip sound: Setup/Settings copy a preset or the user's .wav over this
+    # (it isn't shipped - a missing one becomes the default preset, see
+    # obs_config.ensure_clip_sound_wav).
     "Scripts/replay_buffer_save_sound.wav",
 }
 ALWAYS_PRESERVED_PATHS = {

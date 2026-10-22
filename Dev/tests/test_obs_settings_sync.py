@@ -187,3 +187,24 @@ def test_split_tracks_defaults_off(fake_obs_config):
         {"path": "/x/clip_reexport.py", "settings": {"split_tracks_enabled": True}},
     ]}}))
     assert obs_config.load_split_tracks() is True
+
+
+def test_clip_sound_presets(tmp_path, monkeypatch):
+    for name, filename in obs_config.CLIP_SOUND_PRESETS.items():
+        (tmp_path / filename).write_bytes(b"RIFF0000WAVE" + name.encode())
+    target = tmp_path / "replay_buffer_save_sound.wav"
+    monkeypatch.setattr(obs_config, "CLIP_SOUND_WAV_PATH", str(target))
+
+    assert obs_config.active_clip_sound_name() is None
+    obs_config.ensure_clip_sound_wav()  # a missing sound becomes the default preset
+    assert obs_config.active_clip_sound_name() == obs_config.DEFAULT_CLIP_SOUND_PRESET == "Scissors"
+
+    obs_config.replace_clip_sound_wav(obs_config.clip_sound_preset_path("Flash"))
+    assert obs_config.active_clip_sound_name() == "Flash"
+
+    custom = tmp_path / "mine.wav"
+    custom.write_bytes(b"RIFF0000WAVEmine")
+    obs_config.replace_clip_sound_wav(str(custom))
+    obs_config.ensure_clip_sound_wav()  # an existing (custom) sound is never replaced
+    assert obs_config.active_clip_sound_name() is None
+    assert target.read_bytes() == b"RIFF0000WAVEmine"
