@@ -305,7 +305,8 @@ class GuiLayoutTest(unittest.TestCase):
     def test_external_editor_row_fits(self):
         self.wizard.editor_kind_var.set("external")
         self.wizard._show_clip_editor()
-        self.wizard.geometry("%dx%d" % self.wizard.wm_minsize())
+        min_w, min_h = self.wizard.wm_minsize()
+        self.wizard.geometry(f"{min_w}x{min_h}")
         problems = find_squeezed_widgets(self.wizard) + find_out_of_bounds_widgets(self.wizard)
         self.assertEqual(problems, [])
 
