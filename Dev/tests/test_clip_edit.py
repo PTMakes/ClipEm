@@ -688,12 +688,12 @@ def test_master_gain_is_saved_clamped_and_measured_without_itself():
     project["master_db"] = 6.0
     cmd = clip_edit.mix_loudness_command("ffmpeg", "clip.mkv", project, info)
     graph = cmd[cmd.index("-filter_complex") + 1]
-    assert "volume=6dB" not in graph and "vout" not in graph and "ebur128" in graph
+    assert "volume=6dB" not in graph and "vout" not in graph and "loudnorm=print_format=json" in graph
 
 
 def test_auto_mix_master_aims_at_the_level_target():
-    assert clip_edit.parse_integrated_lufs("  Integrated loudness:\n    I:         -20.4 LUFS\n    Threshold: -31 LUFS") == -20.4
-    assert clip_edit.parse_integrated_lufs("    I:         -inf LUFS") is None
+    assert clip_edit.parse_integrated_lufs('{\n\t"input_i" : "-20.40",\n\t"input_tp" : "-3.1"\n}') == -20.4
+    assert clip_edit.parse_integrated_lufs('"input_i" : "-inf"') is None
     assert clip_edit.auto_master_db(-20.4) == 6.4
     assert clip_edit.auto_master_db(-3.0) == -11.0
     assert clip_edit.auto_master_db(-80.0) == clip_edit.MAX_MASTER_DB

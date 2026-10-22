@@ -1021,7 +1021,8 @@ class Handler(BaseHTTPRequestHandler):
                                 **clip_edit._no_window_kwargs())
         lufs = clip_edit.parse_integrated_lufs(result.stderr)
         if result.returncode != 0 or lufs is None:
-            self._json({"error": "Couldn't measure the mix - is it silent?"}, 422)
+            detail = result.stderr.strip().splitlines()[-1] if result.returncode != 0 and result.stderr.strip() else ""
+            self._json({"error": "Couldn't measure the mix" + (f": {detail}" if detail else " - is it silent?")}, 422)
             return
         self._json({"lufs": round(lufs, 1), "master_db": clip_edit.auto_master_db(lufs)})
 

@@ -676,18 +676,19 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
 # ---------------------------------------------------------------------------
 
 def mix_loudness_command(ffmpeg, source, project, info):
-    """Command that prints the mix's integrated loudness (ebur128's summary,
-    on stderr) as it'd be exported - without the master gain."""
+    """Command that prints the mix's integrated loudness as it'd be exported -
+    without the master gain - in loudnorm's measuring pass (its JSON, on
+    stderr): ClipEm's ffmpeg has no ebur128 filter."""
     unmastered = dict(project, master_db=0.0)
     graph, _, outputs = build_graph(unmastered, info, audio="mix", with_video=False)
-    graph += f";[{outputs[0]}]ebur128=framelog=quiet[measured]"
+    graph += f";[{outputs[0]}]loudnorm=print_format=json[measured]"
     return [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-i", source,
             "-filter_complex", graph, "-map", "[measured]", "-f", "null", "-"]
 
 
 def parse_integrated_lufs(stderr):
-    """The summary's "I: -14.2 LUFS" as a float, or None (silence is -inf)."""
-    found = re.findall(r"\bI:\s+(-?\d+(?:\.\d+)?|-inf)\s+LUFS", stderr)
+    """loudnorm's "input_i" as a float, or None (silence is -inf)."""
+    found = re.findall(r'"input_i"\s*:\s*"(-?\d+(?:\.\d+)?|-inf)"', stderr)
     if not found or found[-1] == "-inf":
         return None
     return float(found[-1])
