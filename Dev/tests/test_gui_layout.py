@@ -61,6 +61,9 @@ PAGES = (
     "_show_reexport",
     "_show_hotkey",
     "_show_sound",
+    "_show_clip_editor",
+    "_show_tray_menu",
+    "_show_scripts",
     "_show_obs_websocket",
     "_show_auto_update",
     "_show_autostart",
@@ -191,7 +194,10 @@ def make_stub_controller(tray_ok=True):
             os.path.basename(entry["path"]) + " (starts /home/test/Games/Recording/ClipEm-previous-install)"
         ),
         "remove_autostart_entries": lambda entries: len(entries),
-        "load_update_config": lambda: {"check_for_updates": True},
+        "load_update_config": lambda: {
+            "check_for_updates": True, "source_repo": "PTMakes/ClipEm",
+            "update_channel": "releases", "skipped_version": None,
+        },
         "change_update_config": lambda *a, **k: None,
         "finalize": lambda: None,
         "launch_app": lambda: None,
@@ -225,8 +231,8 @@ def find_squeezed_widgets(root):
         if widget.winfo_class() not in TEXT_BEARING_CLASSES:
             continue
         aw, ah = widget.winfo_width(), widget.winfo_height()
-        if aw <= 0 or ah <= 0:
-            continue
+        if aw <= 0 or ah <= 0 or not widget.winfo_viewable():
+            continue  # not shown (the clip editor page hides the external editor row)
         rw, rh = widget.winfo_reqwidth(), widget.winfo_reqheight()
         if rw - aw > SQUEEZE_TOLERANCE_PX or rh - ah > SQUEEZE_TOLERANCE_PX:
             problems.append(
@@ -295,6 +301,13 @@ class GuiLayoutTest(unittest.TestCase):
                 problems_by_page[page] = problems
         if problems_by_page:
             self.fail("Widgets cut off / offscreen:\n" + format_report(problems_by_page))
+
+    def test_external_editor_row_fits(self):
+        self.wizard.editor_kind_var.set("external")
+        self.wizard._show_clip_editor()
+        self.wizard.geometry("%dx%d" % self.wizard.wm_minsize())
+        problems = find_squeezed_widgets(self.wizard) + find_out_of_bounds_widgets(self.wizard)
+        self.assertEqual(problems, [])
 
     def test_all_pages_fit_at_default_size(self):
         self._check_all_pages()
