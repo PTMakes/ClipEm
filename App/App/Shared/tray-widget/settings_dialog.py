@@ -21,7 +21,7 @@ import threading
 import time
 import tkinter as tk
 import webbrowser
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 USAGE = """
 Usage: settings_dialog.py
@@ -47,6 +47,7 @@ sys.path.insert(0, INSTALLER_DIR)
 import bug_report  # noqa: E402
 import dark_theme  # noqa: E402
 import editor_install  # noqa: E402
+import file_dialogs  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
@@ -466,11 +467,11 @@ def main():
     sound_row = tk.Frame(frame)
     sound_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
     chosen_sound = {"path": None}  # a new .wav, copied into place on Save
-    sound_name_var = tk.StringVar(value="Current sound")
+    sound_name_var = tk.StringVar(value="Default sound")
     tk.Label(sound_row, textvariable=sound_name_var, width=16, anchor="w").pack(side="left")
 
     def on_choose_sound():
-        path = filedialog.askopenfilename(
+        path = file_dialogs.askopenfilename(
             parent=root, title="Choose the clip sound", filetypes=[("WAV files", "*.wav"), ("All files", "*")],
         )
         if path:
@@ -519,7 +520,7 @@ def main():
 
     def on_choose_clip_folder():
         current = clip_folder_var.get()
-        path = filedialog.askdirectory(
+        path = file_dialogs.askdirectory(
             parent=root, title="Choose where clips are saved",
             initialdir=current if os.path.isdir(current) else os.path.expanduser("~"),
         )
@@ -534,8 +535,8 @@ def main():
 
     split_tracks_var = tk.BooleanVar(value=split_tracks)
     tk.Checkbutton(
-        frame, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the mic,\n"
-                    "desktop audio and apps each on their own track, for editing",
+        frame, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
+                    "Mix, Mic, and Desktop, and apps each on their own track, for editing",
         variable=split_tracks_var, justify="left",
     ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
@@ -699,12 +700,6 @@ def main():
 
         run_in_background(root, mic_filter.ensure_mic_filter_deps, on_deps)
 
-    if setup.app_capture_supported():
-        tk.Label(frame, text="Split audio tracks: every app that plays sound during a clip gets its own "
-                 "track in the \"-tracks\" copy, named after the app.", fg=dark_theme.MUTED, justify="left",
-                 wraplength=px(520)).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
-        next_row += 1
-
     def fill_displays():
         displays = devices["displays"]
         display_combo.configure(state="readonly", values=[
@@ -815,11 +810,11 @@ def main():
 
     def on_choose_editor():
         if sys.platform == "darwin":
-            path = filedialog.askdirectory(parent=root, title="Choose your video editor (.app)",
+            path = file_dialogs.askdirectory(parent=root, title="Choose your video editor (.app)",
                                            initialdir="/Applications")
         else:
             filetypes = [("Programs", "*.exe")] if sys.platform == "win32" else []
-            path = filedialog.askopenfilename(
+            path = file_dialogs.askopenfilename(
                 parent=root, title="Choose your video editor", filetypes=filetypes + [("All files", "*")],
             )
         if path:
@@ -1284,7 +1279,7 @@ def main():
         dialog.grab_set()
 
     def save_bug_report_to_file():
-        path = filedialog.asksaveasfilename(
+        path = file_dialogs.asksaveasfilename(
             parent=root, title="Save Bug Report", initialdir=bug_report.default_save_dir(),
             initialfile=bug_report.default_file_name(), defaultextension=".zip",
             filetypes=[("Zip files", "*.zip")],
@@ -1385,18 +1380,6 @@ def main():
     reinstall_button.pack(side="left", padx=(px(4), 0))
     next_row += 1
 
-    tk.Label(
-        frame,
-        text=(
-            "Autostart, screen-detection, update settings and a new clip sound file\n"
-            "apply right away. OBS only reads the websocket, hotkey, clip sound\n"
-            "on/off and volume, clip folder and multitrack audio when it starts -\n"
-            "if it's running, you'll be offered a restart."
-        ),
-        fg=dark_theme.MUTED,
-        justify="left",
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(12), 0))
-    next_row += 1
 
     if ws_load_error:
         tk.Label(

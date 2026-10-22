@@ -616,8 +616,14 @@ function desktopSourceLine() {
   ]) {
     const button = el("button", "toggle", label);
     button.title = title;
-    button.setAttribute("aria-pressed", String(trackOf(DESKTOP).muted === value));
-    button.addEventListener("click", () => change(() => { trackOf(DESKTOP).muted = value; }));
+    // Desktop's choice only matters while the Mix track is off (Sub-tracks):
+    // with the Mix track on, neither is selected, and picking one turns the
+    // Mix track off so the choice is what's heard.
+    button.setAttribute("aria-pressed", String(trackOf(0).muted && trackOf(DESKTOP).muted === value));
+    button.addEventListener("click", () => change(() => {
+      trackOf(0).muted = true;
+      trackOf(DESKTOP).muted = value;
+    }));
     line.append(button);
   }
   return line;
@@ -1780,6 +1786,12 @@ function closeValueBox() {
 // in dB, clamped to the slider's range - the same events as dragging it, so
 // the slider's own handlers apply it and it's one undo step); Escape or
 // clicking away cancels.
+// Anything clicked besides the box closes it (the timeline stops the click
+// from moving focus, so the box's blur alone isn't enough).
+document.addEventListener("pointerdown", (e) => {
+  if (valueBox && e.target !== valueBox) closeValueBox();
+}, true);
+
 document.addEventListener("contextmenu", (e) => {
   const slider = e.target instanceof Element && e.target.closest('input[type="range"]');
   if (!slider || slider.disabled) return;
