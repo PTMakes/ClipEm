@@ -45,6 +45,7 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # autostart entry (autostart.apply_boot_autostart).
 sys.path.insert(0, INSTALLER_DIR)
 import bug_report  # noqa: E402
+import dark_theme  # noqa: E402
 import editor_install  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
@@ -341,6 +342,7 @@ def main():
     # Hidden until it's built and sized (shown at the end of main) - otherwise
     # it sits on screen as Tk's blank default-size window meanwhile.
     root.withdraw()
+    dark_theme.apply_dark_theme(root)  # before any widget: classic ones take their colors at creation
     # ClipEm logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
     style_app_window(root, log=log.warning)
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
@@ -564,7 +566,7 @@ def main():
         command=lambda: target_mb_var.set(str(setup.DEFAULT_TARGET_FILESIZE_MB)),
     )
     recommended_button.pack(side="left", padx=(px(6), 0))
-    tk.Label(size_row, text="(Discord's free upload limit)", fg="gray40").pack(side="left", padx=(px(4), 0))
+    tk.Label(size_row, text="(Discord's free upload limit)", fg=dark_theme.MUTED).pack(side="left", padx=(px(4), 0))
     tk.Label(reexport_box, text="Keep the last:").grid(row=1, column=0, sticky="w")
     crop_row = tk.Frame(reexport_box)
     crop_row.grid(row=1, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
@@ -573,7 +575,7 @@ def main():
     crop_spin.pack(side="left")
     tk.Label(crop_row, text=f"seconds (of the {replay_seconds} s replay buffer)").pack(side="left", padx=(px(3), 0))
     bitrate_var = tk.StringVar()
-    tk.Label(reexport_box, textvariable=bitrate_var, fg="gray40").grid(row=2, column=1, sticky="w", padx=(px(6), 0))
+    tk.Label(reexport_box, textvariable=bitrate_var, fg=dark_theme.MUTED).grid(row=2, column=1, sticky="w", padx=(px(6), 0))
 
     def reexport_values():
         """(target MB, crop seconds), or None if either isn't a number."""
@@ -641,7 +643,7 @@ def main():
                to=setup.BITRATE_MAX_KBPS, increment=setup.BITRATE_STEP_KBPS).pack(side="left")
     tk.Label(bitrate_row, text="kbps").pack(side="left", padx=(px(3), 0))
     clip_size_var = tk.StringVar()
-    tk.Label(bitrate_row, textvariable=clip_size_var, fg="gray40").pack(side="left", padx=(px(6), 0))
+    tk.Label(bitrate_row, textvariable=clip_size_var, fg=dark_theme.MUTED).pack(side="left", padx=(px(6), 0))
     next_row += 1
 
     def update_clip_size(*_args):
@@ -699,7 +701,7 @@ def main():
 
     if setup.app_capture_supported():
         tk.Label(frame, text="Split audio tracks: every app that plays sound during a clip gets its own "
-                 "track in the \"-tracks\" copy, named after the app.", fg="gray40", justify="left",
+                 "track in the \"-tracks\" copy, named after the app.", fg=dark_theme.MUTED, justify="left",
                  wraplength=px(520)).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
         next_row += 1
 
@@ -982,7 +984,7 @@ def main():
     uninstall_others_button.configure(command=on_uninstall_other_autostarts)
     autostart_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
     next_row += 1
-    tk.Label(frame, textvariable=autostart_status_var, fg="gray40").grid(
+    tk.Label(frame, textvariable=autostart_status_var, fg=dark_theme.MUTED).grid(
         row=next_row, column=0, columnspan=2, sticky="w"
     )
     next_row += 1
@@ -1041,7 +1043,7 @@ def main():
         )
         next_row += 1
 
-        tk.Label(frame, text=f"Current version: {local_version}", fg="gray40").grid(
+        tk.Label(frame, text=f"Current version: {local_version}", fg=dark_theme.MUTED).grid(
             row=next_row, column=0, columnspan=2, sticky="w"
         )
         next_row += 1
@@ -1214,7 +1216,7 @@ def main():
         description_text = tk.Text(body, width=52, height=8, wrap="word")
         description_text.pack(anchor="w", fill="x", pady=(px(6), 0))
         tk.Label(
-            body, fg="gray40", justify="left", wraplength=px(380),
+            body, fg=dark_theme.MUTED, justify="left", wraplength=px(380),
             text=(
                 "Your description is posted publicly as a GitHub issue. ClipEm's and OBS's logs and "
                 "a summary of this install (versions, settings and folder paths) are uploaded "
@@ -1341,7 +1343,7 @@ def main():
             text="Try to keep ClipEm settings (autostart, screen checks, updates,\nclip sound)",
         ).pack(anchor="w")
         tk.Label(
-            body, fg="gray40", justify="left", wraplength=px(380),
+            body, fg=dark_theme.MUTED, justify="left", wraplength=px(380),
             text="Without the OBS settings, Setup opens afterwards to choose them again.",
         ).pack(anchor="w", pady=(px(6), 0))
 
@@ -1391,7 +1393,7 @@ def main():
             "on/off and volume, clip folder and multitrack audio when it starts -\n"
             "if it's running, you'll be offered a restart."
         ),
-        fg="gray40",
+        fg=dark_theme.MUTED,
         justify="left",
     ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(12), 0))
     next_row += 1
@@ -1400,7 +1402,7 @@ def main():
         tk.Label(
             frame,
             text=f"Warning: couldn't read current websocket settings ({ws_load_error})",
-            fg="red",
+            fg=dark_theme.ERROR,
             wraplength=px(280),
             justify="left",
         ).grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(6), 0))
@@ -1553,7 +1555,7 @@ def main():
         root.destroy()
 
     status_var = tk.StringVar(value="")
-    tk.Label(footer, textvariable=status_var, fg="gray40").pack(side="left")
+    tk.Label(footer, textvariable=status_var, fg=dark_theme.MUTED).pack(side="left")
 
     button_frame = tk.Frame(footer)
     button_frame.pack(side="right")

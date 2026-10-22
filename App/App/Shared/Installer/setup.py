@@ -86,6 +86,9 @@ CHECKSUMS_MANIFEST_PATH = os.path.join(SHARED_DIR, "checksums.json")
 
 TRAY_REQUIREMENTS = os.path.join(SHARED_DIR, "tray-widget", "requirements.txt")
 
+# PowerShell started from pythonw (Settings, the tray) would flash a console window.
+_NO_CONSOLE = {"creationflags": 0x08000000} if sys.platform == "win32" else {}  # CREATE_NO_WINDOW
+
 REPLAY_SOUND_SCRIPT_NAME = "replay_buffer_save_sound.py"
 REPLAY_SOUND_WAV_PATH = obs_config.CLIP_SOUND_WAV_PATH
 
@@ -198,7 +201,7 @@ def pick_folder_windows():
         "if ($f.ShowDialog() -eq 'OK') { Write-Output $f.SelectedPath }"
     )
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True
+        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, **_NO_CONSOLE
     )
     return result.stdout.strip() or None
 
@@ -384,7 +387,7 @@ def _list_displays_windows():
         '"$($_.DeviceName)|$($_.Bounds.Width)|$($_.Bounds.Height)|$($_.Primary)|$devId" }'
     )
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True
+        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, **_NO_CONSOLE
     )
     displays = []
     for line in result.stdout.splitlines():
@@ -811,7 +814,7 @@ def _list_audio_devices_windows():
         "[AudioDeviceInterop]::PrintAll()"
     )
     result = subprocess.run(
-        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True
+        ["powershell", "-NoProfile", "-Command", ps], capture_output=True, text=True, **_NO_CONSOLE
     )
     outputs, inputs = [], []
     for line in result.stdout.splitlines():

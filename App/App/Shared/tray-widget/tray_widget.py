@@ -86,10 +86,38 @@ if sys.platform == "win32":
     _WM_RBUTTONUP = 0x0205
 
     class _TrayIcon(pystray.Icon):
+        # pystray's update_menu() destroys the menu handle and builds a new
+        # one - and the poll loop calls it every couple of seconds, from
+        # another thread. While the menu is on screen (TrackPopupMenuEx, which
+        # blocks _on_notify) that destroyed the very menu being shown: items
+        # stopped highlighting under the mouse, though clicks still went
+        # through. A rebuild asked for meanwhile waits until the menu closes.
+        _menu_open = False
+        _menu_stale = False
+        _menu_lock = threading.RLock()
+
         def _on_notify(self, wparam, lparam):
             if lparam == _WM_LBUTTONUP:
                 lparam = _WM_RBUTTONUP
-            return super()._on_notify(wparam, lparam)
+            if lparam != _WM_RBUTTONUP:
+                return super()._on_notify(wparam, lparam)
+            with self._menu_lock:
+                self._menu_open = True
+            try:
+                return super()._on_notify(wparam, lparam)
+            finally:
+                with self._menu_lock:
+                    self._menu_open = False
+                    if self._menu_stale:
+                        self._menu_stale = False
+                        super()._update_menu()
+
+        def _update_menu(self):
+            with self._menu_lock:
+                if self._menu_open:
+                    self._menu_stale = True
+                    return
+                super()._update_menu()
 
         # Also pystray 0.19.5's private _win32.Icon._create_menu (it builds
         # each submenu through this too): no check-mark column. Win32 menus
