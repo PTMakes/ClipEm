@@ -947,6 +947,8 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"project": project,
                                 "discord": clip_edit.discord_settings(sized, clip_edit.kept_duration(project)),
                                 "custom": clip_edit.custom_options(sized)})
+            elif route == "api/automix":
+                self._automix(folder, body)
             elif route == "api/export":
                 self._export(folder, body)
             elif route == "api/quit":
@@ -999,6 +1001,29 @@ class Handler(BaseHTTPRequestHandler):
         payload["can_crop"] = editor.can_crop()
         payload["gate_default_db"] = clip_edit.GATE_DEFAULT_DB
         self._json(payload)
+
+    def _automix(self, folder, body):
+        """The master gain that takes the page's current mix to the target
+        loudness (the page has already turned Level Out Audio on)."""
+        clip, source = self._clip_and_source(folder, body.get("name"))
+        if not clip:
+            return
+        editor = self.server.editor
+        if not editor.ffmpeg:
+            self._json({"error": "ffmpeg isn't available."}, 422)
+            return
+        info = editor.info(source)
+        project = clip_edit.normalize_project(body.get("project"), info)
+        if isinstance(body.get("solo"), list):
+            project["solo"] = [i for i in body["solo"] if isinstance(i, int) and not isinstance(i, bool)]
+        cmd = clip_edit.mix_loudness_command(editor.ffmpeg, source, project, info)
+        result = subprocess.run(cmd, capture_output=True, text=True, errors="replace",
+                                **clip_edit._no_window_kwargs())
+        lufs = clip_edit.parse_integrated_lufs(result.stderr)
+        if result.returncode != 0 or lufs is None:
+            self._json({"error": "Couldn't measure the mix - is it silent?"}, 422)
+            return
+        self._json({"lufs": round(lufs, 1), "master_db": clip_edit.auto_master_db(lufs)})
 
     def _export(self, folder, body):
         clip, source = self._clip_and_source(folder, body.get("name"))

@@ -144,7 +144,7 @@ function loadKeep(keep) {
 }
 
 function project() {
-  return { version: 2, keep: keepRanges(), tracks: ed.tracks, crop: ed.crop || null };
+  return { version: 2, keep: keepRanges(), tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null };
 }
 
 // The exported video's height before any scaling: the crop's, or the clip's.
@@ -157,7 +157,7 @@ function keptLength() {
 }
 
 function snapshot() {
-  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, crop: ed.crop || null });
+  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null });
 }
 
 function restore(snap) {
@@ -165,6 +165,7 @@ function restore(snap) {
   ed.trim = data.trim;
   ed.cuts = data.cuts;
   ed.tracks = data.tracks;
+  ed.master_db = data.master_db || 0;
   ed.crop = data.crop || null;
   ed.region = null;
 }
@@ -203,6 +204,7 @@ function edited() {
   renderPanel();
   renderToolbar();
   renderCustomExport();
+  renderMaster();
   scheduleSave();
 }
 
@@ -300,6 +302,7 @@ async function loadEditor(name) {
   ed.name = name;
   ed.info = data.info;
   ed.tracks = data.project.tracks;
+  ed.master_db = data.project.master_db || 0;
   loadKeep(data.project.keep);
   ed.crop = data.project.crop || null;
   ed.canCrop = !!data.can_crop;
@@ -357,6 +360,8 @@ function renderDetails() {
   $("editor").hidden = !ready;
   $("splitter").hidden = !ready;
   $("meter").hidden = !ready || !audio.out;
+  $("master").hidden = $("meter").hidden;
+  renderMaster();
   $("no-selection").hidden = !!clip;
   $("stage").hidden = !clip;
   if (typeof renderCrop === "function") renderCrop(); // view.js
@@ -596,6 +601,29 @@ function mixSourceLine() {
   return line;
 }
 
+// Desktop's mute, as a choice, when the clip has app tracks: the recorded
+// Desktop mix, or the apps that were recorded inside it (see mixInputs()).
+const DESKTOP = 2;
+function hasAppTracks() {
+  return ed.tracks.some((t) => t.index > DESKTOP);
+}
+
+function desktopSourceLine() {
+  const line = el("div", "shift-line");
+  line.append(el("span", "small muted", "Use"));
+  for (const [value, label, title] of [
+    [false, "Desktop Mix", "Play and export the recorded Desktop track - the apps are left out"],
+    [true, "App Tracks", "Play and export each app's own track instead of the Desktop track"],
+  ]) {
+    const button = el("button", "toggle", label);
+    button.title = title;
+    button.setAttribute("aria-pressed", String(trackOf(DESKTOP).muted === value));
+    button.addEventListener("click", () => change(() => { trackOf(DESKTOP).muted = value; }));
+    line.append(button);
+  }
+  return line;
+}
+
 function audioRow(index) {
   const track = trackOf(index);
   const row = el("div", "row audio-row");
@@ -624,8 +652,10 @@ function audioRow(index) {
     renderTimeline();
     renderExportBar();
   });
-  // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo.
-  if (!isMaster(index)) titleLine.append(mute, solo);
+  // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo;
+  // Desktop's, with app tracks, is its Desktop Mix / App Tracks choice.
+  const desktopChoice = ed.info.split && index === DESKTOP && hasAppTracks();
+  if (!isMaster(index)) titleLine.append(...(desktopChoice ? [solo] : [mute, solo]));
   // Mono, Noise gate and Level: set in the panel below the timeline (renderFx),
   // so the track's row keeps its height.
   const fx = el("button", "toggle", "FX");
@@ -662,7 +692,13 @@ function audioRow(index) {
   volume.append(el("span", "small muted", "Vol"), slider, value);
   head.append(titleLine, volume);
 
-  if (!isMaster(index)) {
+  // Mic and Desktop come from OBS, in step with the Mix: only apps can be shifted.
+  const fromObs = ed.info.split && index > 0 && index <= DESKTOP;
+  if (isMaster(index)) {
+    head.append(mixSourceLine());
+  } else if (desktopChoice) {
+    head.append(desktopSourceLine());
+  } else if (!fromObs) {
     const shift = el("div", "shift-line");
     const grip = el("span", "grip", "⇔");
     grip.title = "Drag to shift this track earlier or later";
@@ -675,8 +711,6 @@ function audioRow(index) {
     const ms = el("span", "small mono shift-value", `${Math.round(track.offset * 1000)} ms`);
     shift.append(el("span", "small muted", "Shift"), grip, minus, ms, plus);
     head.append(shift);
-  } else {
-    head.append(mixSourceLine());
   }
 
   const lane = el("div", "lane audio-lane");
@@ -1244,6 +1278,10 @@ function syncAudio() {
   const playing = !player.paused && !player.seeking;
   const heard = audibleTracks();
   const now = audio.ctx.currentTime;
+  if (audio.master !== ed.master_db) {
+    audio.master = ed.master_db;
+    audio.out.gain.setTargetAtTime(dbToGain(ed.master_db), now, 0.015);
+  }
   for (const [index, node] of audio.nodes) {
     const track = trackOf(index);
     const desired = t - track.offset;
@@ -1277,6 +1315,68 @@ function frame() {
   }
   requestAnimationFrame(frame);
 }
+
+// ---------------------------------------------------------------------------
+// Master volume and Auto Mix
+// ---------------------------------------------------------------------------
+
+const MASTER_MIN_DB = -30;
+const masterSlider = $("master-slider");
+
+function renderMaster() {
+  if (ed.master_db === undefined) return;
+  masterSlider.value = ed.master_db;
+  $("master-value").textContent = `${ed.master_db > 0 ? "+" : ""}${Math.round(ed.master_db * 10) / 10} dB`;
+  $("auto-mix").disabled = !ed.canLevel || ed.autoMixing;
+  $("auto-mix").title = ed.canLevel
+    ? "Turn on Level Out Audio for every track, set them to equal volumes, then set the master so the mix lands at about -14 LUFS"
+    : "Can't level audio: its ffmpeg is too old - update ClipEm";
+}
+
+masterSlider.addEventListener("input", () => {
+  beginEdit();
+  ed.master_db = Number(masterSlider.value);
+  renderMaster();
+  scheduleSave();
+});
+masterSlider.addEventListener("change", endEdit);
+masterSlider.addEventListener("dblclick", () => change(() => { ed.master_db = 0; }));
+
+// Level Out Audio brings every track to the same loudness, so their volume
+// sliders go back to 0 (Level evens out any volume change anyway); the
+// server then measures the resulting mix and the master takes it to the target.
+async function autoMix() {
+  const name = ed.name;
+  if (!name || ed.autoMixing) return;
+  ed.autoMixing = true;
+  setStatus("Auto Mix: measuring the mix...");
+  beginEdit();
+  try {
+    for (const track of ed.tracks) {
+      if (track.muted) continue;
+      track.level = true;
+      track.volume_db = 0;
+    }
+    ed.master_db = 0;
+    edited();
+    const result = await api("api/automix", { name, project: project(), solo: [...ed.solo] });
+    if (ed.name !== name) return;
+    ed.master_db = result.master_db;
+    setStatus(`Auto Mix: the mix was ${result.lufs} LUFS - master set to ${formatMaster(result.master_db)}.`);
+  } catch (err) {
+    setStatus(`Auto Mix failed: ${err.message}`, true);
+  } finally {
+    ed.autoMixing = false;
+    if (ed.name === name) endEdit();
+    renderMaster();
+  }
+}
+
+function formatMaster(db) {
+  return `${db > 0 ? "+" : ""}${db} dB`;
+}
+
+$("auto-mix").addEventListener("click", autoMix);
 
 // ---------------------------------------------------------------------------
 // Level meter: the RMS of what the preview plays, after the track edits

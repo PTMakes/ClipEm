@@ -15,6 +15,7 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
                  "mono": false,       # left and right combined, on both sides
                  "regions": [{"start": s, "end": e, "db": g,
                               "channel": null}]}],  # 0 left / 1 right only, null both
+     "master_db": 0,                  # gain on the mix (the first audio track) only
      "crop": null}                    # or {"x", "y", "w", "h"}: the part of the frame
                                       # to keep, in source pixels (even numbers)
 
@@ -111,6 +112,8 @@ JOIN_FADE_SECONDS = 0.01
 MAX_GAIN_DB = 12.0
 MUTE_DB = -60.0  # at or below: silent
 MAX_OFFSET_SECONDS = 30.0
+MIN_MASTER_DB = -30.0  # the master slider's range
+MAX_MASTER_DB = 12.0
 
 PEAK_SAMPLE_RATE = 2000
 PEAKS_PER_SECOND = 50
@@ -234,6 +237,7 @@ def default_project(info):
              "gate_db": None, "mono": False, "regions": []}
             for track in info["audio"]
         ],
+        "master_db": 0.0,
         "crop": None,
     }
 
@@ -317,7 +321,9 @@ def normalize_project(project, info):
         source = project.get("mix_source")
         if source == "tracks" or (source is None and any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)):
             tracks[0]["muted"] = True
-    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks, "crop": normalize_crop(project.get("crop"), info)}
+    master_db = round(_clamp(_number(project.get("master_db")), MIN_MASTER_DB, MAX_MASTER_DB), 2)
+    return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks, "master_db": master_db,
+            "crop": normalize_crop(project.get("crop"), info)}
 
 
 def _even(value):
@@ -596,27 +602,30 @@ def _cut(graph, label, keep, audio):
     return out
 
 
-def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
+def build_graph(project, info, video_height=None, fps=None, audio="tracks", with_video=True):
     """(filter_complex, video label, [audio labels]) for an export.
 
     audio: "tracks" - the rebuilt mix, then every other track (MKV);
-           "mix" - the rebuilt mix only (MP4); None - no audio (pass 1)."""
+           "mix" - the rebuilt mix only (MP4); None - no audio (pass 1).
+    with_video=False leaves the video out (vout is None): for measuring audio."""
     graph = _Graph()
     duration = info["duration"]
     keep = project["keep"]
 
-    video = _cut(graph, "0:v:0", keep, audio=False)
-    post = []
-    crop = project.get("crop")
-    if crop:
-        post.append(f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']}")
-    if video_height:
-        post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
-    if fps:
-        post.append(f"fps={fps:g}")
-    post.append("format=yuv420p")
-    vout = graph.label("vout")
-    graph.add([video], post, [vout])
+    vout = None
+    if with_video:
+        video = _cut(graph, "0:v:0", keep, audio=False)
+        post = []
+        crop = project.get("crop")
+        if crop:
+            post.append(f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']}")
+        if video_height:
+            post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
+        if fps:
+            post.append(f"fps={fps:g}")
+        post.append("format=yuv420p")
+        vout = graph.label("vout")
+        graph.add([video], post, [vout])
 
     if not audio or not info["audio"]:
         return graph.text(), vout, []
@@ -650,12 +659,44 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks"):
     for track in tracks:
         if edited.get(track["index"]):
             outputs.append(_cut(graph, edited[track["index"]].pop(), keep, audio=True))
+    master_db = project.get("master_db") or 0.0
+    if outputs and master_db:
+        # The master slider is the gain on the mix, which is the first output.
+        louder = graph.label("g")
+        filters = [f"volume={_gain(master_db)}"]
+        if master_db > 0:
+            filters.append(f"alimiter=limit={MIX_LIMIT:.4f}:level=false:latency=1")
+        graph.add([outputs[0]], filters, [louder])
+        outputs[0] = louder
     return graph.text(), vout, outputs
 
 
 # ---------------------------------------------------------------------------
 # Export commands
 # ---------------------------------------------------------------------------
+
+def mix_loudness_command(ffmpeg, source, project, info):
+    """Command that prints the mix's integrated loudness (ebur128's summary,
+    on stderr) as it'd be exported - without the master gain."""
+    unmastered = dict(project, master_db=0.0)
+    graph, _, outputs = build_graph(unmastered, info, audio="mix", with_video=False)
+    graph += f";[{outputs[0]}]ebur128=framelog=quiet[measured]"
+    return [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-i", source,
+            "-filter_complex", graph, "-map", "[measured]", "-f", "null", "-"]
+
+
+def parse_integrated_lufs(stderr):
+    """The summary's "I: -14.2 LUFS" as a float, or None (silence is -inf)."""
+    found = re.findall(r"\bI:\s+(-?\d+(?:\.\d+)?|-inf)\s+LUFS", stderr)
+    if not found or found[-1] == "-inf":
+        return None
+    return float(found[-1])
+
+
+def auto_master_db(lufs):
+    """The master gain that takes a mix measured at `lufs` to LEVEL_TARGET_LUFS."""
+    return round(_clamp(LEVEL_TARGET_LUFS - lufs, MIN_MASTER_DB, MAX_MASTER_DB), 1)
+
 
 def output_track_titles(info):
     """MKV track names, in build_graph(audio="tracks")'s order."""

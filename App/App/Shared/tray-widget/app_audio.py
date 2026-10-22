@@ -38,6 +38,7 @@ IGNORED_APPS = {
     "canberra-gtk-play", "speech-dispatcher", "sd_espeak-ng", "pipewire",
     "wireplumber", "pulseaudio", "python", "python3", "pythonw",
     "clipem-editor", "clipem editor",
+    "clipem-app-capture",  # the Windows capture helper has its own audio session
 }
 # The same by the name an app gives its sound (application.name / the
 # session's display name), for streams whose binary doesn't say.

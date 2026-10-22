@@ -666,3 +666,34 @@ def test_real_cropped_export(tracks_clip, tmp_path):
     _run(clip_edit.full_quality_commands(FFMPEG, str(tracks_clip), project, info, str(mkv), str(mp4)))
     out = clip_edit.probe(FFMPEG, str(mp4))
     assert (out["width"], out["height"]) == (640, 360)
+
+
+def test_master_gain_is_on_the_mix_output_only():
+    info = _info()
+    project = clip_edit.default_project(info)
+    project["master_db"] = 3.0
+    graph, _vout, audio = clip_edit.build_graph(project, info, audio="tracks")
+    assert f"[{audio[0]}]" in graph.split("volume=3dB")[1].split(";")[0] and "alimiter" in graph
+    assert graph.count("volume=3dB") == 1
+    project["master_db"] = -4.0
+    graph, _vout, _audio = clip_edit.build_graph(project, info, audio="mix")
+    assert "volume=-4dB" in graph and "alimiter" not in graph
+
+
+def test_master_gain_is_saved_clamped_and_measured_without_itself():
+    info = _info()
+    assert clip_edit.normalize_project({"master_db": 99}, info)["master_db"] == clip_edit.MAX_MASTER_DB
+    assert clip_edit.normalize_project({}, info)["master_db"] == 0.0
+    project = clip_edit.default_project(info)
+    project["master_db"] = 6.0
+    cmd = clip_edit.mix_loudness_command("ffmpeg", "clip.mkv", project, info)
+    graph = cmd[cmd.index("-filter_complex") + 1]
+    assert "volume=6dB" not in graph and "vout" not in graph and "ebur128" in graph
+
+
+def test_auto_mix_master_aims_at_the_level_target():
+    assert clip_edit.parse_integrated_lufs("  Integrated loudness:\n    I:         -20.4 LUFS\n    Threshold: -31 LUFS") == -20.4
+    assert clip_edit.parse_integrated_lufs("    I:         -inf LUFS") is None
+    assert clip_edit.auto_master_db(-20.4) == 6.4
+    assert clip_edit.auto_master_db(-3.0) == -11.0
+    assert clip_edit.auto_master_db(-80.0) == clip_edit.MAX_MASTER_DB

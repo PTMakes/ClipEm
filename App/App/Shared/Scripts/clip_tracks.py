@@ -163,7 +163,8 @@ def build_tray_split_command(ffmpeg, clip_path, out_path, titles, pcm_paths):
         cmd += [f"-c:a:{index}", "aac", f"-b:a:{index}", f"{AUDIO_BITRATE_KBPS}k"]
     for index, title in enumerate(titles):
         cmd += [f"-metadata:s:a:{index}", f"title={title}"]
-    cmd += ["-disposition:a:0", "default", "-f", "matroska", out_path]
+    # The PCM inputs bring their own "default" flag: clear it so only Mix is default.
+    cmd += ["-disposition:a", "0", "-disposition:a:0", "default", "-f", "matroska", out_path]
     return cmd
 
 

@@ -461,7 +461,31 @@ body.sidebar-hidden #toggle-sidebar .arrow { transform: scaleX(-1); }
 
 
 /* The level meter: on the right of the video's space, the video beside it. */
-#player-wrap:has(#meter:not([hidden])) { padding-right: 58px; }
+#player-wrap:has(#meter:not([hidden])) { padding-right: 118px; }
+
+/* The master volume, beside the meter, and Auto Mix under it. */
+#master {
+  position: absolute;
+  top: 0;
+  right: 58px;
+  width: 60px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 0;
+}
+#master[hidden] { display: none; }
+#master-slider {
+  flex: 1 1 auto;
+  min-height: 40px;
+  writing-mode: vertical-lr;
+  direction: rtl;
+  width: 20px;
+}
+#master-value { white-space: nowrap; }
+#auto-mix { padding: 3px 6px; font-size: 11px; white-space: nowrap; }
 
 #meter {
   position: absolute;
