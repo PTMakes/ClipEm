@@ -10,7 +10,7 @@
   --selected: #dce9fb;
   --player-bg: #000000;
   --lane: #ebebf0;
-  --wave: #7b8fc6;
+  --wave: #5b93ee;
   --removed: rgba(20, 20, 28, 0.55);
   --selection: rgba(32, 128, 236, 0.25);
   --boost: #2f9e6e;
@@ -35,7 +35,7 @@
     --hover: #272731;
     --selected: #1b3250;
     --lane: #24242c;
-    --wave: #7b8fc6;
+    --wave: #afceff;
     --removed: rgba(0, 0, 0, 0.6);
     --selection: rgba(32, 128, 236, 0.3);
     --boost: #2f9e6e;
@@ -59,7 +59,7 @@
   --hover: #272731;
   --selected: #1b3250;
   --lane: #24242c;
-  --wave: #7b8fc6;
+  --wave: #afceff;
   --removed: rgba(0, 0, 0, 0.6);
   --selection: rgba(32, 128, 236, 0.3);
   --boost: #2f9e6e;
@@ -541,6 +541,7 @@ moves as the value changes. */
   padding: 0 4px;
   white-space: nowrap;
   font-size: 10px;
+  color: rgba(255, 255, 255, 0.8); /* it sits on the player's black, in both themes */
 }
 #master-number { min-width: 5ch; text-align: right; }
 #auto-mix {
