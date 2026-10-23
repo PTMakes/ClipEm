@@ -12,12 +12,14 @@ from tkinter import ttk
 
 PALETTES = {
     True: dict(BG="#15151a", PANEL="#1e1e25", TEXT="#f4f4f6", MUTED="#9a9aa6", LINE="#2e2e38",
-               ACCENT="#2080ec", HOVER="#272731", SELECTED="#1b3250", ERROR="#d6455d"),
+               ACCENT="#2080ec", HOVER="#272731", SELECTED="#1b3250", ERROR="#d6455d",
+               TRACK="#26262d", TRACK_EDGE="#0c0c10", TICK="#4a4a54"),
     False: dict(BG="#f4f4f6", PANEL="#ffffff", TEXT="#15151a", MUTED="#6b6b76", LINE="#dedee4",
-                ACCENT="#2080ec", HOVER="#ececf2", SELECTED="#dce9fb", ERROR="#d6455d"),
+                ACCENT="#2080ec", HOVER="#ececf2", SELECTED="#dce9fb", ERROR="#d6455d",
+                TRACK="#dbdbe2", TRACK_EDGE="#b4b4be", TICK="#a4a4b0"),
 }
 DARK = True
-BG = PANEL = TEXT = MUTED = LINE = ACCENT = HOVER = SELECTED = ERROR = ""  # set by use_mode()
+BG = PANEL = TEXT = MUTED = LINE = ACCENT = HOVER = SELECTED = ERROR = TRACK = TRACK_EDGE = TICK = ""  # set by use_mode()
 ON_ACCENT = "#ffffff"  # text on the accent color (selections), both modes
 
 
@@ -152,9 +154,6 @@ class RedSlider(tk.Canvas):
     RED = "#2080ec"
     RED_HI = "#6f95ec"
     RED_EDGE = "#0e418e"
-    TRACK = "#26262d"
-    TRACK_EDGE = "#0c0c10"
-    TICK = "#4a4a54"
     THUMB_W = 18
     BAR_H = 16
 
@@ -220,10 +219,10 @@ class RedSlider(tk.Canvas):
         mid = height / 2
         red, red_hi, edge = ((self.RED, self.RED_HI, self.RED_EDGE) if self._enabled
                              else ("#3a5a82", "#5a7396", "#2a3f5a"))
-        self._round(1, top, width - 1, top + self.BAR_H, 6, self.TRACK, self.TRACK_EDGE)
+        self._round(1, top, width - 1, top + self.BAR_H, 6, TRACK, TRACK_EDGE)
         for i in range(1, 10):
             x = left + (right - left) * i / 10
-            self.create_line(x, mid - 3, x, mid + 3, fill=self.TICK)
+            self.create_line(x, mid - 3, x, mid + 3, fill=TICK)
         fraction = (self.get() - self._from) / ((self._to - self._from) or 1)
         x = left + (right - left) * min(max(fraction, 0.0), 1.0)
         self.create_line(4, mid, x, mid, fill=red, width=2)

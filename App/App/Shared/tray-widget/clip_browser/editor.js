@@ -786,7 +786,7 @@ function drawWaveform(index) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#4a4a6d";
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#7b8fc6";
   const offset = trackOf(index).offset;
   const perPixel = duration() / width;
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.
@@ -1495,6 +1495,8 @@ function readLevels() {
   });
 }
 
+const METER_PAD = 5; // room for the half-height of the 0 and -60 labels
+
 function drawMeter() {
   const canvas = meter.canvas;
   if (canvas.hidden) return;
@@ -1508,8 +1510,9 @@ function drawMeter() {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
   const w = width / ratio;
-  const top = 12;
-  const bottom = height / ratio - 12;
+  // Bars span the master slider's full length (its margin matches METER_PAD).
+  const top = METER_PAD;
+  const bottom = height / ratio - METER_PAD;
   const yOf = (db) => top + (clamp(db, METER_FLOOR_DB, 0) / METER_FLOOR_DB) * (bottom - top);
   ctx.clearRect(0, 0, w, height / ratio);
 

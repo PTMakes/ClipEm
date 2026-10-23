@@ -10,12 +10,18 @@
   --selected: #dce9fb;
   --player-bg: #000000;
   --lane: #ebebf0;
-  --wave: #4a4a6d;
+  --wave: #7b8fc6;
   --removed: rgba(20, 20, 28, 0.55);
   --selection: rgba(32, 128, 236, 0.25);
   --boost: #2f9e6e;
   --cut: #d6455d;
   --warn: #b7791f;
+  --track-top: #d2d2da;
+  --track-bottom: #e4e4ea;
+  --track-edge: #b4b4be;
+  --track-tick: rgba(0, 0, 0, 0.28);
+  --track-shadow: rgba(0, 0, 0, 0.25);
+  --track-gloss: rgba(255, 255, 255, 0.7);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -29,11 +35,17 @@
     --hover: #272731;
     --selected: #1b3250;
     --lane: #24242c;
-    --wave: #4a4a6d;
+    --wave: #7b8fc6;
     --removed: rgba(0, 0, 0, 0.6);
     --selection: rgba(32, 128, 236, 0.3);
     --boost: #2f9e6e;
     --warn: #b7791f;
+    --track-top: #202026;
+    --track-bottom: #2e2e35;
+    --track-edge: #0c0c10;
+    --track-tick: rgba(255, 255, 255, 0.2);
+    --track-shadow: rgba(0, 0, 0, 0.7);
+    --track-gloss: rgba(255, 255, 255, 0.06);
   }
 }
 
@@ -47,11 +59,17 @@
   --hover: #272731;
   --selected: #1b3250;
   --lane: #24242c;
-  --wave: #4a4a6d;
+  --wave: #7b8fc6;
   --removed: rgba(0, 0, 0, 0.6);
   --selection: rgba(32, 128, 236, 0.3);
   --boost: #2f9e6e;
   --warn: #b7791f;
+  --track-top: #202026;
+  --track-bottom: #2e2e35;
+  --track-edge: #0c0c10;
+  --track-tick: rgba(255, 255, 255, 0.2);
+  --track-shadow: rgba(0, 0, 0, 0.7);
+  --track-gloss: rgba(255, 255, 255, 0.06);
 }
 
 * { box-sizing: border-box; }
@@ -509,20 +527,22 @@ meter beside it, the reading on its own row below both. */
   writing-mode: vertical-lr;
   direction: rtl;
   width: 20px;
-  height: 100%;
-  margin: 0;
+  height: auto;
+  margin: 5px 0; /* the meter's bars start and end here (METER_PAD in editor.js) */
 }
-/* The number is left-aligned and the unit right-aligned in a fixed-width row,
-so neither moves as the value changes. */
+/* The number sits right against the unit, in a fixed-width box so "dB" never
+moves as the value changes. */
 #master-value {
   grid-column: 1 / -1;
   grid-row: 2;
   display: flex;
-  justify-content: space-between;
+  justify-content: flex-end;
+  gap: 3px;
   padding: 0 4px;
   white-space: nowrap;
   font-size: 10px;
 }
+#master-number { min-width: 5ch; text-align: right; }
 #auto-mix {
   grid-column: 1 / -1;
   grid-row: 3;
@@ -921,7 +941,7 @@ input[type="range"] {
   --fill: 50%;
   --red: #2080ec;
   --red-hi: #6f95ec;
-  --tick: rgba(255, 255, 255, 0.2);
+  --tick: var(--track-tick);
   --fill-size: var(--fill) 2px;
   --fill-pos: 0 50%;
   --tick-dir: 90deg;
@@ -938,13 +958,13 @@ input[type="range"]:disabled { opacity: 0.45; cursor: default; }
 input[type="range"]::-webkit-slider-runnable-track {
   height: 16px;
   border-radius: 6px;
-  border: 1px solid #0c0c10;
+  border: 1px solid var(--track-edge);
   box-sizing: border-box;
   background:
     linear-gradient(var(--red), var(--red)) var(--fill-pos) / var(--fill-size) no-repeat,
     linear-gradient(var(--tick-dir), var(--tick) 1px, transparent 1px) var(--tick-pos) / var(--tick-size) repeat-x,
-    linear-gradient(#202026, #2e2e35);
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.7), 0 1px 0 rgba(255, 255, 255, 0.06);
+    linear-gradient(var(--track-top), var(--track-bottom));
+  box-shadow: inset 0 1px 3px var(--track-shadow), 0 1px 0 var(--track-gloss);
 }
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
