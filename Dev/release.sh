@@ -245,11 +245,12 @@ if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
 fi
 mkdir -p "$DIST_DIR"
 TEST_LOG="$DIST_DIR/test_results.txt"
-if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q tests); then
+if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q -rs tests); then
   cat "$TEST_LOG"
   die "Tests FAILED - see $TEST_LOG"
 fi
-tail -n 3 "$TEST_LOG"
+tail -n 1 "$TEST_LOG"
+grep '^SKIPPED' "$TEST_LOG" || true  # why any test was skipped
 
 if [[ -n "$PRE_COMMIT_MSG" ]]; then
   step "Committing pre-release changes"
