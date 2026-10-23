@@ -1,6 +1,8 @@
 """ClipEm's look for a Tk window - the clip editor's light or dark palette
 (tray-widget/clip_browser/app.css), chosen by Settings > "Use Dark Mode"
-(run_config.json "dark_mode", dark by default). Call apply_theme() right after
+(run_config.json "dark_mode", dark by default), with any colors changed in
+Settings > UI Customization on top (run_config.json "custom_colors", per
+mode - see COLOR_SETTINGS). Call apply_theme() right after
 creating the root window, before any widget exists: the classic widgets
 (tk.Label, tk.Button...) take their colors from Tk's option database, which
 only applies to widgets made afterwards. The palette lives in this module's
@@ -10,39 +12,39 @@ import sys
 import tkinter as tk
 from tkinter import ttk
 
-PALETTES = {
-    True: dict(BG="#15151a", PANEL="#1e1e25", TEXT="#f4f4f6", MUTED="#9a9aa6", LINE="#2e2e38",
-               ACCENT="#2080ec", HOVER="#272731", SELECTED="#1b3250", ERROR="#d6455d",
-               TRACK="#26262d", TRACK_EDGE="#0c0c10", TICK="#4a4a54"),
-    False: dict(BG="#f4f4f6", PANEL="#ffffff", TEXT="#15151a", MUTED="#6b6b76", LINE="#dedee4",
-                ACCENT="#2080ec", HOVER="#ececf2", SELECTED="#dce9fb", ERROR="#d6455d",
-                TRACK="#dbdbe2", TRACK_EDGE="#b4b4be", TICK="#a4a4b0"),
-}
+from ui_colors import (  # noqa: F401 - the palette is read through this module too
+    COLOR_SETTINGS,
+    PALETTES,
+    colors_for,
+    configured_theme,
+    css_overrides,
+    is_hex_color,
+    mix,
+    mode_key,
+    theme_from_config,
+)
+
 DARK = True
-BG = PANEL = TEXT = MUTED = LINE = ACCENT = HOVER = SELECTED = ERROR = TRACK = TRACK_EDGE = TICK = ""  # set by use_mode()
-ON_ACCENT = "#ffffff"  # text on the accent color (selections), both modes
+BG = PANEL = TEXT = MUTED = LINE = ACCENT = ON_ACCENT = HOVER = SELECTED = ERROR = TRACK = TRACK_EDGE = TICK = ""
+WAVE = LANE = PLAYHEAD = PLAYER_BG = BOOST = WARN = ""  # all set by use_mode()
 
 
-def use_mode(dark):
+def use_mode(dark, custom_colors=None):
     global DARK
     DARK = bool(dark)
-    globals().update(PALETTES[DARK])
+    globals().update(colors_for(DARK, custom_colors))
 
 
 def configured_dark():
     """Settings > Use Dark Mode; dark when unset or unreadable."""
-    try:
-        from clipem_common import load_run_config
-        return bool(load_run_config().get("dark_mode", True))
-    except Exception:
-        return True
+    return configured_theme()[0]
 
 
 use_mode(True)
 
 
 def apply_theme(root):
-    use_mode(configured_dark())
+    use_mode(*configured_theme())
     root.configure(background=BG)
     _classic_widgets(root)
     _themed_widgets(root)
@@ -148,16 +150,14 @@ class RedSlider(tk.Canvas):
     """The editor's slider (clip_browser/app.css): a dark grooved bar with a
     tick every tenth, a red line from the start to the thumb, and a red thumb.
     Pressing anywhere on the bar jumps the thumb there; dragging moves it.
-    Takes a ttk.Scale's from_/to/variable/command, plus state() and
+    Takes a ttk.Scale's from_/to/variable/command, plus default (double-click
+    resets to it), plus state() and
     configure(state=...) for enabling and disabling."""
 
-    RED = "#2080ec"
-    RED_HI = "#6f95ec"
-    RED_EDGE = "#0e418e"
     THUMB_W = 18
     BAR_H = 16
 
-    def __init__(self, master, from_=0.0, to=1.0, variable=None, command=None, height=22, **kw):
+    def __init__(self, master, from_=0.0, to=1.0, variable=None, command=None, height=22, default=None, **kw):
         kw.setdefault("background", BG)
         kw.setdefault("highlightthickness", 0)
         kw.setdefault("borderwidth", 0)
@@ -165,11 +165,13 @@ class RedSlider(tk.Canvas):
         self._from, self._to = float(from_), float(to)
         self._variable = variable or tk.DoubleVar(master, value=self._from)
         self._command = command
+        self._default = default  # double-click resets to this, when given
         self._enabled = True
         self._trace = self._variable.trace_add("write", lambda *_: self._draw())
         self.bind("<Configure>", lambda _e: self._draw())
         self.bind("<Button-1>", self._press)
         self.bind("<B1-Motion>", self._press)
+        self.bind("<Double-Button-1>", self._reset)
         self.bind("<Destroy>", self._forget, add="+")
 
     def _forget(self, event):
@@ -200,6 +202,12 @@ class RedSlider(tk.Canvas):
         half = self.THUMB_W / 2
         return half, max(self.winfo_width() - half, half + 1)
 
+    def _reset(self, _event):
+        if self._enabled and self._default is not None:
+            self.set(self._default)
+            if self._command:
+                self._command(self.get())
+
     def _press(self, event):
         if not self._enabled:
             return
@@ -217,8 +225,8 @@ class RedSlider(tk.Canvas):
         left, right = self._span()
         top = (height - self.BAR_H) / 2
         mid = height / 2
-        red, red_hi, edge = ((self.RED, self.RED_HI, self.RED_EDGE) if self._enabled
-                             else ("#3a5a82", "#5a7396", "#2a3f5a"))
+        red = ACCENT if self._enabled else mix(ACCENT, BG, 0.55)
+        red_hi, edge = mix(red, "#ffffff", 0.35), mix(red, "#000000", 0.55)
         self._round(1, top, width - 1, top + self.BAR_H, 6, TRACK, TRACK_EDGE)
         for i in range(1, 10):
             x = left + (right - left) * i / 10

@@ -63,6 +63,15 @@ function formatTime(seconds) {
   return `${sign}${m}:${s}`;
 }
 
+// Double-click puts a dB slider back to `db`, through its own input/change handlers.
+function resetOnDoubleClick(slider, db) {
+  slider.addEventListener("dblclick", () => {
+    slider.value = dbToSlider(db);
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
 function formatDb(db) {
   if (db <= MUTE_DB) return "Muted";
   return `${db > 0 ? "+" : ""}${Math.round(db * 10) / 10} dB`;
@@ -718,7 +727,8 @@ function audioRow(index) {
     scheduleSave();
   });
   slider.addEventListener("change", endEdit);
-  slider.title = "Volume of the whole track";
+  resetOnDoubleClick(slider, 0);
+  slider.title = "Volume of the whole track (double-click: 0 dB)";
   volume.append(el("span", "small muted", "Vol"), slider, value);
   head.append(titleLine, volume);
 
@@ -1060,6 +1070,7 @@ function renderPanel() {
   slider.addEventListener("change", () => {
     endEdit();
   });
+  resetOnDoubleClick(slider, 0);
   const mute = el("button", null, "Mute section");
   mute.addEventListener("click", () => {
     setRangeVolume(MUTE_DB);
@@ -1390,6 +1401,44 @@ new MutationObserver((records) => {
 }).observe(document.body, { childList: true, subtree: true });
 syncAllSliderFills(document);
 
+// Drags a slider ourselves with the pointer captured, so it keeps following the
+// mouse over buttons and anything else until the button is released.
+const SLIDER_THUMB = 18; // px, the thumb's length along the track (app.css)
+document.addEventListener("pointerdown", (e) => {
+  const slider = e.target;
+  if (!(slider instanceof HTMLInputElement) || slider.type !== "range" || slider.disabled || e.button !== 0) return;
+  e.preventDefault();
+  slider.focus({ preventScroll: true });
+  slider.setPointerCapture(e.pointerId);
+  document.body.classList.add("dragging-slider");
+  const vertical = getComputedStyle(slider).writingMode.startsWith("vertical");
+  const min = Number(slider.min);
+  const max = Number(slider.max);
+  const step = Number(slider.step) || 1;
+  const follow = (ev) => {
+    const rect = slider.getBoundingClientRect();
+    const room = Math.max(1, (vertical ? rect.height : rect.width) - SLIDER_THUMB);
+    // The vertical master slider has its minimum at the bottom.
+    const along = vertical ? rect.bottom - ev.clientY : ev.clientX - rect.left;
+    const fraction = clamp((along - SLIDER_THUMB / 2) / room, 0, 1);
+    const value = clamp(min + Math.round((fraction * (max - min)) / step) * step, min, max);
+    if (String(value) === slider.value) return;
+    slider.value = value;
+    slider.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const finish = () => {
+    slider.removeEventListener("pointermove", follow);
+    slider.removeEventListener("pointerup", finish);
+    slider.removeEventListener("pointercancel", finish);
+    document.body.classList.remove("dragging-slider");
+    slider.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  slider.addEventListener("pointermove", follow);
+  slider.addEventListener("pointerup", finish);
+  slider.addEventListener("pointercancel", finish);
+  follow(e);
+}, true);
+
 masterSlider.addEventListener("input", () => {
   beginEdit();
   ed.master_db = Number(masterSlider.value);
@@ -1475,6 +1524,11 @@ function meterColors() {
 }
 
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { meter.colors = null; });
+// Settings changed Dark Mode or a color (browser.js loadTheme): redraw with them.
+document.addEventListener("clipem-theme", () => {
+  meter.colors = null;
+  timeline.querySelectorAll(".audio-lane[data-track]").forEach((lane) => drawWaveform(Number(lane.dataset.track)));
+});
 
 // RMS with an instant rise and a smooth fall, like a hardware meter.
 function readLevels() {
@@ -2016,5 +2070,6 @@ async function loadEditors() {
 loadEditors();
 loadClips();
 setInterval(loadClips, POLL_MS);
+setInterval(loadTheme, POLL_MS);
 pollExport();
 requestAnimationFrame(frame);

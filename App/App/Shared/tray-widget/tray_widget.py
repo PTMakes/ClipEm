@@ -149,20 +149,29 @@ else:
     _TrayIcon = pystray.Icon
 
 
+_menus_dark = None  # what use_dark_menus() last set
+
+
 def use_dark_menus():
     """Makes the tray menu (a plain Win32 popup menu) dark, or light when
-    Settings > Use Dark Mode is off. Windows has no
+    Settings > Use Dark Mode is off - called at startup and on each poll, so
+    a Save there applies to the next menu built. Windows has no
     public API for that: uxtheme's unnamed SetPreferredAppMode (ordinal 135,
     Windows 10 1903+) with ForceDark/ForceLight, then FlushMenuThemes (136) so menus
     made afterwards pick it up. Older Windows: they stay light."""
+    global _menus_dark
     if sys.platform != "win32":
         return
+    dark = bool(load_run_config().get("dark_mode", True))
+    if dark == _menus_dark:
+        return
+    _menus_dark = dark
     try:
         import ctypes
 
         uxtheme = ctypes.WinDLL("uxtheme")
         force_dark, force_light = 2, 3
-        mode = force_dark if load_run_config().get("dark_mode", True) else force_light
+        mode = force_dark if dark else force_light
         set_preferred_app_mode = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int)((135, uxtheme))
         flush_menu_themes = ctypes.WINFUNCTYPE(None)((136, uxtheme))
         set_preferred_app_mode(mode)
@@ -733,6 +742,7 @@ class TrayApp:
                 if self.recording_active and record_bytes:
                     record_text += f" ({format_size(record_bytes)})"
                 self.icon.title = f"ClipEm: Replay Buffer {replay_text}, Recording {record_text}"
+                use_dark_menus()  # Settings > Use Dark Mode may have changed
                 self.icon.update_menu()
 
                 self.stuck_screen.tick(self.client, self._stuck_check_enabled, self._black_check_enabled)

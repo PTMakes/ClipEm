@@ -1198,6 +1198,7 @@ class Wizard(tk.Tk):
         self.sound_volume_label = ttk.Label(volume_row, width=5)
         scale = dark_theme.RedSlider(
             volume_row, from_=0.0, to=1.0, variable=self.sound_volume_var,
+            default=obs_config.DEFAULT_CLIP_SOUND["volume"],
             command=lambda _val: self._update_volume_label(),
         )
         scale.pack(side="left", fill="x", expand=True)

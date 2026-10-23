@@ -45,6 +45,7 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # autostart entry (autostart.apply_boot_autostart).
 sys.path.insert(0, INSTALLER_DIR)
 import bug_report  # noqa: E402
+import color_picker  # noqa: E402
 import dark_theme  # noqa: E402
 import editor_install  # noqa: E402
 import file_dialogs  # noqa: E402
@@ -277,6 +278,19 @@ def main():
         os.remove(RAISE_PATH)  # left from a dialog that has since closed
     except OSError:
         pass
+    # Saving new colors (or Dark Mode) reopens the window, built with them.
+    tab = None
+    while True:
+        tab = open_dialog(tab)
+        if tab is None:
+            break
+
+
+def open_dialog(start_tab=None):
+    """Builds and runs the Settings window, on start_tab (Basic Settings by
+    default). Returns the tab to reopen it on when its Save changed the
+    colors, which only a newly built window shows - else None."""
+    reopen_on = {"tab": None}
     ws_load_error = None
     try:
         ws_settings = obs_config.load_obs_websocket_settings()
@@ -467,6 +481,7 @@ def main():
     sound_volume_var = tk.IntVar(value=round(initial_obs_settings["clip_sound"]["volume"] * 100))
     volume_scale = dark_theme.RedSlider(
         volume_row, from_=0, to=100, variable=sound_volume_var, width=px(180), height=px(24),
+        default=round(obs_config.DEFAULT_CLIP_SOUND["volume"] * 100),
     )
     volume_scale.pack(side="left")
     volume_label = tk.Label(volume_row, width=5, anchor="w")
@@ -851,11 +866,95 @@ def main():
     show_editor_choice()
 
     section("Appearance", TAB_TRAY)
-    dark_mode_var = tk.BooleanVar(value=bool(run_config.get("dark_mode", True)))
+    saved_dark, saved_colors = dark_theme.theme_from_config(run_config)
+    dark_mode_var = tk.BooleanVar(value=saved_dark)
     tk.Checkbutton(
-        frame, text="Use Dark Mode (reopen the editor and this window to apply)", variable=dark_mode_var,
+        frame, text="Use Dark Mode", variable=dark_mode_var, command=lambda: show_colors(),
     ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
+
+    # Each mode keeps its own colors; the rows show the one Use Dark Mode is
+    # set to. chosen_colors[dark][key] is what each row shows, by
+    # dark_theme.COLOR_SETTINGS key.
+    def colors_by_key(dark, custom=None):
+        palette = dark_theme.colors_for(dark, custom)
+        return {key: palette[name] for key, _label, name, _css in dark_theme.COLOR_SETTINGS}
+
+    default_colors = {dark: colors_by_key(dark) for dark in (True, False)}
+    chosen_colors = {dark: colors_by_key(dark, saved_colors) for dark in (True, False)}
+
+    def custom_colors():
+        """run_config's "custom_colors" for what the rows show: only the
+        colors that differ from the defaults."""
+        custom = {}
+        for dark in (True, False):
+            changed = {key: value for key, value in chosen_colors[dark].items()
+                       if value != default_colors[dark][key]}
+            if changed:
+                custom[dark_theme.mode_key(dark)] = changed
+        return custom
+
+    initial_appearance = (saved_dark, custom_colors())
+    colors_label = tk.Label(frame, fg=dark_theme.MUTED, justify="left", wraplength=px(560))
+    colors_label.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
+    next_row += 1
+    colors_grid = tk.Frame(frame)
+    colors_grid.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+    next_row += 1
+    color_vars, color_swatches = {}, {}
+    per_column = (len(dark_theme.COLOR_SETTINGS) + 1) // 2
+
+    def shown_mode():
+        return bool(dark_mode_var.get())
+
+    def show_color(key):
+        color = chosen_colors[shown_mode()][key]
+        color_swatches[key].configure(background=color)
+        if color_vars[key].get() != color:
+            color_vars[key].set(color)
+
+    def show_colors():
+        colors_label.config(text=f"{'Dark' if shown_mode() else 'Light'} Mode colors - click a square to pick "
+                                 "one, or type its hex code. Save applies them everywhere.")
+        for key in color_vars:
+            show_color(key)
+
+    def on_hex_typed(key):
+        color = color_picker.normalize_hex(color_vars[key].get())
+        if color:
+            chosen_colors[shown_mode()][key] = color
+            color_swatches[key].configure(background=color)
+
+    def pick_color(key, label):
+        color = color_picker.ask_color(root, chosen_colors[shown_mode()][key], f"{label} - ClipEm", px)
+        if color:
+            chosen_colors[shown_mode()][key] = color
+            show_color(key)
+
+    for index, (key, label, _name, _css) in enumerate(dark_theme.COLOR_SETTINGS):
+        row, column = index % per_column, index // per_column * 3
+        tk.Label(colors_grid, text=label).grid(
+            row=row, column=column, sticky="w", padx=(px(28) if column else 0, px(8)), pady=px(2))
+        swatch = tk.Frame(colors_grid, width=px(22), height=px(22), cursor="hand2",
+                          highlightthickness=1, highlightbackground=dark_theme.MUTED)
+        swatch.grid(row=row, column=column + 1, pady=px(2))
+        swatch.bind("<Button-1>", lambda _e, k=key, t=label: pick_color(k, t))
+        color_vars[key] = tk.StringVar()
+        entry = tk.Entry(colors_grid, textvariable=color_vars[key], width=8, font="TkFixedFont")
+        entry.grid(row=row, column=column + 2, sticky="w", padx=(px(6), 0), pady=px(2))
+        color_vars[key].trace_add("write", lambda *_a, k=key: on_hex_typed(k))
+        # An unfinished code shows the color again.
+        entry.bind("<FocusOut>", lambda _e, k=key: show_color(k))
+        color_swatches[key] = swatch
+
+    def reset_colors():
+        chosen_colors[shown_mode()] = dict(default_colors[shown_mode()])
+        show_colors()
+
+    tk.Button(frame, text="Reset to Defaults", command=reset_colors).grid(
+        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
+    next_row += 1
+    show_colors()
 
     section("Tray Menu", TAB_TRAY)
     recording_item_var = tk.BooleanVar(value=bool(run_config.get("show_recording_item", True)))
@@ -1494,12 +1593,19 @@ def main():
             run_config["clip_editors_disabled"] = bool(editors_off_var.get())
             for key, var in menu_item_vars.items():  # read by the tray menu
                 run_config[key] = bool(var.get())
-            run_config["dark_mode"] = bool(dark_mode_var.get())
+            appearance = (bool(dark_mode_var.get()), custom_colors())
+            run_config["dark_mode"], run_config["custom_colors"] = appearance
+            if not run_config["custom_colors"]:
+                del run_config["custom_colors"]
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
         except Exception as exc:
             messagebox.showerror("Save Failed", f"Couldn't save screen-detection and disk-space settings: {exc}")
             return
+        # The editor and the tray menu pick the colors up themselves (they
+        # poll run_config); this window is rebuilt with them once it closes.
+        if appearance != initial_appearance:
+            reopen_on["tab"] = current_tab["name"]
 
         try:
             outcome = save_obs_settings(obs_settings, initial_obs_settings)
@@ -1598,7 +1704,7 @@ def main():
     height = min(width * 9 // 16, screen_height - px(80))
     root.geometry(f"{width}x{height}")
     root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))
-    show_tab(TAB_BASIC)
+    show_tab(start_tab if start_tab in TABS else TAB_BASIC)
 
     guard_combobox_wheel(page)
     # Opened from the tray menu - make sure it isn't hidden behind whatever
@@ -1606,6 +1712,7 @@ def main():
     bring_to_front(root)
     watch_for_reopen(root)
     root.mainloop()
+    return reopen_on["tab"]
 
 
 if __name__ == "__main__":

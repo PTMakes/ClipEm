@@ -68,6 +68,7 @@ import editor_install  # noqa: E402
 import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
+import ui_colors  # noqa: E402
 from autostart import desktop_exec_arg  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
@@ -741,6 +742,13 @@ class ClipBrowserServer(ThreadingHTTPServer):
         return f"http://127.0.0.1:{self.server_address[1]}/{LAUNCH_PATH}/#{self.token}"
 
 
+def page_theme():
+    """Settings > Use Dark Mode and its custom colors, for the page: its
+    data-theme and the CSS that sets the changed colors."""
+    dark, custom = ui_colors.theme_from_config(load_run_config())
+    return {"theme": "dark" if dark else "light", "css": ui_colors.css_overrides(dark, custom)}
+
+
 class Handler(BaseHTTPRequestHandler):
     server: ClipBrowserServer
 
@@ -857,10 +865,16 @@ class Handler(BaseHTTPRequestHandler):
             return
         folder = self.server.current_folder()
         if route in UI_FILES and UI_FILES[route] == "index.html":
-            theme = "dark" if load_run_config().get("dark_mode", True) else "light"
+            theme = page_theme()
             with open(os.path.join(UI_DIR, "index.html"), "rb") as page:
-                html = page.read().replace(b'<html lang="en">', b'<html lang="en" data-theme="%s">' % theme.encode(), 1)
+                html = page.read().replace(
+                    b'<html lang="en">', b'<html lang="en" data-theme="%s">' % theme["theme"].encode(), 1)
+            style = f'<style id="custom-colors">{theme["css"]}</style>\n</head>'
+            html = html.replace(b"</head>", style.encode(), 1)
             self._send(200, html, "text/html; charset=utf-8")
+        elif route == "api/theme":
+            # Polled by the page (browser.js), so Settings' Save shows straight away.
+            self._json(page_theme())
         elif route in UI_FILES:
             self._send_file(os.path.join(UI_DIR, UI_FILES[route]))
         elif route == "api/clips":

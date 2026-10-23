@@ -427,6 +427,28 @@ function selectedClip() {
   return state.clips.find((c) => c.name === state.selected) || null;
 }
 
+// Settings > Use Dark Mode and its colors (clip_browser.py's api/theme),
+// polled so a Save there shows here straight away. Tells editor.js, whose
+// canvases read the colors when they draw.
+async function loadTheme() {
+  let theme;
+  try {
+    theme = await api("api/theme");
+  } catch (err) {
+    return; // loadClips reports ClipEm being unreachable
+  }
+  const root = document.documentElement;
+  let style = $("custom-colors");
+  if (!style) {
+    style = document.head.appendChild(document.createElement("style"));
+    style.id = "custom-colors";
+  }
+  if (root.dataset.theme === theme.theme && style.textContent === theme.css) return;
+  root.dataset.theme = theme.theme;
+  style.textContent = theme.css;
+  document.dispatchEvent(new Event("clipem-theme"));
+}
+
 async function loadClips() {
   try {
     const data = await api("api/clips");
@@ -435,6 +457,9 @@ async function loadClips() {
     const first = state.clips.length === 0 && state.selected === null;
     state.clips = data.clips;
     state.folder = data.folder;
+    const folderBox = $("folder-path");
+    folderBox.value = data.folder;
+    folderBox.title = data.folder;
     renderList();
     if (!selectedClip()) {
       // First load (or the selected clip was deleted): open the latest one.

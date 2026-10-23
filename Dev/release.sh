@@ -18,12 +18,16 @@
 #   6. Commit    - "Update <version>", then (asked first) push main and
 #                  publish the draft release, which tags the pushed commit.
 #
-# Usage: ./release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
+# Usage: ./release.sh [--allow-dirty] [--no-upload] [--AutoUploadOn] [--dev] [patch|minor|major|X.Y.Z]
 #   (bump defaults to "patch")
 #   -h, --help     show this help and exit
 #   --allow-dirty  build from uncommitted changes without committing them
 #                  first (the build info records it)
 #   --no-upload    stop after step 3 - for a dry run; nothing is published
+#   --AutoUploadOn answer yes to the "Upload ... now?" question (the draft
+#                  release, or the dev prerelease with --dev) so the run
+#                  needs no terminal for it. The final "Push main and
+#                  publish" question is still asked: that one goes live.
 #   --dev          a test build of HEAD for the "Latest" update channel:
 #                  version <next>-dev.<UTC timestamp>, uploaded over the
 #                  rolling "dev" prerelease. Nothing is committed and the
@@ -33,6 +37,7 @@ set -euo pipefail
 
 ALLOW_DIRTY=0
 UPLOAD=1
+AUTO_UPLOAD=0
 DEV=0
 BUMP="patch"
 for arg in "$@"; do
@@ -43,6 +48,7 @@ for arg in "$@"; do
       exit 0 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --no-upload) UPLOAD=0 ;;
+    --AutoUploadOn) AUTO_UPLOAD=1 ;;
     --dev) DEV=1 ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *) BUMP="$arg" ;;
@@ -75,6 +81,29 @@ step() {
   STEP_NUM=$((STEP_NUM + 1))
   STEP_STARTED=$SECONDS
   echo -e "\n=== [$STEP_NUM${STEP_TOTAL:+/$STEP_TOTAL}] $* ==="
+}
+
+# run_with_progress <log> <command...> - runs the command with its output in
+# <log> and shows it's alive meanwhile: a live elapsed-time line (with pytest's
+# percentage) on a terminal, a line every 10s otherwise. Returns its status.
+run_with_progress() {
+  local log="$1" status=0 started=$SECONDS pid pct elapsed
+  shift
+  "$@" > "$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    elapsed=$((SECONDS - started))
+    pct="$(grep -o '\[ *[0-9]*%\]' "$log" 2>/dev/null | tail -n 1 || true)"
+    if [[ -t 1 ]]; then
+      printf '\r\033[K   running tests... %s %s' "$(fmt_duration "$elapsed")" "$pct"
+    elif (( elapsed > 0 && elapsed % 10 == 0 )); then
+      echo "   running tests... $(fmt_duration "$elapsed") $pct"
+    fi
+    sleep 1
+  done
+  wait "$pid" || status=$?
+  [[ -t 1 ]] && printf '\r\033[K'
+  return "$status"
 }
 
 # --- Versions --------------------------------------------------------------
@@ -216,7 +245,7 @@ if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
 fi
 mkdir -p "$DIST_DIR"
 TEST_LOG="$DIST_DIR/test_results.txt"
-if ! (cd "$SCRIPT_DIR" && python3 -m pytest -q tests) > "$TEST_LOG" 2>&1; then
+if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q tests); then
   cat "$TEST_LOG"
   die "Tests FAILED - see $TEST_LOG"
 fi
@@ -392,9 +421,14 @@ RELEASE_FILES=(
   "$RELEASE_DIR/clipem-latest.json" "$RELEASE_DIR/clipem-latest.json.sig"
 )
 # Nothing has left this machine yet - ask before anything does.
-[[ -t 0 ]] || die "No terminal to confirm the upload - nothing was published. Release files: $RELEASE_DIR"
 if [[ "$DEV" == 1 ]]; then upload_target="the \"dev\" prerelease"; else upload_target="a draft GitHub release $TAG"; fi
-read -rp "Upload $new_version to $upload_target now? [y/N] " answer
+if [[ "$AUTO_UPLOAD" == 1 ]]; then
+  answer=y
+  echo "--AutoUploadOn: uploading $new_version to $upload_target without asking."
+else
+  [[ -t 0 ]] || die "No terminal to confirm the upload - nothing was published (or pass --AutoUploadOn). Release files: $RELEASE_DIR"
+  read -rp "Upload $new_version to $upload_target now? [y/N] " answer
+fi
 if [[ ! "$answer" =~ ^[Yy] ]]; then
   end_step
   echo -e "\nUpload cancelled - nothing was published. Release files: $RELEASE_DIR"

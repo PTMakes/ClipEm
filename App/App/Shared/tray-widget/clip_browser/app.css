@@ -9,10 +9,11 @@
   --hover: #ececf2;
   --selected: #dce9fb;
   --player-bg: #000000;
+  --playhead: #ff4d6a;
   --lane: #ebebf0;
   --wave: #5b93ee;
   --removed: rgba(20, 20, 28, 0.55);
-  --selection: rgba(32, 128, 236, 0.25);
+  --selection: color-mix(in srgb, var(--accent) 25%, transparent);
   --boost: #2f9e6e;
   --cut: #d6455d;
   --warn: #b7791f;
@@ -37,7 +38,7 @@
     --lane: #24242c;
     --wave: #afceff;
     --removed: rgba(0, 0, 0, 0.6);
-    --selection: rgba(32, 128, 236, 0.3);
+    --selection: color-mix(in srgb, var(--accent) 30%, transparent);
     --boost: #2f9e6e;
     --warn: #b7791f;
     --track-top: #202026;
@@ -61,7 +62,7 @@
   --lane: #24242c;
   --wave: #afceff;
   --removed: rgba(0, 0, 0, 0.6);
-  --selection: rgba(32, 128, 236, 0.3);
+  --selection: color-mix(in srgb, var(--accent) 30%, transparent);
   --boost: #2f9e6e;
   --warn: #b7791f;
   --track-top: #202026;
@@ -101,12 +102,28 @@ body {
 
 .sidebar-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   padding: 14px 16px 10px;
 }
 
 .sidebar-head h1 { font-size: 16px; margin: 0; }
+
+/* The folder being viewed - read-only, like Settings' "Save clips to" box. */
+#folder-path {
+  flex: 1 1 100%;
+  min-width: 0;
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-overflow: ellipsis;
+}
+#folder-path:focus { outline: 1px solid var(--accent); color: var(--text); }
 
 #change-folder {
   margin-left: auto;
@@ -304,6 +321,10 @@ body {
 
 body.sidebar-hidden #sidebar { display: none; }
 body.dragging { cursor: ew-resize; user-select: none; }
+/* While a slider is held, nothing else reacts to the mouse (no hover effects). */
+body.dragging-slider { user-select: none; }
+body.dragging-slider * { pointer-events: none; }
+body.dragging-slider input[type="range"] { pointer-events: auto; }
 body.dragging.resizing { cursor: ns-resize; }
 
 #splitter {
@@ -623,7 +644,9 @@ button.icon { width: 40px; padding: 6px 0; }
 
 .title-line strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slider-line input { flex: 1; min-width: 60px; }
-.slider-line .mono { width: 54px; text-align: right; }
+/* Wide enough for the longest reading ("-29.5 dB"), left-aligned so the slider
+stretches right up to it. */
+.slider-line .mono { width: 9ch; flex: none; text-align: left; white-space: nowrap; }
 
 button.toggle, button.nudge {
   padding: 0 6px;
@@ -674,7 +697,7 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
   left: -6px;
   width: 14px;
   height: 11px;
-  background: #ff4d6a;
+  background: var(--playhead);
   clip-path: polygon(0 0, 100% 0, 100% 55%, 50% 100%, 0 55%);
 }
 
@@ -794,7 +817,7 @@ button.toggle.open { box-shadow: 0 0 0 2px var(--accent); }
   bottom: 0;
   width: 2px;
   margin-left: -1px;
-  background: #ff4d6a;
+  background: var(--playhead);
   pointer-events: none;
 }
 
@@ -906,7 +929,7 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
   color: var(--muted);
 }
 
-#status.error { color: #d6455d; }
+#status.error { color: var(--cut); }
 
 @media (max-width: 720px) {
   body { flex-direction: column; overflow: auto; }
@@ -940,8 +963,8 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   --fill: 50%;
-  --red: #2080ec;
-  --red-hi: #6f95ec;
+  --red: var(--accent);
+  --red-hi: color-mix(in srgb, var(--accent), #ffffff 35%);
   --tick: var(--track-tick);
   --fill-size: var(--fill) 2px;
   --fill-pos: 0 50%;
@@ -975,8 +998,8 @@ input[type="range"]::-webkit-slider-thumb {
   height: 12px;
   margin-top: 2px;
   border-radius: 4px;
-  border: 1px solid #0e418e;
-  background: linear-gradient(var(--red-hi), var(--red) 55%, #1358bf);
+  border: 1px solid color-mix(in srgb, var(--red), #000000 55%);
+  background: linear-gradient(var(--red-hi), var(--red) 55%, color-mix(in srgb, var(--red), #000000 25%));
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent); }

@@ -197,6 +197,20 @@ def test_page_and_clip_list(server):
     assert data["clips"][0]["tracks_file"] == "a-tracks.mkv" and data["clips"][0]["duration"] == 12.0
 
 
+def test_page_and_theme_carry_settings_colors(server, monkeypatch):
+    config = {"dark_mode": False, "custom_colors": {"light": {"wave": "#123456"}, "dark": {"wave": "#654321"}}}
+    monkeypatch.setattr(clip_browser, "load_run_config", lambda: config)
+    _status, _headers, body = _get(server, "")
+    assert b'<html lang="en" data-theme="light">' in body
+    assert b'<style id="custom-colors">html:root[data-theme] {\n  --wave: #123456;\n}\n</style>' in body
+    # Settings saved again: the page's poll sees the change.
+    config.update(dark_mode=True)
+    theme = json.loads(_get(server, "api/theme")[2])
+    assert theme == {"theme": "dark", "css": "html:root[data-theme] {\n  --wave: #654321;\n}\n"}
+    config.clear()
+    assert json.loads(_get(server, "api/theme")[2]) == {"theme": "dark", "css": ""}
+
+
 SPLIT_PROBE = """  Duration: 00:00:12.00, start: 0.000000, bitrate: 2000 kb/s
   Stream #0:0: Video: h264 (High), yuv420p(progressive), 1920x1080, 60 fps, 60 tbr, 1k tbn
   Stream #0:1: Audio: aac (LC), 48000 Hz, stereo, fltp (default)
