@@ -786,7 +786,7 @@ function drawWaveform(index) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#2080dc";
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#4a4a6d";
   const offset = trackOf(index).offset;
   const perPixel = duration() / width;
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.

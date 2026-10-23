@@ -10,7 +10,7 @@
   --selected: #dce9fb;
   --player-bg: #000000;
   --lane: #ebebf0;
-  --wave: #2080dc;
+  --wave: #4a4a6d;
   --removed: rgba(20, 20, 28, 0.55);
   --selection: rgba(32, 128, 236, 0.25);
   --boost: #2f9e6e;
@@ -29,7 +29,7 @@
     --hover: #272731;
     --selected: #1b3250;
     --lane: #24242c;
-    --wave: #2080dc;
+    --wave: #4a4a6d;
     --removed: rgba(0, 0, 0, 0.6);
     --selection: rgba(32, 128, 236, 0.3);
     --boost: #2f9e6e;
@@ -47,7 +47,7 @@
   --hover: #272731;
   --selected: #1b3250;
   --lane: #24242c;
-  --wave: #2080dc;
+  --wave: #4a4a6d;
   --removed: rgba(0, 0, 0, 0.6);
   --selection: rgba(32, 128, 236, 0.3);
   --boost: #2f9e6e;
