@@ -150,9 +150,10 @@ else:
 
 
 def use_dark_menus():
-    """Makes the tray menu (a plain Win32 popup menu) dark. Windows has no
+    """Makes the tray menu (a plain Win32 popup menu) dark, or light when
+    Settings > Use Dark Mode is off. Windows has no
     public API for that: uxtheme's unnamed SetPreferredAppMode (ordinal 135,
-    Windows 10 1903+) with ForceDark, then FlushMenuThemes (136) so menus
+    Windows 10 1903+) with ForceDark/ForceLight, then FlushMenuThemes (136) so menus
     made afterwards pick it up. Older Windows: they stay light."""
     if sys.platform != "win32":
         return
@@ -160,10 +161,11 @@ def use_dark_menus():
         import ctypes
 
         uxtheme = ctypes.WinDLL("uxtheme")
-        force_dark = 2
+        force_dark, force_light = 2, 3
+        mode = force_dark if load_run_config().get("dark_mode", True) else force_light
         set_preferred_app_mode = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_int)((135, uxtheme))
         flush_menu_themes = ctypes.WINFUNCTYPE(None)((136, uxtheme))
-        set_preferred_app_mode(force_dark)
+        set_preferred_app_mode(mode)
         flush_menu_themes()
     except (AttributeError, OSError) as exc:
         log.info(f"Dark tray menu unavailable: {exc}")

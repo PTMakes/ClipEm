@@ -39,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app_window  # noqa: E402
 import autostart  # noqa: E402
 import components  # noqa: E402
+import dark_theme  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
 import obs_process  # noqa: E402
@@ -233,6 +234,7 @@ def _run_with_notice(text, work):
         import tkinter
 
         root = tkinter.Tk(className="ClipEm")
+        dark_theme.apply_theme(root)
     except Exception:
         return work()
     app_window.set_window_icon(root)
@@ -507,6 +509,7 @@ def _ask_about_update(changes):
         import tkinter
 
         root = tkinter.Tk(className="ClipEm")
+        dark_theme.apply_theme(root)
     except Exception as exc:
         log.info(f"(Couldn't show the update prompt: {exc})")
         return None
@@ -641,6 +644,7 @@ def _ask_already_open(reason):
         import tkinter
 
         root = tkinter.Tk(className="ClipEm")
+        dark_theme.apply_theme(root)
     except Exception as exc:
         log.info(f"(Couldn't ask whether to start a second copy: {exc})")
         return False

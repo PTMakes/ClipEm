@@ -1,30 +1,54 @@
-"""ClipEm's dark look for a Tk window - the clip editor's dark palette
-(tray-widget/clip_browser/app.css), so Settings matches it. Call
-apply_dark_theme() right after creating the root window, before any widget
-exists: the classic widgets (tk.Label, tk.Button...) take their colors from
-Tk's option database, which only applies to widgets made afterwards."""
+"""ClipEm's look for a Tk window - the clip editor's light or dark palette
+(tray-widget/clip_browser/app.css), chosen by Settings > "Use Dark Mode"
+(run_config.json "dark_mode", dark by default). Call apply_theme() right after
+creating the root window, before any widget exists: the classic widgets
+(tk.Label, tk.Button...) take their colors from Tk's option database, which
+only applies to widgets made afterwards. The palette lives in this module's
+BG/PANEL/... names, so read them as dark_theme.BG, not by from-import."""
 
 import sys
 import tkinter as tk
 from tkinter import ttk
 
-BG = "#15151a"
-PANEL = "#1e1e25"
-TEXT = "#ececf1"
-MUTED = "#9a9aa6"  # for secondary text (replaces the light theme's "gray40")
-LINE = "#2e2e38"
-ACCENT = "#7d72ff"
-HOVER = "#272731"
-SELECTED = "#302b5c"
-ERROR = "#e0556b"
+PALETTES = {
+    True: dict(BG="#15151a", PANEL="#1e1e25", TEXT="#f4f4f6", MUTED="#9a9aa6", LINE="#2e2e38",
+               ACCENT="#2080ec", HOVER="#272731", SELECTED="#1b3250", ERROR="#d6455d"),
+    False: dict(BG="#f4f4f6", PANEL="#ffffff", TEXT="#15151a", MUTED="#6b6b76", LINE="#dedee4",
+                ACCENT="#2080ec", HOVER="#ececf2", SELECTED="#dce9fb", ERROR="#d6455d"),
+}
+DARK = True
+BG = PANEL = TEXT = MUTED = LINE = ACCENT = HOVER = SELECTED = ERROR = ""  # set by use_mode()
+ON_ACCENT = "#ffffff"  # text on the accent color (selections), both modes
 
 
-def apply_dark_theme(root):
+def use_mode(dark):
+    global DARK
+    DARK = bool(dark)
+    globals().update(PALETTES[DARK])
+
+
+def configured_dark():
+    """Settings > Use Dark Mode; dark when unset or unreadable."""
+    try:
+        from clipem_common import load_run_config
+        return bool(load_run_config().get("dark_mode", True))
+    except Exception:
+        return True
+
+
+use_mode(True)
+
+
+def apply_theme(root):
+    use_mode(configured_dark())
     root.configure(background=BG)
     _classic_widgets(root)
     _themed_widgets(root)
     if sys.platform == "win32":
-        _dark_title_bar(root)
+        _title_bar(root)
+
+
+apply_dark_theme = apply_theme  # the old name
 
 
 def _classic_widgets(root):
@@ -40,12 +64,12 @@ def _classic_widgets(root):
         "*Entry.insertBackground": TEXT,
         "*Entry.readonlyBackground": BG,
         "*Entry.selectBackground": ACCENT,
-        "*Entry.selectForeground": "#ffffff",
+        "*Entry.selectForeground": ON_ACCENT,
         "*Entry.disabledBackground": BG,
         "*Text.background": PANEL,
         "*Text.insertBackground": TEXT,
         "*Text.selectBackground": ACCENT,
-        "*Text.selectForeground": "#ffffff",
+        "*Text.selectForeground": ON_ACCENT,
         "*Listbox.background": PANEL,
         "*Listbox.selectBackground": ACCENT,
         "*Spinbox.background": PANEL,
@@ -63,7 +87,7 @@ def _classic_widgets(root):
         "*TCombobox*Listbox.background": PANEL,
         "*TCombobox*Listbox.foreground": TEXT,
         "*TCombobox*Listbox.selectBackground": ACCENT,
-        "*TCombobox*Listbox.selectForeground": "#ffffff",
+        "*TCombobox*Listbox.selectForeground": ON_ACCENT,
     }
     for pattern, value in options.items():
         root.option_add(pattern, value)
@@ -77,7 +101,7 @@ def _themed_widgets(root):
         return
     style.configure(".", background=BG, foreground=TEXT, fieldbackground=PANEL, bordercolor=LINE,
                     lightcolor=BG, darkcolor=BG, troughcolor=PANEL, focuscolor=ACCENT,
-                    selectbackground=ACCENT, selectforeground="#ffffff", insertcolor=TEXT)
+                    selectbackground=ACCENT, selectforeground=ON_ACCENT, insertcolor=TEXT)
     style.map(".", foreground=[("disabled", MUTED)])
     style.configure("TButton", background=PANEL, bordercolor=LINE)
     style.map("TButton", background=[("active", HOVER), ("pressed", SELECTED)])
@@ -94,9 +118,9 @@ def _themed_widgets(root):
     style.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=PANEL, bordercolor=LINE)
 
 
-def _dark_title_bar(root):
+def _title_bar(root):
     """Windows draws the title bar itself: DWM's immersive-dark-mode attribute
-    (20; 19 before Windows 10 20H1) turns it dark once the window has a frame."""
+    (20; 19 before Windows 10 20H1) sets it dark or light once the window has a frame."""
     import ctypes
 
     done = []
@@ -107,7 +131,7 @@ def _dark_title_bar(root):
         done.append(True)
         try:
             hwnd = int(root.wm_frame(), 16)
-            value = ctypes.c_int(1)
+            value = ctypes.c_int(1 if DARK else 0)
             for attribute in (20, 19):
                 if ctypes.windll.dwmapi.DwmSetWindowAttribute(
                         ctypes.c_void_p(hwnd), attribute, ctypes.byref(value), ctypes.sizeof(value)) == 0:
@@ -125,13 +149,13 @@ class RedSlider(tk.Canvas):
     Takes a ttk.Scale's from_/to/variable/command, plus state() and
     configure(state=...) for enabling and disabling."""
 
-    RED = "#e8404f"
-    RED_HI = "#ff6c78"
-    RED_EDGE = "#8f1d29"
+    RED = "#2080ec"
+    RED_HI = "#6f95ec"
+    RED_EDGE = "#0e418e"
     TRACK = "#26262d"
     TRACK_EDGE = "#0c0c10"
     TICK = "#4a4a54"
-    THUMB_W = 22
+    THUMB_W = 18
     BAR_H = 16
 
     def __init__(self, master, from_=0.0, to=1.0, variable=None, command=None, height=22, **kw):
@@ -195,7 +219,7 @@ class RedSlider(tk.Canvas):
         top = (height - self.BAR_H) / 2
         mid = height / 2
         red, red_hi, edge = ((self.RED, self.RED_HI, self.RED_EDGE) if self._enabled
-                             else ("#6b3a40", "#7d4a50", "#4a2a2e"))
+                             else ("#3a5a82", "#5a7396", "#2a3f5a"))
         self._round(1, top, width - 1, top + self.BAR_H, 6, self.TRACK, self.TRACK_EDGE)
         for i in range(1, 10):
             x = left + (right - left) * i / 10
@@ -203,8 +227,8 @@ class RedSlider(tk.Canvas):
         fraction = (self.get() - self._from) / ((self._to - self._from) or 1)
         x = left + (right - left) * min(max(fraction, 0.0), 1.0)
         self.create_line(4, mid, x, mid, fill=red, width=2)
-        self._round(x - left, mid - 7, x + left, mid + 7, 4, red, edge)
-        self.create_line(x - left + 4, mid - 5, x + left - 4, mid - 5, fill=red_hi)
+        self._round(x - left, mid - 6, x + left, mid + 6, 4, red, edge)
+        self.create_line(x - left + 4, mid - 4, x + left - 4, mid - 4, fill=red_hi)
 
     def _round(self, x1, y1, x2, y2, r, fill, outline):
         points = [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,

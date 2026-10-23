@@ -1,18 +1,18 @@
 :root {
   --bg: #f4f4f6;
   --panel: #ffffff;
-  --text: #1c1c22;
+  --text: #15151a;
   --muted: #6b6b76;
   --line: #dedee4;
-  --accent: #5b4ee6;
+  --accent: #2080ec;
   --accent-text: #ffffff;
   --hover: #ececf2;
-  --selected: #e4e1fc;
+  --selected: #dce9fb;
   --player-bg: #000000;
   --lane: #ebebf0;
-  --wave: #7b70e8;
+  --wave: #2080dc;
   --removed: rgba(20, 20, 28, 0.55);
-  --selection: rgba(91, 78, 230, 0.25);
+  --selection: rgba(32, 128, 236, 0.25);
   --boost: #2f9e6e;
   --cut: #d6455d;
   --warn: #b7791f;
@@ -22,36 +22,36 @@
   :root:not([data-theme="light"]) {
     --bg: #15151a;
     --panel: #1e1e25;
-    --text: #ececf1;
+    --text: #f4f4f6;
     --muted: #9a9aa6;
     --line: #2e2e38;
-    --accent: #7d72ff;
+    --accent: #2080ec;
     --hover: #272731;
-    --selected: #302b5c;
+    --selected: #1b3250;
     --lane: #24242c;
-    --wave: #8f86ff;
+    --wave: #2080dc;
     --removed: rgba(0, 0, 0, 0.6);
-    --selection: rgba(125, 114, 255, 0.3);
-    --boost: #3fbf86;
-    --warn: #e0a84a;
+    --selection: rgba(32, 128, 236, 0.3);
+    --boost: #2f9e6e;
+    --warn: #b7791f;
   }
 }
 
 :root[data-theme="dark"] {
   --bg: #15151a;
   --panel: #1e1e25;
-  --text: #ececf1;
+  --text: #f4f4f6;
   --muted: #9a9aa6;
   --line: #2e2e38;
-  --accent: #7d72ff;
+  --accent: #2080ec;
   --hover: #272731;
-  --selected: #302b5c;
+  --selected: #1b3250;
   --lane: #24242c;
-  --wave: #8f86ff;
+  --wave: #2080dc;
   --removed: rgba(0, 0, 0, 0.6);
-  --selection: rgba(125, 114, 255, 0.3);
-  --boost: #3fbf86;
-  --warn: #e0a84a;
+  --selection: rgba(32, 128, 236, 0.3);
+  --boost: #2f9e6e;
+  --warn: #b7791f;
 }
 
 * { box-sizing: border-box; }
@@ -489,7 +489,7 @@ the right of the video's space, the video beside it. */
   height: 100%;
   display: grid;
   grid-template-columns: 58px minmax(0, 1fr);
-  grid-template-rows: 1fr auto;
+  grid-template-rows: 1fr auto auto;
   gap: 4px 2px;
 }
 #master:not(:has(#meter:not([hidden]))) { display: none; }
@@ -498,33 +498,34 @@ the right of the video's space, the video beside it. */
   height: 100%;
   min-height: 0;
 }
-#master-fader {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  min-height: 0;
-  min-width: 0;
-}
+/* Its children sit straight in the #master grid: the slider as tall as the
+meter beside it, the reading on its own row below both. */
+#master-fader { display: contents; }
 #master-slider {
-  flex: 1 1 auto;
+  grid-column: 2;
+  grid-row: 1;
+  justify-self: center;
   min-height: 40px;
   writing-mode: vertical-lr;
   direction: rtl;
   width: 20px;
+  height: 100%;
   margin: 0;
 }
-/* Fixed width, centred (overflowing both sides evenly), so the changing text
-never resizes the column and nudges the slider. */
+/* The number is left-aligned and the unit right-aligned in a fixed-width row,
+so neither moves as the value changes. */
 #master-value {
+  grid-column: 1 / -1;
+  grid-row: 2;
   display: flex;
-  justify-content: center;
-  width: 100%;
+  justify-content: space-between;
+  padding: 0 4px;
   white-space: nowrap;
   font-size: 10px;
 }
 #auto-mix {
   grid-column: 1 / -1;
+  grid-row: 3;
   padding: 3px 6px;
   font-size: 11px;
 }
@@ -918,8 +919,8 @@ input[type="range"] {
   -webkit-appearance: none;
   appearance: none;
   --fill: 50%;
-  --red: #e8404f;
-  --red-hi: #ff6c78;
+  --red: #2080ec;
+  --red-hi: #6f95ec;
   --tick: rgba(255, 255, 255, 0.2);
   --fill-size: var(--fill) 2px;
   --fill-pos: 0 50%;
@@ -949,12 +950,12 @@ input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   box-sizing: border-box;
-  width: 22px;
-  height: 14px;
-  margin-top: 0;
+  width: 18px;
+  height: 12px;
+  margin-top: 2px;
   border-radius: 4px;
-  border: 1px solid #8f1d29;
-  background: linear-gradient(var(--red-hi), var(--red) 55%, #c42f3c);
+  border: 1px solid #0e418e;
+  background: linear-gradient(var(--red-hi), var(--red) 55%, #1358bf);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
 }
 input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px var(--accent); }
@@ -969,4 +970,4 @@ input[type="range"]:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 2px 
   --tick-pos: 50% 100%;
 }
 #master-slider::-webkit-slider-runnable-track { width: 16px; height: auto; }
-#master-slider::-webkit-slider-thumb { width: 14px; height: 22px; margin-left: 0; }
+#master-slider::-webkit-slider-thumb { width: 12px; height: 18px; margin-left: 2px; }

@@ -134,7 +134,7 @@ class Wizard(tk.Tk):
         use_windows_app_id("PTMakes.ClipEm.Setup")
         # className: what Linux desktops match the window to (WM_CLASS).
         super().__init__(className="ClipEm")
-        dark_theme.apply_dark_theme(self)  # before any widget: classic ones take their colors at creation
+        dark_theme.apply_theme(self)  # before any widget: classic ones take their colors at creation
         # ClipEm logo (also on the folder picker and message boxes), and
         # Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in every text field.
         style_app_window(self, log=print)
@@ -421,7 +421,7 @@ class Wizard(tk.Tk):
             state="normal" if back_enabled else "disabled",
         )
         back_btn.pack(side="left")
-        ttk.Label(bar, textvariable=self.step_var, foreground="gray").pack(side="left", expand=True)
+        ttk.Label(bar, textvariable=self.step_var, foreground=dark_theme.MUTED).pack(side="left", expand=True)
         return bar, back_btn
 
     def _make_log_area(self, parent):
@@ -448,7 +448,7 @@ class Wizard(tk.Tk):
         glyph.pack(side="left")
         label = ttk.Label(row, text=text, cursor=cursor)
         if not enabled:
-            label.configure(foreground="gray")
+            label.configure(foreground=dark_theme.MUTED)
         label.pack(side="left", padx=(self.px(6), 0))
 
         def toggle(_event=None):
@@ -905,7 +905,7 @@ class Wizard(tk.Tk):
             ttk.Label(
                 self.container,
                 text="Per-app tracks aren't available on this system.",
-                foreground="gray", justify="left", wraplength=self.px(WRAP_WIDTH),
+                foreground=dark_theme.MUTED, justify="left", wraplength=self.px(WRAP_WIDTH),
             ).pack(anchor="w")
 
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_audio_devices)
@@ -954,7 +954,7 @@ class Wizard(tk.Tk):
             to=self.controller["bitrate_max_kbps"],
             increment=self.controller["bitrate_step_kbps"],
         ).pack(side="left")
-        ttk.Label(bitrate_row, textvariable=self.filesize_estimate_var, foreground="gray").pack(
+        ttk.Label(bitrate_row, textvariable=self.filesize_estimate_var, foreground=dark_theme.MUTED).pack(
             side="left", padx=(self.px(PAD // 2), 0)
         )
 
@@ -1015,7 +1015,7 @@ class Wizard(tk.Tk):
         size_row.pack(fill="x", pady=(0, self.px(PAD // 4)))
         size_entry = ttk.Entry(size_row, textvariable=self.target_filesize_var, width=8, state="disabled")
         size_entry.pack(side="left")
-        ttk.Label(size_row, textvariable=self.bitrate_preview_var, foreground="gray").pack(
+        ttk.Label(size_row, textvariable=self.bitrate_preview_var, foreground=dark_theme.MUTED).pack(
             side="left", padx=(self.px(PAD // 2), 0)
         )
         recommended_row = ttk.Frame(lower_section)
@@ -1033,7 +1033,7 @@ class Wizard(tk.Tk):
                 f": {self.controller['default_target_filesize_mb']}MB - "
                 f"Discord's free upload limit"
             ),
-            foreground="gray",
+            foreground=dark_theme.MUTED,
             justify="left",
         )
         recommended_note_label.pack(side="left", padx=(self.px(PAD // 4), 0))
@@ -1070,10 +1070,10 @@ class Wizard(tk.Tk):
 
         def set_lower_section_state(state):
             disabled = state == "disabled"
-            target_size_label.configure(foreground="gray" if disabled else "")
-            recommended_note_label.configure(foreground="gray")
-            crop_label.configure(foreground="gray" if disabled else "")
-            crop_suffix_label.configure(foreground="gray" if disabled else "")
+            target_size_label.configure(foreground=dark_theme.MUTED if disabled else "")
+            recommended_note_label.configure(foreground=dark_theme.MUTED)
+            crop_label.configure(foreground=dark_theme.MUTED if disabled else "")
+            crop_suffix_label.configure(foreground=dark_theme.MUTED if disabled else "")
             size_entry.configure(state=state)
             use_recommended_btn.configure(state=state)
             crop_entry.configure(state=state)
@@ -1226,7 +1226,7 @@ class Wizard(tk.Tk):
 
         def set_sound_section_state(enabled):
             state = "normal" if enabled else "disabled"
-            fg = "" if enabled else "gray"
+            fg = "" if enabled else dark_theme.MUTED
             volume_heading.configure(foreground=fg)
             self.sound_volume_label.configure(foreground=fg)
             file_heading.configure(foreground=fg)
@@ -1405,7 +1405,7 @@ class Wizard(tk.Tk):
             self.container,
             text="It's suggested to only change this if you will have another OBS instance "
             "open at the same time as ClipEm's instance.",
-            foreground="gray", justify="left", wraplength=self.px(WRAP_WIDTH),
+            foreground=dark_theme.MUTED, justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(0, self.px(PAD // 2)))
 
         ttk.Label(self.container, text="Password").pack(anchor="w")
@@ -1578,7 +1578,7 @@ class Wizard(tk.Tk):
             ttk.Label(
                 self.container,
                 text="\n".join(self.controller["describe_autostart_entry"](e) for e in self.other_autostarts),
-                foreground="gray", font=("", 9), justify="left", wraplength=self.px(WRAP_WIDTH),
+                foreground=dark_theme.MUTED, font=("", 9), justify="left", wraplength=self.px(WRAP_WIDTH),
             ).pack(anchor="w", pady=(0, self.px(PAD // 2)))
 
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_auto_update)

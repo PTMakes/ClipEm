@@ -1,15 +1,18 @@
 :root {
   color-scheme: dark;
-  --bg: #0b0d12;
-  --bg-elevated: #14171f;
-  --text: #f2f3f5;
-  --text-muted: #9aa1ac;
-  /* White text on --accent must stay >= 4.5:1 (WCAG AA); accent-coloured
-     text on the dark background uses the lighter --accent-text instead. */
-  --accent: #6a48ff;
-  --accent-hover: #5b3df0;
-  --accent-text: #9d85ff;
-  --border: #23262f;
+  /* The clip editor's dark palette (App/.../clip_browser/app.css). */
+  --bg: #15151a;
+  --bg-elevated: #1e1e25;
+  --text: #f4f4f6;
+  --text-muted: #9a9aa6;
+  /* White text on --accent must stay >= 4.5:1 (WCAG AA), which the editor's
+     #2080ec doesn't reach (3.9:1), so filled buttons use the editor's darker
+     slider blues; accent-coloured text on the dark background uses the
+     lighter --accent-text instead. */
+  --accent: #1358bf;
+  --accent-hover: #0e418e;
+  --accent-text: #6f95ec;
+  --border: #2e2e38;
 }
 
 * {

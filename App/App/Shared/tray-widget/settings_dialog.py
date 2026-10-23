@@ -343,7 +343,7 @@ def main():
     # Hidden until it's built and sized (shown at the end of main) - otherwise
     # it sits on screen as Tk's blank default-size window meanwhile.
     root.withdraw()
-    dark_theme.apply_dark_theme(root)  # before any widget: classic ones take their colors at creation
+    dark_theme.apply_theme(root)  # before any widget: classic ones take their colors at creation
     # ClipEm logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
     style_app_window(root, log=log.warning)
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
@@ -853,7 +853,7 @@ def main():
     section("Appearance", TAB_TRAY)
     dark_mode_var = tk.BooleanVar(value=bool(run_config.get("dark_mode", True)))
     tk.Checkbutton(
-        frame, text="Use Dark Mode (clip editor; reopen it to apply)", variable=dark_mode_var,
+        frame, text="Use Dark Mode (reopen the editor and this window to apply)", variable=dark_mode_var,
     ).grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
 

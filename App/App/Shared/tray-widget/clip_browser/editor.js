@@ -523,9 +523,12 @@ function dragPlayhead(e) {
   e.preventDefault();
   const wasPlaying = !player.paused;
   if (wasPlaying) player.pause();
-  seek(laneTime(e.clientX));
+  scrub.head = laneTime(e.clientX);
+  seek(scrub.head);
   trackPointer(e, (ev) => scrubSeek(laneTime(ev.clientX)), () => {
     scrub.target = null;
+    scrub.head = null;
+    updatePlayheads();
     if (wasPlaying) togglePlay();
   });
 }
@@ -533,7 +536,7 @@ function dragPlayhead(e) {
 // Setting currentTime on every pointermove makes the browser drop each seek
 // that's still decoding when the next one lands, so few frames ever show.
 // Keep one seek in flight and always send the latest target when it finishes.
-const scrub = { target: null };
+const scrub = { target: null, head: null }; // head: where the pointer is, while dragging
 player.addEventListener("seeked", () => {
   if (scrub.target === null) return;
   const t = scrub.target;
@@ -542,6 +545,7 @@ player.addEventListener("seeked", () => {
 });
 
 function scrubSeek(t) {
+  scrub.head = t;
   updatePlayheads();
   if (player.seeking) {
     scrub.target = t;
@@ -782,7 +786,7 @@ function drawWaveform(index) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#7d72ff";
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#2080dc";
   const offset = trackOf(index).offset;
   const perPixel = duration() / width;
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.
@@ -1178,7 +1182,7 @@ function togglePlay() {
 }
 
 function updatePlayheads() {
-  const t = player.currentTime || 0;
+  const t = scrub.head ?? (player.currentTime || 0);
   for (const head of timeline.querySelectorAll(".playhead")) head.style.left = pct(t);
   $("time").textContent = `${formatTime(t)} / ${formatTime(duration())}`;
   $("play").innerHTML = player.paused ? "&#9654;" : "&#10074;&#10074;";
@@ -1353,7 +1357,7 @@ function renderMaster() {
   if (ed.master_db === undefined) return;
   masterSlider.value = ed.master_db;
   syncSliderFill(masterSlider);
-  $("master-value").textContent = `${ed.master_db > 0 ? "+" : ""}${Math.round(ed.master_db * 10) / 10} dB`;
+  $("master-number").textContent = `${ed.master_db > 0 ? "+" : ""}${ed.master_db.toFixed(1)}`;
   $("auto-mix").disabled = !ed.canLevel || ed.autoMixing;
   $("auto-mix").title = ed.canLevel
     ? "Turn on Level Out Audio for every track, set them to equal volumes, then set the master so the mix lands at about -14 LUFS"
