@@ -102,7 +102,6 @@ body {
 
 .sidebar-head {
   display: flex;
-  flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
   padding: 14px 16px 10px;
@@ -110,10 +109,11 @@ body {
 
 .sidebar-head h1 { font-size: 16px; margin: 0; }
 
-/* The folder being viewed - read-only, like Settings' "Save clips to" box. */
+/* The folder being viewed, between the title and the folder button - read-only, like Settings' "Save clips to" box. */
 #folder-path {
-  flex: 1 1 100%;
+  flex: 1 1 0;
   min-width: 0;
+  align-self: center;
   padding: 4px 8px;
   font: inherit;
   font-size: 12px;
