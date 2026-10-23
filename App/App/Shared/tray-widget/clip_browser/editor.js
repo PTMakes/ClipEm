@@ -364,6 +364,10 @@ async function loadPeaks(name, index, token) {
 }
 
 function renderDetails() {
+  // The clip list is re-fetched every few seconds and calls this each time; the
+  // redraw replaces the sliders and lanes, which would drop a drag in progress.
+  // The next refresh catches up.
+  if (document.body.classList.contains("dragging-slider") || document.body.classList.contains("dragging")) return;
   const clip = selectedClip();
   const ready = !!(clip && ed.info && ed.name === clip.name);
   $("editor").hidden = !ready;
@@ -796,7 +800,7 @@ function drawWaveform(index) {
   canvas.height = height;
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#afceff";
+  ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#6c9bc7";
   const offset = trackOf(index).offset;
   const perPixel = duration() / width;
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.

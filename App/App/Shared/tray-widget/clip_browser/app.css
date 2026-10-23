@@ -11,7 +11,7 @@
   --player-bg: #000000;
   --playhead: #ff4d6a;
   --lane: #ebebf0;
-  --wave: #5b93ee;
+  --wave: #4a7aa8;
   --removed: rgba(20, 20, 28, 0.55);
   --selection: color-mix(in srgb, var(--accent) 25%, transparent);
   --boost: #2f9e6e;
@@ -36,7 +36,7 @@
     --hover: #272731;
     --selected: #1b3250;
     --lane: #24242c;
-    --wave: #afceff;
+    --wave: #6c9bc7;
     --removed: rgba(0, 0, 0, 0.6);
     --selection: color-mix(in srgb, var(--accent) 30%, transparent);
     --boost: #2f9e6e;
@@ -60,7 +60,7 @@
   --hover: #272731;
   --selected: #1b3250;
   --lane: #24242c;
-  --wave: #afceff;
+  --wave: #6c9bc7;
   --removed: rgba(0, 0, 0, 0.6);
   --selection: color-mix(in srgb, var(--accent) 30%, transparent);
   --boost: #2f9e6e;
@@ -678,6 +678,13 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 }
 
 .video-lane { height: 40px; }
+
+.scrub-row {
+  position: sticky;
+  top: 0;
+  z-index: 5; /* over the tracks scrolling beneath it */
+  background: var(--panel);
+}
 
 .scrub-lane {
   height: 16px;
