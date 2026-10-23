@@ -417,9 +417,9 @@ def main():
     # Each settings group is a rounded card in the page; the sidebar's tabs
     # choose which cards are shown. The code below adds rows to the current
     # card ("frame") - section() starts the next one.
-    TAB_BASIC, TAB_OUTPUT, TAB_EDITOR = "Basic Settings", "Clip Output", "Clip Editor"
-    TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET = "Tray Menu/UI Customization", "Scripts/Troubleshooting", "OBS Websocket"
-    TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_EDITOR, TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET)
+    TAB_BASIC, TAB_OUTPUT, TAB_EDITOR = "Basic Settings", "Clip Output/Devices", "Clip Editor"
+    TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET = "UI Customization", "Scripts/Troubleshooting", "OBS Websocket"
+    TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_EDITOR, TAB_TRAY, TAB_WEBSOCKET, TAB_SCRIPTS)
     cards = []  # (card, its tab), in page order
     frame = None
     next_row = 0
@@ -849,6 +849,13 @@ def main():
             editor_row.grid_remove()
 
     show_editor_choice()
+
+    section("Appearance", TAB_TRAY)
+    dark_mode_var = tk.BooleanVar(value=bool(run_config.get("dark_mode", True)))
+    tk.Checkbutton(
+        frame, text="Use Dark Mode (clip editor; reopen it to apply)", variable=dark_mode_var,
+    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
 
     section("Tray Menu", TAB_TRAY)
     recording_item_var = tk.BooleanVar(value=bool(run_config.get("show_recording_item", True)))
@@ -1487,6 +1494,7 @@ def main():
             run_config["clip_editors_disabled"] = bool(editors_off_var.get())
             for key, var in menu_item_vars.items():  # read by the tray menu
                 run_config[key] = bool(var.get())
+            run_config["dark_mode"] = bool(dark_mode_var.get())
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
         except Exception as exc:

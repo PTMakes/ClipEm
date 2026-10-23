@@ -524,9 +524,30 @@ function dragPlayhead(e) {
   const wasPlaying = !player.paused;
   if (wasPlaying) player.pause();
   seek(laneTime(e.clientX));
-  trackPointer(e, (ev) => seek(laneTime(ev.clientX)), () => {
+  trackPointer(e, (ev) => scrubSeek(laneTime(ev.clientX)), () => {
+    scrub.target = null;
     if (wasPlaying) togglePlay();
   });
+}
+
+// Setting currentTime on every pointermove makes the browser drop each seek
+// that's still decoding when the next one lands, so few frames ever show.
+// Keep one seek in flight and always send the latest target when it finishes.
+const scrub = { target: null };
+player.addEventListener("seeked", () => {
+  if (scrub.target === null) return;
+  const t = scrub.target;
+  scrub.target = null;
+  player.currentTime = clamp(t, 0, duration());
+});
+
+function scrubSeek(t) {
+  updatePlayheads();
+  if (player.seeking) {
+    scrub.target = t;
+  } else {
+    seek(t);
+  }
 }
 
 function videoRow() {

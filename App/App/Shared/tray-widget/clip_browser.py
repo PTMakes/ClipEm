@@ -74,6 +74,7 @@ from clipem_common import (  # noqa: E402
     acquire_instance_lock,
     exit_with_parent,
     load_json,
+    load_run_config,
     release_instance_lock,
     setup_logging,
     write_json_atomic,
@@ -855,7 +856,12 @@ class Handler(BaseHTTPRequestHandler):
         if route is None:
             return
         folder = self.server.current_folder()
-        if route in UI_FILES:
+        if route in UI_FILES and UI_FILES[route] == "index.html":
+            theme = "dark" if load_run_config().get("dark_mode", True) else "light"
+            with open(os.path.join(UI_DIR, "index.html"), "rb") as page:
+                html = page.read().replace(b'<html lang="en">', b'<html lang="en" data-theme="%s">' % theme.encode(), 1)
+            self._send(200, html, "text/html; charset=utf-8")
+        elif route in UI_FILES:
             self._send_file(os.path.join(UI_DIR, UI_FILES[route]))
         elif route == "api/clips":
             clips = list_clips(folder)
