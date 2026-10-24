@@ -1459,7 +1459,17 @@ async function autoMix() {
   const name = ed.name;
   if (!name || ed.autoMixing) return;
   ed.autoMixing = true;
-  setStatus("Auto Mix: measuring the mix...");
+  // The measurement has no progress to report, so show it's alive: a spinner
+  // and the seconds so far, with the button off until it's done.
+  const started = performance.now();
+  const frames = ["|", "/", "-", "\\"];
+  const tick = () => {
+    const elapsed = (performance.now() - started) / 1000;
+    setStatus(`Auto Mix: measuring the mix ${frames[Math.floor(elapsed * 6) % frames.length]} ${elapsed.toFixed(0)}s`);
+  };
+  tick();
+  const ticker = setInterval(tick, 160);
+  $("auto-mix").disabled = true;
   beginEdit();
   try {
     for (const track of ed.tracks) {
@@ -1470,12 +1480,20 @@ async function autoMix() {
     ed.master_db = 0;
     edited();
     const result = await api("api/automix", { name, project: project(), solo: [...ed.solo] });
-    if (ed.name !== name) return;
+    if (ed.name !== name) {
+      clearInterval(ticker);
+      setStatus("");
+      return;
+    }
     ed.master_db = result.master_db;
+    clearInterval(ticker);
     setStatus(`Auto Mix: the mix was ${result.lufs} LUFS - master set to ${formatMaster(result.master_db)}.`);
   } catch (err) {
+    clearInterval(ticker);
     setStatus(`Auto Mix failed: ${err.message}`, true);
   } finally {
+    clearInterval(ticker);
+    $("auto-mix").disabled = false;
     ed.autoMixing = false;
     if (ed.name === name) endEdit();
     renderMaster();
