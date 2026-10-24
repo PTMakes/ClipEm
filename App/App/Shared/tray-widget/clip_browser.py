@@ -269,7 +269,7 @@ class Thumbnailer:
                 result = self._run(
                     [self._ffmpeg, "-hide_banner", "-nostdin", "-y", "-ss", seek, "-i", clip_path,
                      "-frames:v", "1", "-vf", f"scale={THUMB_WIDTH}:-2", partial],
-                    capture_output=True, text=True, **_no_window_kwargs(),
+                    capture_output=True, text=True, errors="replace", **_no_window_kwargs(),
                 )
                 duration = duration or parse_duration(result.stderr)
                 if result.returncode == 0 and os.path.isfile(partial) and os.path.getsize(partial):
@@ -696,7 +696,9 @@ def delete_clip(folder, name, editor, trash=None, attempts=10):
 
 def reveal_in_file_manager(path):
     if _SYSTEM == "Windows":
-        subprocess.Popen(["explorer", f"/select,{path}"])
+        # A single quoted "/select,<path>" arg (paths with spaces) makes Explorer
+        # ignore it and open Documents, so pass "/select," separately.
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
     elif _SYSTEM == "Darwin":
         subprocess.Popen(["open", "-R", path])
     else:
@@ -995,6 +997,8 @@ class Handler(BaseHTTPRequestHandler):
                 if not path:
                     self._json({"error": "That clip isn't there any more."}, 404)
                     return
+                # Explorer gives no error for a bad /select, so log what was asked for.
+                log.info(f"{route}: {path}")
                 (reveal_in_file_manager if route == "api/reveal" else open_with_default_app)(path)
                 self._json({"ok": True})
             else:

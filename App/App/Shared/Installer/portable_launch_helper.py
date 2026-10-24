@@ -40,7 +40,6 @@ anything outside this distribution's own folder.
 import json
 import os
 import re
-import subprocess
 import sys
 
 import obs_config
@@ -91,12 +90,10 @@ def _link_dir(link_path, target_path):
         return
 
     if sys.platform == "win32":
-        subprocess.run(
-            ["cmd", "/c", "mklink", "/J", link_path, target_path],
-            check=True,
-            shell=False,
-            creationflags=subprocess.CREATE_NO_WINDOW,  # run.py may have no console (pythonw)
-        )
+        # Not `cmd /c mklink /J`: cmd would treat a & ^ or % in the path as syntax.
+        import _winapi
+
+        _winapi.CreateJunction(target_path, link_path)
     else:
         os.symlink(target_path, link_path, target_is_directory=True)
 

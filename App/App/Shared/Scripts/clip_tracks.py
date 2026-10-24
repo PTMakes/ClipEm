@@ -245,7 +245,7 @@ def run_to(cmd_for, out_path, what, log):
     try:
         result = subprocess.run(
             cmd_for(partial), stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-            **low_priority_kwargs()
+            errors="replace", **low_priority_kwargs()
         )
         if result.returncode != 0:
             log(f"{what} failed: {result.stderr.strip()[-500:]}")

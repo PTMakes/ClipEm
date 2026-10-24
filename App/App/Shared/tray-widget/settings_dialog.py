@@ -42,8 +42,10 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 
 # Shared with setup.py/run.py rather than re-implemented here: config-file
 # paths and atomic writes (clipem_common/obs_config) and the per-OS boot
-# autostart entry (autostart.apply_boot_autostart).
-sys.path.insert(0, INSTALLER_DIR)
+# autostart entry (autostart.apply_boot_autostart). SCRIPT_DIR goes first
+# because the bundled Windows Python's ._pth file keeps it off sys.path.
+sys.path.insert(0, SCRIPT_DIR)
+sys.path.insert(1, INSTALLER_DIR)
 import bug_report  # noqa: E402
 import color_picker  # noqa: E402
 import dark_theme  # noqa: E402

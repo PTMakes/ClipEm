@@ -48,7 +48,9 @@ def run_powershell(script, **kwargs):
     """Runs `script` via -EncodedCommand, so nothing in it goes through
     Windows command-line argument parsing (which mangles embedded quotes).
     Never with a console window: from pythonw (the tray, Settings) one would
-    flash up on screen."""
+    flash up on screen. Output is UTF-8 (not the OEM code page), so callers
+    reading it decode with encoding="utf-8"."""
+    script = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n" + script
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     if sys.platform == "win32":
         kwargs.setdefault("creationflags", 0x08000000)  # CREATE_NO_WINDOW
@@ -179,7 +181,7 @@ def _windows_startup_shortcuts(folder):
         "} | ConvertTo-Json -Compress"
     )
     try:
-        result = run_powershell(script, capture_output=True, text=True, timeout=30)
+        result = run_powershell(script, capture_output=True, encoding="utf-8", errors="replace", timeout=30)
     except (OSError, subprocess.SubprocessError):
         return []
     import json
