@@ -15,7 +15,7 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
 import dark_theme
 import editor_install
@@ -668,7 +668,8 @@ class Wizard(tk.Tk):
         self._mark_clip_folder_chosen()
 
     def _browse_clip_folder(self):
-        chosen = filedialog.askdirectory(
+        chosen = file_dialogs.askdirectory(
+            parent=self,
             title="Select folder for OBS recordings / replay buffer clips",
             initialdir=self.clip_folder_var.get() or self.controller["default_clip_folder"],
         )
@@ -1261,7 +1262,8 @@ class Wizard(tk.Tk):
         self.sound_file_var.set(obs_config.clip_sound_preset_path(self.sound_name_var.get()))
 
     def _browse_sound_file(self):
-        chosen = filedialog.askopenfilename(
+        chosen = file_dialogs.askopenfilename(
+            parent=self,
             title="Select a replacement .wav file for the clip sound",
             filetypes=[("WAV files", "*.wav")],
         )
