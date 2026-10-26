@@ -65,7 +65,7 @@ MENU_ITEMS = {
 
 # The start/stop hotkeys (obs_config.TOGGLE_HOTKEYS) as the Hotkeys page names them.
 TOGGLE_HOTKEY_TITLES = {"recording": "Start/Stop Recording", "replay_buffer": "Start/Stop Replay Buffer"}
-NO_HOTKEY = "None"
+NO_HOTKEY = obs_config.NO_HOTKEY
 
 # Update channel -> the name Settings shows for it (Main follows the published
 # releases, Dev the rolling "dev" pre-release).
@@ -1266,8 +1266,8 @@ class Wizard(tk.Tk):
             self.container,
             text=(
                 "Keyboard shortcuts that work in games. Save Clip saves the replay buffer length you set "
-                "earlier (Alt+~ by default). The others start, or stop when pressed again - pick None for "
-                "no shortcut."
+                "earlier (Alt+~ by default). The others start, or stop when pressed again. Pick... records "
+                "the next keys you press; Reset clears a shortcut."
             ),
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
@@ -1295,8 +1295,16 @@ class Wizard(tk.Tk):
 
             ttk.Button(row, text="Pick...", command=pick).pack(side="left", padx=(self.px(8), 0))
 
+            def reset():
+                for glyph, var in glyphs:
+                    var.set(False)
+                    glyph.configure(text="☐")
+                key.set(NO_HOTKEY)
+
+            ttk.Button(row, text="Reset", command=reset).pack(side="left", padx=(self.px(4), 0))
+
         hotkey_row("Save Clip", self.hotkey_ctrl_var, self.hotkey_alt_var, self.hotkey_shift_var,
-                   self.hotkey_key_var, HOTKEY_KEY_CHOICES)
+                   self.hotkey_key_var, [NO_HOTKEY, *HOTKEY_KEY_CHOICES])
         for name, title in TOGGLE_HOTKEY_TITLES.items():
             hotkey_row(title, *self.toggle_hotkey_vars[name], [NO_HOTKEY, *HOTKEY_KEY_CHOICES])
 

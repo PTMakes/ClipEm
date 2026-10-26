@@ -360,14 +360,22 @@ def obs_key_to_label(obs_key):
 
 
 def describe_hotkey(ctrl, alt, shift, key_label):
-    """e.g. "Ctrl+Shift+F9"."""
+    """e.g. "Ctrl+Shift+F9" ("none" for a cleared one)."""
+    if key_label == NO_HOTKEY:
+        return "none"
     mods = "+".join(m for m, on in (("Ctrl", ctrl), ("Alt", alt), ("Shift", shift)) if on)
     return f"{mods}+{key_label}" if mods else key_label
 
 
+# The key "label" of a hotkey that's been cleared (Reset in Setup/Settings).
+NO_HOTKEY = "None"
+CLEARED_HOTKEY = (False, False, False, NO_HOTKEY)
+
+
 def load_clip_hotkey():
-    """(ctrl, alt, shift, key_label) for the clip hotkey from basic.ini, or
-    DEFAULT_CLIP_HOTKEY if the file/key is missing or unparseable."""
+    """(ctrl, alt, shift, key_label) for the clip hotkey from basic.ini -
+    CLEARED_HOTKEY if it was cleared, DEFAULT_CLIP_HOTKEY if the file/key is
+    missing or unparseable."""
     if not os.path.exists(BASIC_INI):
         return DEFAULT_CLIP_HOTKEY
     lines = read_ini_lines()
@@ -378,9 +386,12 @@ def load_clip_hotkey():
         key, sep, value = line.partition("=")
         if sep and key.strip() == CLIP_HOTKEY_INI_KEY:
             try:
-                combos = json.loads(value.strip()).get(CLIP_HOTKEY_ACTION, [])
-                if not combos:
+                saved = json.loads(value.strip())
+                if CLIP_HOTKEY_ACTION not in saved:
                     return DEFAULT_CLIP_HOTKEY
+                combos = saved[CLIP_HOTKEY_ACTION]
+                if not combos:
+                    return CLEARED_HOTKEY
                 combo = combos[0]
                 return (
                     bool(combo.get("control", combo.get("ctrl", False))),
@@ -398,14 +409,12 @@ def save_clip_hotkey(ctrl, alt, shift, key_label):
     ValueError for an unrecognized key, FileNotFoundError without basic.ini."""
     if not os.path.exists(BASIC_INI):
         raise FileNotFoundError(f"Config file not found: {BASIC_INI}")
-    combo = {"key": hotkey_label_to_obs_key(key_label)}
-    if ctrl:
-        combo["control"] = True
-    if alt:
-        combo["alt"] = True
-    if shift:
-        combo["shift"] = True
-    new_line = f"{CLIP_HOTKEY_INI_KEY}={json.dumps({CLIP_HOTKEY_ACTION: [combo]})}\n"
+    combos = []
+    if key_label != NO_HOTKEY:  # NO_HOTKEY: no clip hotkey at all
+        combo = {"key": hotkey_label_to_obs_key(key_label)}
+        combo.update({mod: True for mod, on in (("control", ctrl), ("alt", alt), ("shift", shift)) if on})
+        combos.append(combo)
+    new_line = f"{CLIP_HOTKEY_INI_KEY}={json.dumps({CLIP_HOTKEY_ACTION: combos})}\n"
 
     lines = read_ini_lines()
     start, end = find_ini_section(lines, HOTKEYS_INI_SECTION)

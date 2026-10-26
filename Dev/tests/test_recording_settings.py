@@ -78,3 +78,12 @@ def test_windows_gpus_map_to_their_encoders(monkeypatch):
     monkeypatch.setattr(encoders, "windows_gpu_names",
                         lambda: ["NVIDIA GeForce RTX 4070", "Intel(R) UHD Graphics 770"])
     assert encoders.available("Windows") == [(encoders.NVENC, None), (encoders.QSV, None), (encoders.X264, None)]
+
+
+def test_the_clip_hotkey_can_be_cleared(fake_obs_config):
+    obs_config.save_clip_hotkey(True, True, False, obs_config.NO_HOTKEY)  # modifiers alone mean nothing
+    assert json.loads(obs_config.read_ini_section("Hotkeys")["ReplayBuffer"]) == {"ReplayBuffer.Save": []}
+    assert obs_config.load_clip_hotkey() == obs_config.CLEARED_HOTKEY
+    assert obs_config.describe_hotkey(*obs_config.load_clip_hotkey()) == "none"
+    obs_config.save_clip_hotkey(False, True, False, "~")
+    assert obs_config.load_clip_hotkey() == (False, True, False, "~")

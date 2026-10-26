@@ -401,10 +401,12 @@ class TrayApp:
         platform: a Windows shortcut column (after a tab) made the menu much
         wider than on Linux."""
         try:
-            hotkey = obs_config.describe_hotkey(*obs_config.load_clip_hotkey())
+            hotkey = obs_config.load_clip_hotkey()
         except Exception:
             return "Save Clip"
-        return f"Save Clip ({hotkey})"
+        if hotkey[3] == obs_config.NO_HOTKEY:
+            return "Save Clip"
+        return f"Save Clip ({obs_config.describe_hotkey(*hotkey)})"
 
     def _can_save_clip(self, item):
         return self.connected and self.replay_active

@@ -23,7 +23,7 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
-NO_HOTKEY = "None"  # the key choice for a start/stop hotkey that isn't set
+NO_HOTKEY = "None"  # the key choice for a hotkey that isn't set (obs_config.NO_HOTKEY)
 
 USAGE = """
 Usage: settings_dialog.py
@@ -514,11 +514,13 @@ def open_dialog(start_tab=None):
                     var.set(value)
 
         tk.Button(row, text="Pick...", command=pick).pack(side="left", padx=(px(6), 0))
+        tk.Button(row, text="Reset", command=lambda: [var.set(value) for var, value in zip(
+            hotkey_vars, obs_config.CLEARED_HOTKEY, strict=True)]).pack(side="left", padx=(px(4), 0))
         next_row += 1
         return hotkey_vars
 
     hotkey_ctrl_var, hotkey_alt_var, hotkey_shift_var, hotkey_key_var = hotkey_row(
-        "Save Clip:", hotkey, obs_config.HOTKEY_KEY_CHOICES)
+        "Save Clip:", hotkey, [NO_HOTKEY, *obs_config.HOTKEY_KEY_CHOICES])
     # Start, or stop when pressed again (obs_config.TOGGLE_HOTKEYS).
     toggle_hotkey_vars = {
         name: hotkey_row(title, toggle_hotkeys[name], [NO_HOTKEY, *obs_config.HOTKEY_KEY_CHOICES])
@@ -1675,11 +1677,14 @@ def open_dialog(start_tab=None):
             popups.showerror("Invalid Password", "Password can't be empty.")
             return
         hotkey_val = [hotkey_ctrl_var.get(), hotkey_alt_var.get(), hotkey_shift_var.get(), hotkey_key_var.get()]
-        try:
-            obs_config.hotkey_label_to_obs_key(hotkey_val[3])
-        except ValueError:
-            popups.showerror("Invalid Hotkey", "Pick a key for the clip hotkey.")
-            return
+        if hotkey_val[3] == NO_HOTKEY:
+            hotkey_val = list(obs_config.CLEARED_HOTKEY)  # Reset: no clip hotkey
+        else:
+            try:
+                obs_config.hotkey_label_to_obs_key(hotkey_val[3])
+            except ValueError:
+                popups.showerror("Invalid Hotkey", "Pick a key for the clip hotkey.")
+                return
         obs_settings = {
             "websocket": {"port": port_val, "password": password_val},
             "clip_hotkey": hotkey_val,
