@@ -27,5 +27,9 @@
   "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-win32-x64.zip": "9b382492dcfee91f8f9e92c91f7972550a1b95d2299cac72279dab33a600d7db",
   "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-arm64.zip": "1d75703019bb16461ae65f3081d7e6f5c0b11e901d0ccb5c343bcf7bcdd6435c",
   "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-darwin-x64.zip": "e567d13833d0e161d7749727355b98643461df3395b537cfa7bdddf8a8bfedff",
-  "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz": "590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5"
+  "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz": "590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5",
+  "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16+20261026-x86_64-unknown-linux-gnu-install_only.tar.gz": "6a79e922e50006b601f29e688407659da1c2b86ebcd4e9c7254cf234be8b89de",
+  "https://github.com/electron/electron/releases/download/v44.9.3/electron-v44.9.3-win32-x64.zip": "41a1ffa0541cb0f2c9b9fe920dd2cef1793ad0ea2ada1a9582958880f4d1b23c",
+  "https://github.com/electron/electron/releases/download/v44.9.3/electron-v44.9.3-darwin-arm64.zip": "4af51382278d00291dfcda265eddd9bab6e98cebb09f46aadc8438bf606de162",
+  "https://github.com/electron/electron/releases/download/v44.9.3/electron-v44.9.3-darwin-x64.zip": "451363b59bb7d2c1c9e0c4baa99106004eaabe724aa21a0c6b4c87469293531a"
 }
