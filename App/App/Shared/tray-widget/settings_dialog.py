@@ -23,6 +23,8 @@ import tkinter as tk
 import webbrowser
 from tkinter import ttk
 
+NO_HOTKEY = "None"  # the key choice for a start/stop hotkey that isn't set
+
 USAGE = """
 Usage: settings_dialog.py
 
@@ -49,9 +51,12 @@ sys.path.insert(1, INSTALLER_DIR)
 import bug_report  # noqa: E402
 import color_picker  # noqa: E402
 import dark_theme  # noqa: E402
+import detection_help  # noqa: E402
 import editor_install  # noqa: E402
 import file_dialogs  # noqa: E402
+import key_picker  # noqa: E402
 import mic_filter  # noqa: E402
+import naming_form  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import popups  # noqa: E402
@@ -59,10 +64,19 @@ import reinstall  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
 from app_window import style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
+    SHORTCUT_BROKEN,
+    SHORTCUT_DESKTOP,
+    SHORTCUT_OTHER,
+    SHORTCUT_OURS,
+    SHORTCUT_START_MENU,
     apply_boot_autostart,
     describe_autostart_entry,
     find_autostart_entries,
+    install_shortcut,
     remove_autostart_entries,
+    shortcut_path,
+    shortcut_state,
+    uninstall_shortcut,
 )
 from clipem_common import (  # noqa: E402
     OBS_RESTART_FLAG,
@@ -229,6 +243,8 @@ def load_recording_settings(pending):
         "replay_buffer_seconds": int(pending.get("replay_buffer_seconds") or setup.load_replay_buffer_seconds()),
         "bitrate": int(pending.get("recording_bitrate") or setup.load_recording_bitrate()),
         "audio": pending.get("audio_devices") or setup.load_audio_devices(),
+        "encoder": ((pending["recording_encoder"]["encoder"], pending["recording_encoder"].get("device"))
+                    if pending.get("recording_encoder") else setup.load_recording_encoder()),
     }
 
 
@@ -320,9 +336,18 @@ def open_dialog(start_tab=None):
     except Exception:
         disk_warnings_enabled = True
     try:
+        mic_check_enabled = obs_config.load_mic_check_enabled()
+    except Exception:
+        mic_check_enabled = True
+    try:
         hotkey = tuple(pending.get("clip_hotkey") or obs_config.load_clip_hotkey())
     except Exception:
         hotkey = obs_config.DEFAULT_CLIP_HOTKEY
+    try:
+        toggle_hotkeys = {**obs_config.load_toggle_hotkeys(), **pending.get("toggle_hotkeys", {})}
+        toggle_hotkeys = {name: list(value) if value else None for name, value in toggle_hotkeys.items()}
+    except Exception:
+        toggle_hotkeys = dict.fromkeys(obs_config.TOGGLE_HOTKEYS)
     try:
         clip_sound = pending.get("clip_sound") or obs_config.load_clip_sound()
     except Exception:
@@ -342,13 +367,19 @@ def open_dialog(start_tab=None):
         replay_seconds = int(pending.get("replay_buffer_seconds") or setup.load_replay_buffer_seconds())
     except Exception:
         replay_seconds = 60
+    try:
+        audio_script = pending.get("audio_script") or obs_config.load_audio_script_settings()
+    except Exception:
+        audio_script = dict(obs_config.DEFAULT_AUDIO_SCRIPT_SETTINGS)
     initial_obs_settings = {
         "websocket": {"port": port, "password": password},
         "clip_hotkey": list(hotkey),
+        "toggle_hotkeys": toggle_hotkeys,
         "clip_sound": {"enabled": bool(clip_sound["enabled"]), "volume": round(float(clip_sound["volume"]), 2)},
         "clip_folder": clip_folder,
         "split_tracks": split_tracks,
         "clip_reexport": reexport,
+        "audio_script": audio_script,
     }
 
     run_config = load_run_config()
@@ -453,21 +484,46 @@ def open_dialog(start_tab=None):
         tk.Label(frame, text=title, font=("", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
         next_row = 1
 
+    def info_button(parent, title, explanation):
+        """The "i" next to an option, opening its explanation."""
+        return tk.Button(parent, text="i", width=2, font=("", 9, "bold"), cursor="hand2",
+                         command=lambda: popups.showinfo(title, explanation, parent=root))
+
     # Clip Hotkey is now the first section - no gap above it.
-    section("Clip Hotkey", TAB_BASIC)
-    hotkey_ctrl_var = tk.BooleanVar(value=hotkey[0])
-    hotkey_alt_var = tk.BooleanVar(value=hotkey[1])
-    hotkey_shift_var = tk.BooleanVar(value=hotkey[2])
-    hotkey_key_var = tk.StringVar(value=hotkey[3])
-    hotkey_row = tk.Frame(frame)
-    hotkey_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=px(4))
-    for text, var in (("Ctrl", hotkey_ctrl_var), ("Alt", hotkey_alt_var), ("Shift", hotkey_shift_var)):
-        tk.Checkbutton(hotkey_row, text=text, variable=var).pack(side="left")
-    tk.Label(hotkey_row, text="+ Key:").pack(side="left", padx=(px(6), 0))
-    ttk.Combobox(
-        hotkey_row, textvariable=hotkey_key_var, values=obs_config.HOTKEY_KEY_CHOICES,
-        state="readonly", width=5,
-    ).pack(side="left", padx=(px(4), 0))
+    section("Hotkeys", TAB_BASIC)
+
+    def hotkey_row(title, value, choices):
+        """Ctrl/Alt/Shift + key for one hotkey: returns its 4 vars."""
+        nonlocal next_row
+        ctrl, alt, shift, key = value or (False, False, False, NO_HOTKEY)
+        hotkey_vars = (tk.BooleanVar(value=ctrl), tk.BooleanVar(value=alt), tk.BooleanVar(value=shift),
+                       tk.StringVar(value=key))
+        tk.Label(frame, text=title).grid(row=next_row, column=0, sticky="w")
+        row = tk.Frame(frame)
+        row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+        for text, var in zip(("Ctrl", "Alt", "Shift"), hotkey_vars[:3], strict=True):
+            tk.Checkbutton(row, text=text, variable=var).pack(side="left")
+        tk.Label(row, text="+ Key:").pack(side="left", padx=(px(6), 0))
+        ttk.Combobox(row, textvariable=hotkey_vars[3], values=choices, state="readonly", width=11,
+                     height=16).pack(side="left", padx=(px(4), 0))
+
+        def pick():
+            picked = key_picker.pick_hotkey(root, f"Pick a Hotkey: {title.rstrip(':')}")
+            if picked:
+                for var, value in zip(hotkey_vars, picked, strict=True):
+                    var.set(value)
+
+        tk.Button(row, text="Pick...", command=pick).pack(side="left", padx=(px(6), 0))
+        next_row += 1
+        return hotkey_vars
+
+    hotkey_ctrl_var, hotkey_alt_var, hotkey_shift_var, hotkey_key_var = hotkey_row(
+        "Save Clip:", hotkey, obs_config.HOTKEY_KEY_CHOICES)
+    # Start, or stop when pressed again (obs_config.TOGGLE_HOTKEYS).
+    toggle_hotkey_vars = {
+        name: hotkey_row(title, toggle_hotkeys[name], [NO_HOTKEY, *obs_config.HOTKEY_KEY_CHOICES])
+        for name, title in (("recording", "Start/Stop Recording:"), ("replay_buffer", "Start/Stop Replay Buffer:"))
+    }
 
     # --- Clip sound: on/off, volume and which .wav plays on each saved clip.
     section("Clip Sound", TAB_BASIC)
@@ -569,6 +625,14 @@ def open_dialog(start_tab=None):
     ).pack(side="left", padx=(px(4), 0))
     next_row += 1
 
+    # What clips and their copies are called (Scripts/clip_naming.py) - read
+    # when each clip is saved, so it applies straight away.
+    tk.Label(frame, text="Clip names:").grid(row=next_row, column=0, sticky="nw", pady=(px(4), 0))
+    naming = naming_form.NamingForm(frame, run_config.get("clip_naming"), px=px,
+                                    folder=lambda: clip_folder_var.get())
+    naming.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=(px(2), px(6)))
+    next_row += 1
+
     split_tracks_var = tk.BooleanVar(value=split_tracks)
     tk.Checkbutton(
         frame, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
@@ -659,6 +723,11 @@ def open_dialog(start_tab=None):
     fps_combo = combo_row("FPS:", 6)
     fps_combo.configure(values=[str(f) for f in setup.FPS_CHOICES])
     fps_combo.set(str(recording["fps"]))
+    encoder_combo = combo_row("Video encoder:", 34)
+    encoder_combo.set("Detecting encoders...")
+    # Only saved when picked here - the list is what was found, which may not
+    # have the one in use (see on_devices).
+    encoder_picked = {"value": None}
 
     tk.Label(frame, text="Replay buffer:").grid(row=next_row, column=0, sticky="w")
     buffer_row = tk.Frame(frame)
@@ -778,8 +847,22 @@ def open_dialog(start_tab=None):
             combo.current(ids.index(recording["audio"][flow]) if recording["audio"][flow] in ids else 0)
         mic_button.config(state="normal")
 
+    def fill_encoders(found):
+        choices = [(encoder, device) for encoder, device, _label in found]
+        labels = [label for _encoder, _device, label in found]
+        current = tuple(recording["encoder"])
+        if current not in choices:
+            choices.insert(0, current)
+            labels.insert(0, setup.encoders.LABELS[current[0]] + " (not found on this PC)")
+        encoder_combo.configure(state="readonly", values=labels)
+        encoder_combo.current(choices.index(current))
+        encoder_combo.bind("<<ComboboxSelected>>",
+                           lambda _e: encoder_picked.update(value=choices[encoder_combo.current()]))
+
     def on_devices(result, exc):
         result = result if exc is None else {}
+        fill_encoders(result.get("encoders")
+                      or [(setup.encoders.X264, None, setup.encoders.LABELS[setup.encoders.X264])])
         devices["displays"] = result.get("displays") or [{
             "name": "Primary display", "width": root.winfo_screenwidth(),
             "height": root.winfo_screenheight(), "primary": True,
@@ -794,7 +877,8 @@ def open_dialog(start_tab=None):
 
     # Display/audio detection shells out (PowerShell on Windows) and can take
     # a few seconds - as in Setup, it runs while the window is up.
-    run_in_background(root, lambda: {"displays": setup.list_displays(), "audio": setup.list_audio_devices()},
+    run_in_background(root, lambda: {"displays": setup.list_displays(), "audio": setup.list_audio_devices(),
+                                     "encoders": setup.list_encoders()},
                       on_devices)
 
     # --- Which editor the tray's editor item opens: ClipEm's own, the user's
@@ -976,19 +1060,43 @@ def open_dialog(start_tab=None):
 
     section("Scripts", TAB_SCRIPTS)
     stuck_var = tk.BooleanVar(value=stuck_enabled)
-    tk.Checkbutton(frame, text="Enable stuck-screen detection", variable=stuck_var).grid(
-        row=next_row, column=0, columnspan=2, sticky="w"
-    )
-    next_row += 1
     black_var = tk.BooleanVar(value=black_enabled)
-    tk.Checkbutton(frame, text="Enable black-screen detection", variable=black_var).grid(
-        row=next_row, column=0, columnspan=2, sticky="w"
-    )
-    next_row += 1
     disk_warnings_var = tk.BooleanVar(value=disk_warnings_enabled)
-    tk.Checkbutton(frame, text="Enable disk space warnings", variable=disk_warnings_var).grid(
-        row=next_row, column=0, columnspan=2, sticky="w"
-    )
+    mic_check_var = tk.BooleanVar(value=mic_check_enabled)
+    for var, text, title, explanation in (
+        (stuck_var, "Enable stuck-screen detection", "Stuck-Screen Detection", detection_help.STUCK_SCREEN),
+        (black_var, "Enable black-screen detection", "Black-Screen Detection", detection_help.BLACK_SCREEN),
+        (disk_warnings_var, "Enable disk space warnings", "Disk Space Warnings", detection_help.DISK_SPACE),
+        (mic_check_var, "Enable missing-mic detection", "Missing-Mic Detection", detection_help.MIC_CHECK),
+    ):
+        script_row = tk.Frame(frame)
+        script_row.grid(row=next_row, column=0, columnspan=2, sticky="w")
+        tk.Checkbutton(script_row, text=text, variable=var).pack(side="left")
+        info_button(script_row, title, explanation).pack(side="left", padx=(px(4), 0))
+        next_row += 1
+
+    # stuck_output_check.py's own options (OBS's Tools > Scripts).
+    peak_guard_var = tk.BooleanVar(value=bool(audio_script["peak_guard_enabled"]))
+    peak_ceiling_var = tk.StringVar(value=f"{float(audio_script['peak_ceiling_db']):g}")
+    script_debug_var = tk.BooleanVar(value=bool(audio_script["debug_enabled"]))
+    peak_row = tk.Frame(frame)
+    peak_row.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    tk.Checkbutton(peak_row, text="Lower the volume of audio sources that peak", variable=peak_guard_var).pack(
+        side="left")
+    info_button(peak_row, "Audio Peak Guard", detection_help.PEAK_GUARD).pack(side="left", padx=(px(4), 0))
+    next_row += 1
+    ceiling_row = tk.Frame(frame)
+    ceiling_row.grid(row=next_row, column=0, columnspan=2, sticky="w", padx=(px(24), 0))
+    tk.Label(ceiling_row, text="Peak ceiling after lowering (dB):").pack(side="left")
+    tk.Spinbox(ceiling_row, textvariable=peak_ceiling_var, width=6, increment=0.1,
+               from_=obs_config.PEAK_CEILING_MIN_DB, to=obs_config.PEAK_CEILING_MAX_DB).pack(
+        side="left", padx=(px(6), 0))
+    next_row += 1
+    debug_row = tk.Frame(frame)
+    debug_row.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    tk.Checkbutton(debug_row, text="Enable debug messages in OBS's script log", variable=script_debug_var).pack(
+        side="left")
+    info_button(debug_row, "Debug Messages", detection_help.SCRIPT_DEBUG).pack(side="left", padx=(px(4), 0))
     next_row += 1
 
     section("Autostart with PC boot", TAB_BASIC)
@@ -1101,6 +1209,59 @@ def open_dialog(start_tab=None):
     )
     next_row += 1
     show_autostart_status()
+
+    # Like autostart: each shortcut's buttons act straight away, and only
+    # the ones that apply are shown.
+    shortcut_kinds = [(kind, name) for kind, name in ((SHORTCUT_START_MENU, "Start Menu"),
+                                                      (SHORTCUT_DESKTOP, "Desktop"))
+                      if shortcut_path(kind)]
+    if shortcut_kinds:
+        section("Shortcuts", TAB_BASIC)
+    for kind, name in shortcut_kinds:
+        shortcut_status_var = tk.StringVar()
+        shortcut_row = tk.Frame(frame)
+        shortcut_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        next_row += 1
+        tk.Label(frame, textvariable=shortcut_status_var, fg=dark_theme.MUTED).grid(
+            row=next_row, column=0, columnspan=2, sticky="w")
+        next_row += 1
+        shortcut_install = tk.Button(shortcut_row, text=f"Install {name} Shortcut")
+        shortcut_uninstall = tk.Button(shortcut_row, text=f"Uninstall {name} Shortcut")
+
+        def show_shortcut_status(kind=kind, name=name, status_var=shortcut_status_var,
+                                 install=shortcut_install, uninstall=shortcut_uninstall):
+            """Looked up in the background - reading a Windows .lnk runs PowerShell."""
+            status_var.set(f"{name} shortcut: checking...")
+            install.pack_forget()
+            uninstall.pack_forget()
+
+            def on_state(state, exc):
+                if exc is not None:
+                    status_var.set(f"{name} shortcut: unknown ({exc})")
+                    state = None
+                else:
+                    status_var.set(f"{name} shortcut: " + {
+                        SHORTCUT_OURS: "installed",
+                        SHORTCUT_OTHER: "starts another ClipEm folder",
+                        SHORTCUT_BROKEN: "broken (from a ClipEm folder that's gone)",
+                    }.get(state, "not installed"))
+                if state != SHORTCUT_OURS:
+                    install.pack(side="left", padx=(0, px(4)))
+                if state in (SHORTCUT_OURS, SHORTCUT_BROKEN, None):
+                    uninstall.pack(side="left", padx=(0, px(4)))
+
+            run_in_background(root, lambda: shortcut_state(kind), on_state)
+
+        def on_shortcut(action, kind=kind, name=name, show=show_shortcut_status):
+            try:
+                action(kind)
+            except Exception as exc:
+                popups.showerror(f"{name} Shortcut", f"Couldn't change the {name} shortcut: {exc}", parent=root)
+            show()
+
+        shortcut_install.configure(command=lambda on=on_shortcut: on(install_shortcut))
+        shortcut_uninstall.configure(command=lambda on=on_shortcut: on(uninstall_shortcut))
+        show_shortcut_status()
 
     section("OBS Websocket", TAB_WEBSOCKET)
 
@@ -1522,11 +1683,26 @@ def open_dialog(start_tab=None):
         obs_settings = {
             "websocket": {"port": port_val, "password": password_val},
             "clip_hotkey": hotkey_val,
+            "toggle_hotkeys": {
+                name: None if key.get() == NO_HOTKEY else [ctrl.get(), alt.get(), shift.get(), key.get()]
+                for name, (ctrl, alt, shift, key) in toggle_hotkey_vars.items()
+            },
             "clip_sound": {"enabled": bool(sound_enabled_var.get()), "volume": round(sound_volume_var.get() / 100, 2)},
             "clip_folder": clip_folder_var.get(),
             "split_tracks": bool(split_tracks_var.get()),
             "clip_reexport": dict(initial_obs_settings["clip_reexport"], enabled=bool(reexport_var.get())),
         }
+        try:
+            ceiling = float(peak_ceiling_var.get())
+        except ValueError:
+            ceiling = None
+        if ceiling is None or not obs_config.PEAK_CEILING_MIN_DB <= ceiling <= obs_config.PEAK_CEILING_MAX_DB:
+            popups.showerror("Audio Peak Guard", f"Enter a peak ceiling from {obs_config.PEAK_CEILING_MIN_DB:g} "
+                             f"to {obs_config.PEAK_CEILING_MAX_DB:g} dB.", parent=root)
+            return
+        obs_settings["audio_script"] = {"peak_guard_enabled": bool(peak_guard_var.get()),
+                                        "peak_ceiling_db": round(ceiling, 1),
+                                        "debug_enabled": bool(script_debug_var.get())}
         try:
             buffer_seconds = int(float(buffer_var.get()))
             recording_bitrate = int(float(recording_bitrate_var.get()))
@@ -1539,6 +1715,9 @@ def open_dialog(start_tab=None):
             obs_settings["replay_buffer_seconds"] = buffer_seconds
         if recording_bitrate != recording["bitrate"]:
             obs_settings["recording_bitrate"] = recording_bitrate
+        if encoder_picked["value"] and tuple(encoder_picked["value"]) != tuple(recording["encoder"]):
+            encoder, device = encoder_picked["value"]
+            obs_settings["recording_encoder"] = {"encoder": encoder, "device": device}
         if devices["displays"] is not None:
             display = devices["displays"][display_combo.current()]
             out_width, out_height = (int(v) for v in resolution_combo.get().split("x"))
@@ -1559,6 +1738,11 @@ def open_dialog(start_tab=None):
         if mic_reading["value"]:
             obs_settings["mic_filter"] = mic_reading["value"]
 
+        clip_naming_settings = naming.get()
+        problem = naming_form.clip_naming.validate(clip_naming_settings)
+        if problem:
+            popups.showerror("Clip Names", problem, parent=root)
+            return
         values = reexport_values()
         if reexport_var.get() and (not values or values[0] <= 0):
             popups.showerror("Smaller Copy", "Enter a target size (MB, more than 0) and how many "
@@ -1593,6 +1777,8 @@ def open_dialog(start_tab=None):
             run_config["black_check_enabled"] = bool(black_var.get())
             # Read by the tray widget each poll - see disk_space.py.
             run_config["disk_space_warnings_enabled"] = bool(disk_warnings_var.get())
+            run_config["mic_check_enabled"] = bool(mic_check_var.get())  # see mic_check.py
+            run_config["clip_naming"] = clip_naming_settings  # read as each clip is saved
             run_config["custom_editor_path"] = editor_path_var.get().strip()
             run_config["clip_editor"] = editor_kind_var.get()
             run_config["clip_editors_disabled"] = bool(editors_off_var.get())
@@ -1627,8 +1813,8 @@ def open_dialog(start_tab=None):
 
         if not popups.askyesno(
             "Restart OBS?",
-            "OBS only picks up websocket, hotkey, clip sound, clip folder and multitrack "
-            "audio settings when it starts. Restart OBS now to apply them?\n\n"
+            "OBS only picks up websocket, hotkey, clip sound, clip folder, multitrack "
+            "audio and script settings when it starts. Restart OBS now to apply them?\n\n"
             "(Choosing No applies them the next time ClipEm starts OBS.)",
         ):
             root.destroy()

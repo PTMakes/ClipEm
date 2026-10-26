@@ -35,6 +35,7 @@ import obspython as obs
 # clip_tracks.py sits next to this script; OBS runs scripts with their folder
 # on the path, but not everything that loads this one does.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import clip_naming  # noqa: E402 - next to this script too
 from clip_tracks import (  # noqa: F401 - the rest are this script's public names
     AUDIO_BITRATE_KBPS,
     DEFAULT_CROP_SECONDS,
@@ -85,10 +86,10 @@ def find_ffmpeg(scripts_dir):
     return shutil.which("ffmpeg")
 
 
-def split_tracks(ffmpeg, clip_path, app_labels, log):
+def split_tracks(ffmpeg, clip_path, app_labels, log, suffix=TRACKS_SUFFIX):
     """Writes the "-tracks.mkv" copy, then strips the clip to the mix. The
     clip keeps every track if the copy couldn't be made."""
-    out_path = tracks_path_for(clip_path)
+    out_path = tracks_path_for(clip_path, suffix)
     titles = track_titles(app_labels, silent_app_tracks(ffmpeg, clip_path, app_labels, log))
     if not run_to(lambda partial: build_split_command(ffmpeg, clip_path, partial, titles),
                    out_path, f"splitting the audio tracks of {clip_path}", log):
@@ -104,11 +105,13 @@ def split_tracks(ffmpeg, clip_path, app_labels, log):
 
 def process_clip(ffmpeg, clip_path, options, log):
     """Everything for one saved clip, one step after another - the steps
-    read the clip the step before may have replaced."""
+    read the clip the step before may have replaced. options["naming"]:
+    clip_naming's settings (the defaults if missing)."""
+    naming = options.get("naming") or clip_naming.DEFAULTS
     if options.get("split_tracks"):
-        split_tracks(ffmpeg, clip_path, options.get("app_labels", ()), log)
+        split_tracks(ffmpeg, clip_path, options.get("app_labels", ()), log, naming["tracks_suffix"])
     if options.get("reexport"):
-        reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log)
+        reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log, naming["small_suffix"])
 
 
 # ---------------------------------------------------------------------------
@@ -165,15 +168,20 @@ def _log(message):
 
 
 def on_event(event):
-    if event != obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED or not (split_tracks_enabled or reexport_enabled):
+    if event != obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED:
         return
     if tray_tracks_enabled:
-        # The tray widget records the app tracks and finishes the clip
-        # (tray-widget/tray_tracks.py) - two writers would race on it.
+        # The tray widget records the app tracks and finishes the clip -
+        # naming it too (tray-widget/tray_tracks.py); two writers would race on it.
         return
     clip_path = obs.obs_frontend_get_last_replay()
     if not clip_path or not os.path.isfile(clip_path):
         _log(f"saved clip not found ({clip_path!r}) - skipping")
+        return
+    # Read each time: Settings changes it while OBS runs.
+    naming = clip_naming.load()
+    clip_path = clip_naming.rename_clip(clip_path, naming, log=_log)
+    if not (split_tracks_enabled or reexport_enabled):
         return
     ffmpeg = find_ffmpeg(SCRIPTS_DIR)
     if not ffmpeg:
@@ -185,5 +193,6 @@ def on_event(event):
         "reexport": reexport_enabled,
         "target_mb": target_mb,
         "crop_seconds": crop_seconds,
+        "naming": naming,
     }
     threading.Thread(target=process_clip, args=(ffmpeg, clip_path, options, _log), daemon=True).start()

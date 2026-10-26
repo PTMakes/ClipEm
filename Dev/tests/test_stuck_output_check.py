@@ -34,6 +34,8 @@ def _db(volume):
     (0.0, 0.0, -1.0),    # at clip level: down to the ceiling
     (6.0, -2.0, -9.0),   # clipping hard: down by as much as it's over
     (-3.0, 0.0, 0.0),    # below the ceiling: never turned up
+    (6.0, -18.0, -20.0),  # never lowered past -20 dB, where it'd go missing from clips
+    (0.0, -25.0, -25.0),  # already below that floor: not turned up either
 ])
 def test_reduced_volume_puts_the_peak_on_the_ceiling(peak_db, volume_db, expected_db):
     volume = 10 ** (volume_db / 20)

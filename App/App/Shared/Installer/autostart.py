@@ -464,6 +464,8 @@ def ensure_start_menu_entry():
     if platform.system() != "Windows":
         return None
     config = load_run_config()
+    if config.get(f"{SHORTCUT_START_MENU}_shortcut") is False:
+        return None  # uninstalled in Settings
     try:
         done = int(config.get("start_menu_registered") or 0)
         failed = int(config.get("start_menu_failures") or 0)
@@ -573,6 +575,165 @@ def remove_linux_menu_entry():
         print(f"Could not remove the application menu entry {path}: {exc}", file=sys.stderr)
         return
     _refresh_linux_menus(os.path.dirname(path))
+
+
+# ---------------------------------------------------------------------------
+# Start Menu / desktop shortcuts as Settings shows them - each one installed
+# or uninstalled by its own buttons, like the autostart entry. Uninstalling
+# one is remembered in run_config.json ("<kind>_shortcut": false), so
+# nothing puts it back by itself; installing it clears that.
+# ---------------------------------------------------------------------------
+
+SHORTCUT_START_MENU, SHORTCUT_DESKTOP = "start_menu", "desktop"
+# What a shortcut found at its path runs: this install, another ClipEm folder
+# that still exists, a ClipEm folder that's gone (its icon and launch are
+# broken), or nothing there.
+SHORTCUT_OURS, SHORTCUT_OTHER, SHORTCUT_BROKEN, SHORTCUT_MISSING = "ours", "other", "broken", "missing"
+_RUN_PY_IN_COMMAND = re.compile(r'"([^"]*run\.py)"|(\S*run\.py)')
+
+
+def _windows_desktop_dir():
+    """The user's Desktop folder (it can be moved, e.g. into OneDrive), or None."""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER,
+                            r"Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders") as key:
+            return os.path.expandvars(winreg.QueryValueEx(key, "Desktop")[0])
+    except OSError:
+        profile = os.environ.get("USERPROFILE")
+        return os.path.join(profile, "Desktop") if profile else None
+
+
+def _linux_desktop_dir():
+    """XDG's desktop folder ($XDG_DESKTOP_DIR in user-dirs.dirs), else ~/Desktop."""
+    config_home = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    try:
+        with open(os.path.join(config_home, "user-dirs.dirs"), encoding="utf-8") as f:
+            for line in f:
+                key, _, value = line.strip().partition("=")
+                if key == "XDG_DESKTOP_DIR":
+                    return os.path.expandvars(value.strip('"').replace("$HOME", os.path.expanduser("~")))
+    except OSError:
+        pass
+    return os.path.expanduser("~/Desktop")
+
+
+def shortcut_path(kind):
+    """Where the kind's shortcut goes on this system, or None where ClipEm
+    doesn't make one (macOS)."""
+    system = platform.system()
+    if kind == SHORTCUT_START_MENU:
+        return {"Windows": start_menu_shortcut_path, "Linux": linux_menu_entry_path}.get(system, lambda: None)()
+    if system == "Windows":
+        folder = _windows_desktop_dir()
+        return os.path.join(folder, "ClipEm.lnk") if folder else None
+    if system == "Linux":
+        return os.path.join(_linux_desktop_dir(), "ClipEm.desktop")
+    return None
+
+
+def _shortcut_command(path):
+    """What the shortcut at path runs ("" if it can't be read)."""
+    if path.endswith(".lnk"):
+        for shortcut, command in _windows_startup_shortcuts(os.path.dirname(path)):
+            if os.path.normcase(shortcut) == os.path.normcase(path):
+                return command
+        return ""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def shortcut_state(kind):
+    """SHORTCUT_OURS/OTHER/BROKEN/MISSING for the kind's shortcut (MISSING
+    where there's no such shortcut on this system)."""
+    path = shortcut_path(kind)
+    if not path or not os.path.exists(path):
+        return SHORTCUT_MISSING
+    command = _shortcut_command(path)
+    if _points_at_this_install(command):
+        return SHORTCUT_OURS
+    match = _RUN_PY_IN_COMMAND.search(command)
+    target = match and (match.group(1) or match.group(2))
+    if target and not os.path.exists(target):
+        return SHORTCUT_BROKEN
+    return SHORTCUT_OTHER
+
+
+def _remember_shortcut(kind, wanted):
+    config = load_run_config()
+    config[f"{kind}_shortcut"] = bool(wanted)
+    save_run_config(config)
+
+
+def install_shortcut(kind):
+    """Writes this install's shortcut of that kind, replacing whatever is at
+    its path (the menu and desktop only have room for one ClipEm). Returns
+    its path. Raises on failure."""
+    path = shortcut_path(kind)
+    if not path:
+        raise RuntimeError(f"ClipEm doesn't make this shortcut on {platform.system()}")
+    system = platform.system()
+    if kind == SHORTCUT_START_MENU and system == "Windows":
+        create_start_menu_shortcut()
+    elif kind == SHORTCUT_START_MENU:
+        create_linux_menu_entry(find_linux_python_bin(), _linux_icon())
+    elif system == "Windows":
+        pythonw, arguments, icon = _windows_launch_target()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        run_powershell(windows_shortcut_script(path, pythonw, arguments, ROOT_DIR, icon), check=True,
+                       capture_output=True)
+        set_shortcut_app_id(path, WINDOWS_APP_ID)
+    else:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(linux_desktop_entry(find_linux_python_bin(), icon=_linux_icon(), menu=True))
+        os.chmod(path, 0o755)
+        # GNOME's and KDE's desktops won't launch a .desktop file until it's trusted.
+        if shutil.which("gio"):
+            subprocess.run(["gio", "set", path, "metadata::trusted", "true"], capture_output=True)
+    _remember_shortcut(kind, True)
+    print(f"Installed the {kind.replace('_', ' ')} shortcut: {path}")
+    return path
+
+
+def uninstall_shortcut(kind):
+    """Removes the kind's shortcut if it's this install's or a broken one
+    (from a ClipEm folder that's gone) - one that starts another existing
+    ClipEm folder is left alone. Returns True if one was removed."""
+    path = shortcut_path(kind)
+    _remember_shortcut(kind, False)
+    if not path or shortcut_state(kind) not in (SHORTCUT_OURS, SHORTCUT_BROKEN):
+        return False
+    os.remove(path)
+    if kind == SHORTCUT_START_MENU and platform.system() == "Linux":
+        _refresh_linux_menus(os.path.dirname(path))
+    print(f"Removed the {kind.replace('_', ' ')} shortcut: {path}")
+    return True
+
+
+def repair_linux_menu_entry():
+    """The application menu has room for one ClipEm entry, and the last
+    install to run Setup writes it - so deleting that install leaves an
+    entry with no icon that starts nothing, and taskbars show no icon for
+    ClipEm's windows either (they match them to it by StartupWMClass).
+    run.py calls this on each launch: such a broken entry is taken over by
+    this install, unless the user uninstalled the shortcut in Settings.
+    Returns the entry's path when it rewrote it, else None."""
+    if platform.system() != "Linux" or load_run_config().get(f"{SHORTCUT_START_MENU}_shortcut") is False:
+        return None
+    if shortcut_state(SHORTCUT_START_MENU) != SHORTCUT_BROKEN:
+        return None
+    create_linux_menu_entry(find_linux_python_bin(), _linux_icon())
+    return linux_menu_entry_path()
+
+
+def _linux_icon():
+    icon = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.png")
+    return icon if os.path.exists(icon) else None
 
 
 def create_shortcut_linux():

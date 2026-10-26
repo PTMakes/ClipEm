@@ -105,6 +105,25 @@ def test_clip_sound_volume_is_clamped(fake_obs_config):
     assert obs_config.load_clip_sound()["volume"] == 0.0
 
 
+def test_audio_script_settings_round_trip_and_queue(fake_obs_config):
+    assert obs_config.load_audio_script_settings() == obs_config.DEFAULT_AUDIO_SCRIPT_SETTINGS
+    settings = {"peak_guard_enabled": False, "peak_ceiling_db": -3.0, "debug_enabled": True}
+    obs_config.queue_obs_settings({"audio_script": settings})
+    assert obs_config.load_audio_script_settings() == obs_config.DEFAULT_AUDIO_SCRIPT_SETTINGS  # queued
+    obs_config.apply_pending_obs_settings()
+    assert obs_config.load_audio_script_settings() == settings
+    # The stuck-check setting from before it moved to the tray is left alone.
+    entry = obs_config.find_script_entry(obs_config.load_scene_collection(), "stuck_output_check.py")
+    assert entry["settings"]["stuck_check_enabled"] is True
+
+
+def test_audio_script_peak_ceiling_is_clamped(fake_obs_config):
+    obs_config.save_audio_script_settings(True, 0.0, False)
+    assert obs_config.load_audio_script_settings()["peak_ceiling_db"] == obs_config.PEAK_CEILING_MAX_DB
+    obs_config.save_audio_script_settings(True, -50, False)
+    assert obs_config.load_audio_script_settings()["peak_ceiling_db"] == obs_config.PEAK_CEILING_MIN_DB
+
+
 def test_replacing_the_clip_sound_only_accepts_wav(tmp_path, monkeypatch):
     import pytest
 

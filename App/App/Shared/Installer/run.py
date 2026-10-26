@@ -501,6 +501,7 @@ def _start_setup():
 
 
 UPDATE_NOW, UPDATE_NEXT_LAUNCH, UPDATE_SKIP = "now", "next_launch", "skip"
+TRAY_WATCH_MS = 2000  # how often the update prompt checks the tray widget is still running
 
 
 def _ask_about_update(changes):
@@ -550,6 +551,21 @@ def _ask_about_update(changes):
     ):
         tkinter.Button(frame, text=text, command=lambda v=value: choose(v)).pack(fill="x", pady=2)
     root.protocol("WM_DELETE_WINDOW", root.destroy)
+
+    def close_with_tray(seen_tray=False):
+        """The prompt belongs to this launch, not the tray widget, so quitting
+        the tray wouldn't close it: once the tray widget started alongside it
+        has quit, close it unanswered (it's offered again next launch). The
+        tray may not be up yet when the prompt opens, so it only counts once
+        it's been seen running."""
+        running = _tray_widget_running()
+        if seen_tray and not running:
+            log.info("The tray widget quit - closing the update prompt.")
+            root.destroy()
+            return
+        root.after(TRAY_WATCH_MS, close_with_tray, seen_tray or running)
+
+    root.after(TRAY_WATCH_MS, close_with_tray)
     root.mainloop()
     return choice.get("value")
 
@@ -756,6 +772,25 @@ def main():
                          "ClipEm records the apps.")
         except Exception as exc:
             log.warning(f"Could not move Split audio tracks to the new layout: {exc}")
+        try:
+            if obs_config.migrate_audio_bitrate():
+                log.info(f"Recorded audio moved to {obs_config.DEFAULT_AUDIO_TRACK_KBPS} kbps.")
+        except Exception as exc:
+            log.warning(f"Could not update the audio bitrate: {exc}")
+        try:
+            # Installs from before the cap followed the length and bitrate
+            # had 512 MB, which cut long clips short.
+            log.info(f"Replay buffer memory: up to {obs_config.fit_replay_buffer_size()} MB.")
+        except Exception as exc:
+            log.warning(f"Could not size the replay buffer's memory: {exc}")
+        try:
+            import setup  # here: only needed while OBS is closed
+
+            changed = setup.ensure_recording_encoder_available()
+            if changed:
+                log.warning(changed)
+        except Exception as exc:
+            log.warning(f"Could not check the recording encoder: {exc}")
     try:
         if obs_config.load_split_tracks() and obs_config.app_capture_helper_missing():
             log.warning(f"Split audio tracks is on but {obs_config.APP_CAPTURE_HELPER_PATH} is missing - "
@@ -770,6 +805,12 @@ def main():
             log.info(f"Added ClipEm to the Start Menu: {path}")
     except Exception as exc:
         log.warning(f"Could not add ClipEm to the Start Menu: {exc}")
+    try:
+        path = autostart.repair_linux_menu_entry()
+        if path:
+            log.info(f"Replaced a broken application menu entry (from a deleted ClipEm folder): {path}")
+    except Exception as exc:
+        log.warning(f"Could not repair the application menu entry: {exc}")
     boot = "--boot" in sys.argv[1:]
     config = load_run_config() if boot else dict(DEFAULT_RUN_CONFIG)
     system = platform.system()

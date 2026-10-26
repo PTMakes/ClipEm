@@ -70,6 +70,7 @@ from clipem_common import (  # noqa: E402
     stop_clip_editor,
 )
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
+from mic_check import EVENT_SUBSCRIPTIONS, MicCheck  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
 from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
 from tray_tracks import ClipFinisher  # noqa: E402
@@ -340,6 +341,7 @@ class TrayApp:
             PipeWireStreamWatch(obs_config.OBS_LOG_DIR),
         )
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
+        self.mic_check = MicCheck(self._notify)
         self.app_recorder = AppRecorder(seconds=replay_buffer_seconds)
         self.app_tracks = AppTrackMonitor(self.app_recorder)
         self.clip_finisher = ClipFinisher(self.app_recorder)
@@ -671,16 +673,19 @@ class TrayApp:
         self.client = connect_with_retry(
             url,
             settings["password"],
+            event_subscriptions=EVENT_SUBSCRIPTIONS,  # with the mixer's meters, for MicCheck
             timeout_seconds=MAX_DISCONNECTED_SECONDS,
             log=log.info,
         )
         self.client.on_event("InputSettingsChanged", self._on_input_settings_changed)
         self.client.on_event("ReplayBufferSaved", self.clip_finisher.on_replay_saved)
+        self.client.on_event("InputVolumeMeters", self.mic_check.on_volume_meters)
         self.connected = True
         log.info(f"Connected to OBS at {url}.")
         self.stuck_screen.forget()
         self.app_tracks.forget()
         self.clip_folder.forget()
+        self.mic_check.forget()
 
     def _on_input_settings_changed(self, event):
         try:
@@ -710,6 +715,14 @@ class TrayApp:
             return obs_config.load_disk_space_warnings_enabled()
         except Exception as exc:
             log.warning(f"Couldn't read the disk-space warnings setting ({exc}); leaving them on.")
+            return True
+
+    @staticmethod
+    def _mic_check_enabled():
+        try:
+            return obs_config.load_mic_check_enabled()
+        except Exception as exc:
+            log.warning(f"Couldn't read the missing-mic setting ({exc}); leaving the check on.")
             return True
 
     def _check_tray_available(self):
@@ -748,6 +761,7 @@ class TrayApp:
                 self.stuck_screen.tick(self.client, self._stuck_check_enabled, self._black_check_enabled)
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
+                self.mic_check.tick(self.client, self._mic_check_enabled, self.replay_active or self.recording_active)
                 self.app_tracks.tick()
                 missing_before = self.clip_folder.missing_dir
                 self.clip_folder.tick(self.client, self.replay_active)

@@ -40,6 +40,7 @@ if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import autostart  # noqa: E402
 import editor_window  # noqa: E402
+import encoders  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
@@ -301,12 +302,13 @@ FPS_CHOICES = [24, 30, 48, 60]
 COMMON_RESOLUTIONS = [
     (3840, 2160), (2560, 1440), (1920, 1080), (1600, 900), (1280, 720), (854, 480),
 ]
-AUDIO_BITRATE_KBPS = 160
+AUDIO_BITRATE_KBPS = 160  # the smaller copy's audio (Scripts/clip_tracks.py)
+RECORDING_AUDIO_KBPS = obs_config.DEFAULT_AUDIO_TRACK_KBPS  # each track OBS records
 KBIT_PER_MB = 8000  # Must match Scripts/clip_reexport.py's.
 MIN_VIDEO_BITRATE_KBPS = 500
 DEFAULT_TARGET_FILESIZE_MB = obs_config.DISCORD_TARGET_MB  # Discord's free-tier upload limit.
 REPLAY_BUFFER_MIN_SECONDS = 15
-REPLAY_BUFFER_MAX_SECONDS = 600  # RecRBSize (512MB) caps how much of this is reachable in practice.
+REPLAY_BUFFER_MAX_SECONDS = 600  # RecRBSize follows it (obs_config.fit_replay_buffer_size)
 REPLAY_BUFFER_STEP_SECONDS = 15
 BITRATE_MIN_KBPS = MIN_VIDEO_BITRATE_KBPS
 BITRATE_MAX_KBPS = 50000
@@ -978,6 +980,14 @@ def save_replay_buffer_seconds(seconds):
         return
     update_ini_section(BASIC_INI, "AdvOut", {"RecRBTime": int(seconds)})
     print(f"Replay buffer length set to {int(seconds)}s.")
+    _fit_replay_buffer_size()
+
+
+def _fit_replay_buffer_size():
+    """After anything that changes how much the replay buffer has to hold."""
+    size = obs_config.fit_replay_buffer_size()
+    if size:
+        print(f"Replay buffer memory: up to {size} MB.")
 
 
 def compute_video_bitrate_for_filesize(target_mb, duration_sec, audio_kbps=AUDIO_BITRATE_KBPS):
@@ -1009,7 +1019,7 @@ def bitrate_for_new_resolution(current_kbps, old_resolution, new_resolution):
     return current_kbps
 
 
-def compute_filesize_for_bitrate(video_kbps, duration_sec, audio_kbps=AUDIO_BITRATE_KBPS):
+def compute_filesize_for_bitrate(video_kbps, duration_sec, audio_kbps=RECORDING_AUDIO_KBPS):
     """Inverse of compute_video_bitrate_for_filesize: estimated MB for
     `duration_sec` seconds of video+audio at a given (directly-chosen)
     video bitrate."""
@@ -1042,6 +1052,68 @@ def save_recording_bitrate(kbps):
     data["bitrate"] = int(kbps)
     write_json_atomic(RECORD_ENCODER_JSON, data)
     print(f"Recording bitrate set to {kbps} kbps.")
+    _fit_replay_buffer_size()
+
+
+def save_clip_naming(settings):
+    """What saved clips are called (Scripts/clip_naming.py) - in
+    run_config.json, read as each clip is saved."""
+    config = load_run_config()
+    config["clip_naming"] = settings
+    save_run_config(config)
+    print(f"Clip names: {settings}")
+
+
+def save_toggle_hotkey(name, hotkey):
+    obs_config.save_toggle_hotkey(name, hotkey)
+    shown = obs_config.describe_hotkey(*hotkey) if hotkey else "none"
+    print(f"{name.replace('_', ' ').capitalize()} start/stop hotkey: {shown}.")
+
+
+def list_encoders():
+    """[(encoder, device, label)] this PC can record with, the one to pick
+    by default first (see encoders.available)."""
+    return [(encoder, device, encoders.LABELS[encoder]) for encoder, device in encoders.available()]
+
+
+def load_recording_encoder():
+    """(encoder, VA-API device or None) recording uses now - x264 for an
+    encoder ClipEm doesn't know (picked in OBS itself)."""
+    encoder = encoders.encoder_for_obs_id(obs_config.read_ini_section("AdvOut").get("RecEncoder"))
+    settings = load_json(RECORD_ENCODER_JSON)
+    device = settings.get("vaapi_device") if isinstance(settings, dict) else None
+    return encoder or encoders.DEFAULT_ENCODER, device
+
+
+def save_recording_encoder(encoder, device=None):
+    """Records with `encoder` (encoders.X264, NVENC...) at the current
+    bitrate. recordEncoder.json is rewritten for it - each encoder has its
+    own settings."""
+    if not os.path.exists(BASIC_INI):
+        print(f"Config file not found: {BASIC_INI}", file=sys.stderr)
+        return
+    write_json_atomic(RECORD_ENCODER_JSON, encoders.encoder_settings(encoder, load_recording_bitrate(), device))
+    update_ini_section(BASIC_INI, "AdvOut", {"RecEncoder": encoders.OBS_IDS[encoder]})
+    print(f"Recording encoder set to {encoders.LABELS[encoder]}" + (f" ({device})." if device else "."))
+
+
+def ensure_recording_encoder_available():
+    """Before OBS starts: a hardware encoder that's no longer there (GPU
+    swapped, driver removed) would stop recording and the replay buffer from
+    starting at all - so fall back to x264, or to the VA-API device that
+    still works. Returns a message saying what changed, or None."""
+    encoder, device = load_recording_encoder()
+    if encoder == encoders.X264:
+        return None
+    found = encoders.available()
+    if (encoder, device) in found or (encoder != encoders.VAAPI and any(e == encoder for e, _d in found)):
+        return None
+    same = next(((e, d) for e, d in found if e == encoder), None)
+    if same:
+        save_recording_encoder(*same)
+        return f"Recording now uses VA-API device {same[1]} ({device} can't encode)."
+    save_recording_encoder(encoders.X264)
+    return f"{encoders.LABELS[encoder]} isn't available any more - recording uses x264 (the CPU) instead."
 
 
 def configure_video_quality():
@@ -1423,6 +1495,24 @@ def save_clip_reexport(enabled, target_mb, crop_seconds):
 
 
 # ---------------------------------------------------------------------------
+# Audio peak guard and debug messages: Scripts/stuck_output_check.py's own
+# options (see obs_config.save_audio_script_settings).
+# ---------------------------------------------------------------------------
+
+def save_audio_script_settings(peak_guard_enabled, peak_ceiling_db, debug_enabled):
+    try:
+        obs_config.save_audio_script_settings(peak_guard_enabled, peak_ceiling_db, debug_enabled)
+    except RuntimeError as exc:
+        print(f"{exc} - can't save the audio peak guard settings.", file=sys.stderr)
+        return
+    if peak_guard_enabled:
+        print(f"Audio peak guard on: peaking sources lowered to {float(peak_ceiling_db):g} dB.")
+    else:
+        print("Audio peak guard off.")
+    print(f"OBS script debug messages {'on' if debug_enabled else 'off'}.")
+
+
+# ---------------------------------------------------------------------------
 # Split audio tracks: OBS records 3 audio tracks instead of one - the full
 # mix, the mic and desktop audio. Track 1 stays the full mix, so the clip
 # itself is unchanged. The tray widget records the apps itself (one track
@@ -1474,6 +1564,7 @@ def save_split_tracks(enabled):
     save_scene_collection(data)
     if os.path.exists(BASIC_INI):
         update_ini_section(BASIC_INI, "AdvOut", {"RecTracks": ALL_TRACKS_MASK if enabled else 1})
+        _fit_replay_buffer_size()
     if not enabled:
         print("Split audio tracks off.")
     elif tray_tracks:
@@ -2008,7 +2099,7 @@ def declutter_and_create_shortcut():
 def launch_app():
     """Starts run.py in the background - the same interpreter/working
     directory the created shortcut uses. Backs the finish page's
-    "Automatically run OBS after closing this" option, so the user doesn't
+    "Automatically run ClipEm after closing this" option, so the user doesn't
     have to go find and click the shortcut Setup just created."""
     run_py = os.path.join(INSTALLER_DIR, "run.py")
     kwargs = {}
@@ -2119,6 +2210,9 @@ def try_launch_gui(system):
         "bitrate_step_kbps": BITRATE_STEP_KBPS,
         "install_tray": install_tray_widget,
         "load_clip_hotkey": load_clip_hotkey,
+        "load_toggle_hotkeys": obs_config.load_toggle_hotkeys,
+        "save_clip_naming": save_clip_naming,
+        "save_toggle_hotkey": save_toggle_hotkey,
         "save_clip_hotkey": save_clip_hotkey,
         "load_clip_sound_enabled": load_clip_sound_enabled,
         "save_clip_sound_enabled": save_clip_sound_enabled,
@@ -2127,7 +2221,13 @@ def try_launch_gui(system):
         "replace_clip_sound_wav": replace_clip_sound_wav,
         "play_clip_sound": play_clip_sound,
         "load_clip_reexport": load_clip_reexport,
+        "list_encoders": list_encoders,
+        "load_recording_encoder": load_recording_encoder,
+        "save_recording_encoder": save_recording_encoder,
         "save_clip_reexport": save_clip_reexport,
+        "load_audio_script_settings": obs_config.load_audio_script_settings,
+        "save_audio_script_settings": save_audio_script_settings,
+        "peak_ceiling_range": (obs_config.PEAK_CEILING_MIN_DB, obs_config.PEAK_CEILING_MAX_DB),
         "load_split_tracks": load_split_tracks,
         "save_split_tracks": save_split_tracks,
         "app_capture_supported": app_capture_supported,

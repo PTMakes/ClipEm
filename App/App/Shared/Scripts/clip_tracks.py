@@ -51,9 +51,9 @@ def video_bitrate_kbps(target_mb, duration_seconds):
     return max(MIN_VIDEO_BITRATE_KBPS, int(total_kbps - AUDIO_BITRATE_KBPS))
 
 
-def output_path_for(clip_path):
+def output_path_for(clip_path, suffix=OUTPUT_SUFFIX):
     stem, _ext = os.path.splitext(clip_path)
-    return f"{stem}{OUTPUT_SUFFIX}.mp4"
+    return f"{stem}{suffix}.mp4"
 
 
 def build_command(ffmpeg, clip_path, out_path, target_mb, crop_seconds):
@@ -72,9 +72,9 @@ def build_command(ffmpeg, clip_path, out_path, target_mb, crop_seconds):
     ]
 
 
-def tracks_path_for(clip_path):
+def tracks_path_for(clip_path, suffix=TRACKS_SUFFIX):
     stem, _ext = os.path.splitext(clip_path)
-    return f"{stem}{TRACKS_SUFFIX}.mkv"
+    return f"{stem}{suffix}.mkv"
 
 
 def track_titles(app_labels, silent=()):
@@ -263,8 +263,8 @@ def run_to(cmd_for, out_path, what, log):
                 pass
 
 
-def reexport(ffmpeg, clip_path, target_mb, crop_seconds, log):
-    out_path = output_path_for(clip_path)
+def reexport(ffmpeg, clip_path, target_mb, crop_seconds, log, suffix=OUTPUT_SUFFIX):
+    out_path = output_path_for(clip_path, suffix)
     if not run_to(lambda partial: build_command(ffmpeg, clip_path, partial, target_mb, crop_seconds),
                    out_path, f"re-export of {clip_path}", log):
         return None

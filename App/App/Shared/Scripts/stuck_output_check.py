@@ -175,10 +175,17 @@ def start_peak_guard():
     obs.timer_add(peak_guard_tick, PEAK_GUARD_TICK_MS)
 
 
+# Never lowered past this (-20 dB): a source that keeps peaking - a mic
+# behind a strong gain or upward compressor filter - would otherwise be
+# turned down a little more every time, until it's missing from clips.
+PEAK_GUARD_MIN_VOLUME = 0.1
+
+
 def reduced_volume(volume, peak_db, ceiling_db):
     """The volume multiplier that brings a post-fader peak of peak_db down
-    to ceiling_db. Never turns the volume up."""
-    return min(volume, volume * 10 ** ((ceiling_db - peak_db) / 20))
+    to ceiling_db, but not below PEAK_GUARD_MIN_VOLUME. Never turns the
+    volume up."""
+    return min(volume, max(volume * 10 ** ((ceiling_db - peak_db) / 20), PEAK_GUARD_MIN_VOLUME))
 
 
 def peak_guard_tick():

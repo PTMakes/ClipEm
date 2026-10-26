@@ -192,3 +192,58 @@ def test_start_menu_entry_gives_up_after_a_few_failed_launches(monkeypatch):
             autostart.ensure_start_menu_entry()
     assert autostart.ensure_start_menu_entry() is None
     assert len(tries) == autostart.START_MENU_MAX_ATTEMPTS
+
+
+@pytest.fixture
+def shortcuts(menu_dir, tmp_path, monkeypatch):
+    """Linux, with the menu and desktop in tmp_path and run_config in memory."""
+    config = {}
+    desktop = tmp_path / "Desktop"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))  # no user-dirs.dirs: ~/Desktop
+    monkeypatch.setattr(autostart, "_linux_desktop_dir", lambda: str(desktop))
+    monkeypatch.setattr(autostart, "find_linux_python_bin", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(autostart.shutil, "which", lambda _name: None)  # no gio
+    monkeypatch.setattr(autostart, "load_run_config", lambda: dict(config))
+    monkeypatch.setattr(autostart, "save_run_config", lambda new: (config.clear(), config.update(new)))
+    return config, menu_dir, desktop
+
+
+@pytest.mark.parametrize("kind", [autostart.SHORTCUT_START_MENU, autostart.SHORTCUT_DESKTOP])
+def test_shortcuts_install_and_uninstall(shortcuts, kind):
+    config, _menu, _desktop = shortcuts
+    assert autostart.shortcut_state(kind) == autostart.SHORTCUT_MISSING
+    path = autostart.install_shortcut(kind)
+    assert autostart.shortcut_state(kind) == autostart.SHORTCUT_OURS
+    assert "StartupWMClass=ClipEm\n" in open(path).read()
+    assert config[f"{kind}_shortcut"] is True
+    assert autostart.uninstall_shortcut(kind) is True
+    assert not os.path.exists(path) and config[f"{kind}_shortcut"] is False
+
+
+def test_shortcut_from_a_deleted_install_is_broken_and_one_from_a_live_one_is_left_alone(shortcuts, tmp_path):
+    _config, menu, _desktop = shortcuts
+    menu.mkdir()
+    gone = _write(menu, "clipem.desktop", '[Desktop Entry]\nExec="/py" "/deleted/ClipEm/App/Shared/Installer/run.py"\n')
+    assert autostart.shortcut_state(autostart.SHORTCUT_START_MENU) == autostart.SHORTCUT_BROKEN
+    assert autostart.uninstall_shortcut(autostart.SHORTCUT_START_MENU) is True
+    assert not os.path.exists(gone)
+
+    other_run_py = tmp_path / "Other" / "run.py"
+    other_run_py.parent.mkdir()
+    other_run_py.write_text("")
+    other = _write(menu, "clipem.desktop", f'[Desktop Entry]\nExec="/py" "{other_run_py}"\n')
+    assert autostart.shortcut_state(autostart.SHORTCUT_START_MENU) == autostart.SHORTCUT_OTHER
+    assert autostart.uninstall_shortcut(autostart.SHORTCUT_START_MENU) is False
+    assert os.path.exists(other)
+
+
+def test_launch_repairs_a_broken_menu_entry_unless_uninstalled(shortcuts):
+    config, menu, _desktop = shortcuts
+    menu.mkdir()
+    _write(menu, "clipem.desktop", '[Desktop Entry]\nExec="/py" "/deleted/run.py"\n')
+    config["start_menu_shortcut"] = False
+    assert autostart.repair_linux_menu_entry() is None  # the user removed it in Settings
+    del config["start_menu_shortcut"]
+    assert autostart.repair_linux_menu_entry() == str(menu / "clipem.desktop")
+    assert autostart.shortcut_state(autostart.SHORTCUT_START_MENU) == autostart.SHORTCUT_OURS
+    assert autostart.repair_linux_menu_entry() is None  # working now: left alone

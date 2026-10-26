@@ -18,8 +18,11 @@ import tkinter as tk
 from tkinter import ttk
 
 import dark_theme
+import detection_help
 import editor_install
 import file_dialogs
+import key_picker
+import naming_form
 import obs_config
 import popups
 import updater
@@ -29,6 +32,7 @@ from obs_config import (
     HOTKEY_KEY_CHOICES,
     load_black_check_enabled,
     load_disk_space_warnings_enabled,
+    load_mic_check_enabled,
     load_stuck_check_enabled,
 )
 from ui_scale import UiScale, enable_dpi_awareness
@@ -40,6 +44,14 @@ PAD = 16
 # Once a page is shown, _fit_wraps() rewraps every such label to the page's
 # actual width, so text fills the window the same way on every page.
 WRAP_WIDTH = 520
+# The Clip Editor page's screenshot (Dev/screenshot_editor.py writes these):
+# (smallest display scale it's for, file next to this one) - Tk can't
+# scale a picture smoothly, so there's one per common scale.
+EDITOR_SCREENSHOTS = (
+    (1.75, "editor-screenshot@2x.png"),
+    (1.25, "editor-screenshot@1.5x.png"),
+    (0, "editor-screenshot.png"),
+)
 
 # run_config.json keys for the tray menu's entries, with their checkbox text
 # (the same ones as Settings > Tray Menu).
@@ -51,6 +63,10 @@ MENU_ITEMS = {
     "show_obs_item": "Show \"Show/Hide OBS\" in the tray menu",
 }
 
+# The start/stop hotkeys (obs_config.TOGGLE_HOTKEYS) as the Hotkeys page names them.
+TOGGLE_HOTKEY_TITLES = {"recording": "Start/Stop Recording", "replay_buffer": "Start/Stop Replay Buffer"}
+NO_HOTKEY = "None"
+
 # Update channel -> the name Settings shows for it (Main follows the published
 # releases, Dev the rolling "dev" pre-release).
 UPDATE_BRANCHES = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "Dev"}
@@ -59,26 +75,30 @@ UPDATE_BRANCHES = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "De
 STEP_TITLES = {
     "_show_provisioning": "Install",
     "_show_clip_folder": "Clip Folder",
+    "_show_clip_names": "Clip Names",
     "_show_video_quality": "Display & Video",
     "_show_audio_devices": "Audio Devices",
     "_show_split_tracks": "Multitrack Audio",
     "_show_clip_quality": "Clip Quality",
     "_show_reexport": "Smaller Copy",
-    "_show_hotkey": "Clip Hotkey",
+    "_show_hotkey": "Hotkeys",
     "_show_sound": "Clip Sound",
     "_show_clip_editor": "Clip Editor",
     "_show_tray_menu": "Tray Menu",
     "_show_scripts": "Detection & Warnings",
+    "_show_peak_guard": "Audio Checks",
     "_show_obs_websocket": "OBS Websocket",
     "_show_auto_update": "Updates",
     "_show_autostart": "Autostart",
     "_show_finish": "Finish",
+    "_show_done": "Done",
 }
 
 # The pages after Welcome, in order - numbered "Step N of 13" in the bottom bar.
 STEP_PAGES = (
     "_show_provisioning",
     "_show_clip_folder",
+    "_show_clip_names",
     "_show_video_quality",
     "_show_audio_devices",
     "_show_split_tracks",
@@ -89,10 +109,12 @@ STEP_PAGES = (
     "_show_clip_editor",
     "_show_tray_menu",
     "_show_scripts",
+    "_show_peak_guard",
     "_show_obs_websocket",
     "_show_auto_update",
     "_show_autostart",
     "_show_finish",
+    "_show_done",
 )
 
 class _StreamToQueue:
@@ -155,9 +177,9 @@ class Wizard(tk.Tk):
         self.sidebar.pack(side="left", fill="y")
         self.step_labels = []
         for title in ("Welcome",) + tuple(STEP_TITLES[name] for name in STEP_PAGES):
-            label = tk.Label(self.sidebar, text=title, anchor="w", padx=self.px(12), pady=self.px(4),
+            label = tk.Label(self.sidebar, text=title, anchor="w", padx=self.px(12), pady=self.px(2),
                              background=dark_theme.PANEL, foreground=dark_theme.MUTED, width=20)
-            label.pack(fill="x", pady=self.px(1))
+            label.pack(fill="x")
             self.step_labels.append(label)
         right = tk.Frame(self, padx=self.px(PAD), pady=self.px(PAD))
         right.pack(side="left", fill="both", expand=True)
@@ -173,6 +195,7 @@ class Wizard(tk.Tk):
         self.queue = queue.Queue()
         self.clip_folder_var = tk.StringVar(value="")
         self.clip_folder_chosen = False
+        self.clip_naming = controller["load_run_config"]().get("clip_naming")
 
         # Display/audio detection shells out (PowerShell on Windows, which
         # compiles C# on the fly) and can take several seconds - done in the
@@ -214,6 +237,11 @@ class Wizard(tk.Tk):
         self.stuck_check_var = tk.BooleanVar(value=self._load_flag(load_stuck_check_enabled))
         self.black_check_var = tk.BooleanVar(value=self._load_flag(load_black_check_enabled))
         self.disk_warnings_var = tk.BooleanVar(value=self._load_flag(load_disk_space_warnings_enabled))
+        self.mic_check_var = tk.BooleanVar(value=self._load_flag(load_mic_check_enabled))
+        audio_script = controller["load_audio_script_settings"]()
+        self.peak_guard_var = tk.BooleanVar(value=audio_script["peak_guard_enabled"])
+        self.peak_ceiling_var = tk.StringVar(value=f"{audio_script['peak_ceiling_db']:g}")
+        self.script_debug_var = tk.BooleanVar(value=audio_script["debug_enabled"])
         # One choice for both: the tray widget is required, so it always
         # starts at boot alongside OBS.
         self.autostart_var = tk.BooleanVar(value=run_config["autostart_obs"])
@@ -230,6 +258,13 @@ class Wizard(tk.Tk):
         self.hotkey_alt_var = tk.BooleanVar(value=alt0)
         self.hotkey_shift_var = tk.BooleanVar(value=shift0)
         self.hotkey_key_var = tk.StringVar(value=key0)
+        # Start/stop recording and replay buffer (obs_config.TOGGLE_HOTKEYS):
+        # name -> (ctrl, alt, shift, key) vars, key "None" for no hotkey.
+        self.toggle_hotkey_vars = {}
+        for name, hotkey in controller["load_toggle_hotkeys"]().items():
+            ctrl, alt, shift, key = hotkey or (False, False, False, NO_HOTKEY)
+            self.toggle_hotkey_vars[name] = (tk.BooleanVar(value=ctrl), tk.BooleanVar(value=alt),
+                                             tk.BooleanVar(value=shift), tk.StringVar(value=key))
 
         self.mic_filter_configured = controller["has_mic_filter_been_configured"]()
 
@@ -281,6 +316,7 @@ class Wizard(tk.Tk):
                 ("displays", "list_displays"),
                 ("saved_monitor_idx", "load_capture_monitor_index"),
                 ("audio_devices", "list_audio_devices"),
+                ("encoders", "list_encoders"),  # PowerShell on Windows - slow too
             ):
                 try:
                     result[key] = self.controller[fn]()
@@ -310,6 +346,12 @@ class Wizard(tk.Tk):
             else default_display_idx
         )
         self.audio_devices = result.get("audio_devices") or {"output": [], "input": []}
+        self.encoder_choices = result.get("encoders") or [("x264", None, "Software (x264) - uses the CPU")]
+        # The saved hardware encoder if it's still there, else the first
+        # found - a hardware one when this PC has one.
+        saved = tuple(self.controller["load_recording_encoder"]())
+        keys = [(encoder, device) for encoder, device, _label in self.encoder_choices]
+        self.encoder_index = keys.index(saved) if saved[0] != "x264" and saved in keys else 0
 
     def _run_quietly(self, work_fn, on_done):
         """Like _run_in_background, for pages without a log box: work_fn runs
@@ -399,8 +441,7 @@ class Wizard(tk.Tk):
             while True:
                 kind, payload = self.queue.get_nowait()
                 if kind == "log":
-                    self.log_text.insert("end", payload)
-                    self.log_text.see("end")
+                    self._append_log(payload)
                 elif kind == "done":
                     on_done(True, payload)
                     return
@@ -433,6 +474,39 @@ class Wizard(tk.Tk):
         self.log_text.configure(yscrollcommand=scroll.set)
         self.log_text.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+        self.log_text.tag_configure("latest", font=("", 13), foreground=dark_theme.BOOST)
+
+    def _append_log(self, text):
+        """Adds text to the log box, with its last line (what's happening
+        now) larger and green."""
+        self.log_text.insert("end", text)
+        self.log_text.tag_remove("latest", "1.0", "end")
+        last = self.log_text.search(r"\S", "end", backwards=True, regexp=True)
+        if last:
+            line = last.split(".")[0]
+            self.log_text.tag_add("latest", f"{line}.0", f"{line}.end")
+        self.log_text.see("end")
+
+    def _auto_continue(self, bar, button, text="Continuing to next step", seconds=5):
+        """Once a log page's work is done: counts down next to its forward
+        button and then presses it, unless Cancel is clicked first."""
+        countdown = ttk.Frame(bar)
+        countdown.pack(side="right", padx=(0, self.px(PAD)))
+        label = ttk.Label(countdown, foreground=dark_theme.BOOST)
+        label.pack(side="left")
+        ttk.Button(countdown, text="Cancel", command=countdown.destroy).pack(side="left", padx=(self.px(8), 0))
+
+        def tick(remaining):
+            if not countdown.winfo_exists():
+                return  # cancelled, or the page was left
+            if remaining == 0:
+                countdown.destroy()
+                button.invoke()
+                return
+            label.configure(text=f"{text} in {remaining} second{'s' if remaining != 1 else ''}")
+            self.after(1000, tick, remaining - 1)
+
+        tick(seconds)
 
     def _make_toggle(self, parent, var, text, enabled=True, on_toggle=None):
         """A big clickable checkbox drawn with our own glyph instead of
@@ -561,6 +635,7 @@ class Wizard(tk.Tk):
                 )
             else:
                 self.provision_continue_btn.configure(state="normal")
+                self._auto_continue(bar, self.provision_continue_btn)
 
         self._run_in_background(self.controller["provision"], on_done)
 
@@ -685,7 +760,37 @@ class Wizard(tk.Tk):
         except Exception as exc:
             popups.showerror("Setup", f"Could not set clip folder:\n{exc}")
             return
-        self._show_video_quality()
+        self._show_clip_names()
+
+    def _show_clip_names(self):
+        self._clear()
+        ttk.Label(self.container, text="Clip names", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text="What saved clips and their copies are called. Settings > Clip Output/Devices changes this any time.",
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        form = naming_form.NamingForm(
+            self.container, self.clip_naming, px=self.px,
+            folder=lambda: self.clip_folder_var.get().strip() or self.controller["default_clip_folder"])
+        form.pack(anchor="w")
+
+        def next_page():
+            naming = form.get()
+            problem = naming_form.clip_naming.validate(naming)
+            if problem:
+                popups.showerror("Setup", f"Clip names: {problem}")
+                return
+            try:
+                self._call_logged(self.controller["save_clip_naming"], naming)
+            except Exception as exc:
+                popups.showerror("Setup", f"Could not save the clip names:\n{exc}")
+                return
+            self.clip_naming = naming
+            self._show_video_quality()
+
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_clip_folder)
+        ttk.Button(bar, text="Continue", command=next_page).pack(side="right")
 
     def _show_video_quality(self):
         self._ensure_devices()
@@ -693,7 +798,9 @@ class Wizard(tk.Tk):
         ttk.Label(self.container, text="Display & Video Quality", font=("", 13, "bold")).pack(anchor="w")
         ttk.Label(
             self.container,
-            text="Which screen to capture, and at what resolution/FPS.",
+            text="Which screen to capture, at what resolution/FPS, and what encodes the video. A graphics "
+                 "card encoder barely affects games; x264 uses the CPU.",
+            wraplength=self.px(WRAP_WIDTH),
             justify="left",
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
 
@@ -737,7 +844,18 @@ class Wizard(tk.Tk):
             values=[str(f) for f in self.controller["fps_choices"]], state="readonly",
         ).pack(fill="x", pady=(0, self.px(PAD // 2)))
 
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_clip_folder)
+        ttk.Label(self.container, text="Video encoder").pack(anchor="w")
+        encoder_combo = ttk.Combobox(self.container, state="readonly",
+                                     values=[label for _encoder, _device, label in self.encoder_choices])
+        encoder_combo.current(self.encoder_index)
+        encoder_combo.pack(fill="x", pady=(0, self.px(PAD // 2)))
+
+        def on_encoder(_event=None):
+            self.encoder_index = encoder_combo.current()
+
+        encoder_combo.bind("<<ComboboxSelected>>", on_encoder)
+
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_clip_names)
         ttk.Button(bar, text="Continue", command=lambda: self._apply_video_quality(display_combo)).pack(
             side="right"
         )
@@ -759,6 +877,8 @@ class Wizard(tk.Tk):
                 self.controller["save_capture_monitor"],
                 display_combo.current(), display.get("device_id"),
             )
+            encoder, device, _label = self.encoder_choices[self.encoder_index]
+            self._call_logged(self.controller["save_recording_encoder"], encoder, device)
         except Exception as exc:
             popups.showerror("Setup", f"Could not save video settings:\n{exc}")
             return
@@ -1141,27 +1261,44 @@ class Wizard(tk.Tk):
 
     def _show_hotkey(self):
         self._clear()
-        ttk.Label(self.container, text="Clip Hotkey", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(self.container, text="Hotkeys", font=("", 13, "bold")).pack(anchor="w")
         ttk.Label(
             self.container,
             text=(
-                'Keyboard shortcut that saves a clip ("Save Replay Buffer" in OBS) - '
-                "the replay buffer length you set earlier. Defaults to Alt+~."
+                "Keyboard shortcuts that work in games. Save Clip saves the replay buffer length you set "
+                "earlier (Alt+~ by default). The others start, or stop when pressed again - pick None for "
+                "no shortcut."
             ),
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
 
-        self._make_toggle(self.container, self.hotkey_ctrl_var, "Ctrl")
-        self._make_toggle(self.container, self.hotkey_alt_var, "Alt")
-        self._make_toggle(self.container, self.hotkey_shift_var, "Shift")
+        def hotkey_row(title, ctrl, alt, shift, key, choices):
+            ttk.Label(self.container, text=title, font=("", 11, "bold")).pack(anchor="w")
+            row = ttk.Frame(self.container)
+            row.pack(anchor="w", pady=(0, self.px(PAD)))
+            glyphs = []
+            for var, text in ((ctrl, "Ctrl"), (alt, "Alt"), (shift, "Shift")):
+                toggle = self._make_toggle(row, var, text)
+                toggle.pack_configure(side="left", padx=(0, self.px(14)), pady=0)
+                glyphs.append((toggle.winfo_children()[0], var))
+            ttk.Label(row, text="Key:").pack(side="left")
+            ttk.Combobox(row, textvariable=key, values=choices, state="readonly", width=12, height=16).pack(
+                side="left", padx=(self.px(6), 0))
 
-        key_row = ttk.Frame(self.container)
-        key_row.pack(anchor="w", pady=(0, self.px(PAD)))
-        ttk.Label(key_row, text="Key:").pack(side="left")
-        ttk.Combobox(
-            key_row, textvariable=self.hotkey_key_var, values=HOTKEY_KEY_CHOICES,
-            state="readonly", width=10,
-        ).pack(side="left", padx=(self.px(6), 0))
+            def pick():
+                picked = key_picker.pick_hotkey(self, f"Pick a Hotkey: {title}")
+                if picked:
+                    for (glyph, var), on in zip(glyphs, picked[:3], strict=True):
+                        var.set(on)
+                        glyph.configure(text="☑" if on else "☐")
+                    key.set(picked[3])
+
+            ttk.Button(row, text="Pick...", command=pick).pack(side="left", padx=(self.px(8), 0))
+
+        hotkey_row("Save Clip", self.hotkey_ctrl_var, self.hotkey_alt_var, self.hotkey_shift_var,
+                   self.hotkey_key_var, HOTKEY_KEY_CHOICES)
+        for name, title in TOGGLE_HOTKEY_TITLES.items():
+            hotkey_row(title, *self.toggle_hotkey_vars[name], [NO_HOTKEY, *HOTKEY_KEY_CHOICES])
 
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_reexport)
         ttk.Button(bar, text="Continue", command=self._apply_hotkey).pack(side="right")
@@ -1175,8 +1312,11 @@ class Wizard(tk.Tk):
                 self.hotkey_shift_var.get(),
                 self.hotkey_key_var.get(),
             )
+            for name, (ctrl, alt, shift, key) in self.toggle_hotkey_vars.items():
+                hotkey = None if key.get() == NO_HOTKEY else (ctrl.get(), alt.get(), shift.get(), key.get())
+                self._call_logged(self.controller["save_toggle_hotkey"], name, hotkey)
         except Exception as exc:
-            popups.showerror("Setup", f"Could not save the clip hotkey:\n{exc}")
+            popups.showerror("Setup", f"Could not save the hotkeys:\n{exc}")
             return
         self._show_sound()
 
@@ -1312,6 +1452,9 @@ class Wizard(tk.Tk):
         editor_row = ttk.Frame(self.container)
         editor_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
         ttk.Label(editor_row, text="External editor:").pack(side="left")
+        screenshot = self._editor_screenshot()
+        if screenshot is not None:
+            ttk.Label(self.container, image=screenshot).pack(anchor="w", pady=(self.px(PAD), 0))
         name_var = tk.StringVar()
 
         def show_name(*_args):
@@ -1343,7 +1486,7 @@ class Wizard(tk.Tk):
             for button in kind_buttons:
                 button.configure(state="disabled" if off else "normal")
             if not off and self.editor_kind_var.get() == editor_install.EXTERNAL:
-                editor_row.pack(anchor="w", pady=(self.px(PAD // 2), 0))
+                editor_row.pack(anchor="w", pady=(self.px(PAD // 2), 0), after=kind_row)
             else:
                 editor_row.pack_forget()
 
@@ -1358,6 +1501,18 @@ class Wizard(tk.Tk):
 
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_sound)
         ttk.Button(bar, text="Continue", command=next_page).pack(side="right")
+
+    def _editor_screenshot(self):
+        """The clip editor's screenshot (taken by Dev/screenshot_editor.py)
+        in the size made for this display's scale, or None if it's missing."""
+        if getattr(self, "_editor_image", None) is None:
+            scale = self.px(100) / 100
+            name = next(name for minimum, name in EDITOR_SCREENSHOTS if scale >= minimum)
+            try:
+                self._editor_image = tk.PhotoImage(file=os.path.join(os.path.dirname(os.path.abspath(__file__)), name))
+            except tk.TclError:
+                return None
+        return self._editor_image
 
     def _show_tray_menu(self):
         self._clear()
@@ -1380,11 +1535,65 @@ class Wizard(tk.Tk):
             text="Checks the tray widget runs while OBS is open. Settings > Scripts changes these any time.",
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
-        self._make_toggle(self.container, self.stuck_check_var, "Enable stuck-screen detection")
-        self._make_toggle(self.container, self.black_check_var, "Enable black-screen detection")
-        self._make_toggle(self.container, self.disk_warnings_var, "Enable disk space warnings")
+        for var, text, explanation in (
+            (self.stuck_check_var, "Enable stuck-screen detection", detection_help.STUCK_SCREEN),
+            (self.black_check_var, "Enable black-screen detection", detection_help.BLACK_SCREEN),
+            (self.disk_warnings_var, "Enable disk space warnings", detection_help.DISK_SPACE),
+        ):
+            option = ttk.Frame(self.container)
+            option.pack(anchor="w", fill="x", pady=(0, self.px(PAD // 2)))
+            self._make_toggle(option, var, text).pack_configure(pady=0)
+            # Lined up with the toggle's text, past its glyph.
+            ttk.Label(option, text=explanation, foreground=dark_theme.MUTED, justify="left",
+                      wraplength=self.px(WRAP_WIDTH - 34)).pack(anchor="w", padx=(self.px(34), 0))
         bar, _ = self._make_bottom_bar(self.container, back_command=self._show_tray_menu)
-        ttk.Button(bar, text="Continue", command=self._show_obs_websocket).pack(side="right")
+        ttk.Button(bar, text="Continue", command=self._show_peak_guard).pack(side="right")
+
+    def _show_peak_guard(self):
+        self._clear()
+        ttk.Label(self.container, text="Audio checks", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text="Keeps your clips' audio right. Settings > Scripts changes these any time.",
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        low, high = self.controller["peak_ceiling_range"]
+
+        def option(var, text, explanation):
+            frame = ttk.Frame(self.container)
+            frame.pack(anchor="w", fill="x", pady=(0, self.px(PAD // 2)))
+            self._make_toggle(frame, var, text).pack_configure(pady=0)
+            ttk.Label(frame, text=explanation, foreground=dark_theme.MUTED, justify="left",
+                      wraplength=self.px(WRAP_WIDTH - 34)).pack(anchor="w", padx=(self.px(34), 0))
+            return frame
+
+        guard = option(self.peak_guard_var, "Lower the volume of audio sources that peak", detection_help.PEAK_GUARD)
+        ceiling_row = ttk.Frame(guard)
+        ceiling_row.pack(anchor="w", padx=(self.px(34), 0), pady=(self.px(6), 0))
+        ttk.Label(ceiling_row, text="Peak ceiling after lowering (dB):").pack(side="left")
+        ttk.Spinbox(ceiling_row, textvariable=self.peak_ceiling_var, from_=low, to=high, increment=0.1,
+                    width=6).pack(side="left", padx=(self.px(6), 0))
+        option(self.mic_check_var, "Enable missing-mic detection", detection_help.MIC_CHECK)
+        option(self.script_debug_var, "Enable debug messages in OBS's script log", detection_help.SCRIPT_DEBUG)
+
+        def next_page():
+            try:
+                ceiling = float(self.peak_ceiling_var.get())
+            except ValueError:
+                ceiling = None
+            if ceiling is None or not low <= ceiling <= high:
+                popups.showerror("Setup", f"Enter a peak ceiling from {low:g} to {high:g} dB.")
+                return
+            try:
+                self._call_logged(self.controller["save_audio_script_settings"], self.peak_guard_var.get(),
+                                  ceiling, self.script_debug_var.get())
+            except Exception as exc:
+                popups.showerror("Setup", f"Could not save the audio peak guard settings:\n{exc}")
+                return
+            self._show_obs_websocket()
+
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_scripts)
+        ttk.Button(bar, text="Continue", command=next_page).pack(side="right")
 
     def _show_obs_websocket(self):
         self._clear()
@@ -1434,7 +1643,7 @@ class Wizard(tk.Tk):
             command=self._randomize_ws_password,
         ).pack(anchor="w", pady=(0, self.px(PAD)))
 
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_scripts)
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_peak_guard)
         ttk.Button(bar, text="Continue", command=self._apply_obs_websocket).pack(side="right")
 
     def _randomize_ws_password(self):
@@ -1594,23 +1803,17 @@ class Wizard(tk.Tk):
         ttk.Label(self.container, text="Finishing up...", font=("", 13, "bold")).pack(
             anchor="w"
         )
-        self._make_toggle(
-            self.container, self.launch_after_finish_var, "Automatically run OBS after closing this"
-        )
         bar, self.finish_back_btn = self._make_bottom_bar(
             self.container, back_command=self._show_autostart, back_enabled=False
         )
         self.finish_btn = ttk.Button(
-            bar, text="Done", command=self._finish_and_close, state="disabled"
+            bar, text="Continue", command=self._show_done, state="disabled"
         )
         self.finish_btn.pack(side="right")
         self._make_log_area(self.container)
 
         if self.setup_log:
-            self.log_text.insert(
-                "end", "--- OBS config changes made during setup ---\n" + "".join(self.setup_log) + "\n"
-            )
-            self.log_text.see("end")
+            self._append_log("--- OBS config changes made during setup ---\n" + "".join(self.setup_log) + "\n")
 
         def work():
             # Merged into what's there - Settings keeps more in this file.
@@ -1625,6 +1828,7 @@ class Wizard(tk.Tk):
                 "stuck_check_enabled": self.stuck_check_var.get(),
                 "black_check_enabled": self.black_check_var.get(),
                 "disk_space_warnings_enabled": self.disk_warnings_var.get(),
+                "mic_check_enabled": self.mic_check_var.get(),
                 **{key: var.get() for key, var in self.menu_item_vars.items()},
             })
             self.controller["save_run_config"](run_config)
@@ -1653,8 +1857,37 @@ class Wizard(tk.Tk):
                 popups.showerror("Setup", f"Finishing steps failed:\n{result}")
             self.finish_btn.configure(state="normal")
             self.finish_back_btn.configure(state="normal")
+            if ok:
+                self._auto_continue(bar, self.finish_btn)
 
         self._run_in_background(work, on_done)
+
+    def _show_done(self):
+        self._clear()
+        ttk.Label(self.container, text="You're all set", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container,
+            text=(
+                "ClipEm is set up. Press your clip hotkey whenever something worth keeping happens - the clip "
+                "is saved to your clips folder. The tray icon opens the clip editor, your clips and Settings, "
+                "where everything chosen here can be changed any time."
+            ),
+            justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+        close_btn = None
+
+        def label_close():
+            close_btn.configure(text="Close and Launch ClipEm" if self.launch_after_finish_var.get() else "Close")
+
+        self._make_toggle(
+            self.container, self.launch_after_finish_var, "Automatically run ClipEm after closing this",
+            on_toggle=label_close,
+        )
+        # Everything is saved by now - nothing to go back and change here.
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_finish, back_enabled=False)
+        close_btn = ttk.Button(bar, command=self._finish_and_close)
+        close_btn.pack(side="right")
+        label_close()
 
     def _finish_and_close(self):
         if self.launch_after_finish_var.get():

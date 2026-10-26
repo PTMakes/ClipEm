@@ -7,6 +7,7 @@ clipem_common.write_text_atomic).
 """
 
 import json
+import math
 import os
 import platform
 import re
@@ -100,6 +101,76 @@ def update_ini_section(path, section, updates):
         if remaining:
             lines[end:end] = [f"{k}={v}\n" for k, v in remaining.items()]
     write_ini_lines(lines, path)
+
+
+# ---------------------------------------------------------------------------
+# The replay buffer's memory cap. OBS keeps the replay buffer's encoded video
+# and audio in memory, up to AdvOut.RecRBSize MB as well as RecRBTime seconds
+# - whichever runs out first. The shipped 512 MB only holds about 3m50s at
+# 18 Mbps, so a longer replay buffer (or a higher bitrate) silently made
+# shorter clips than chosen. So the cap follows the length and bitrates.
+# ---------------------------------------------------------------------------
+
+REPLAY_BUFFER_MIN_MB = 512  # OBS's own default - never set below it
+# Bitrate overshoot, and the keyframe interval OBS keeps before the oldest
+# second so the clip can start on a keyframe.
+REPLAY_BUFFER_HEADROOM = 1.3
+DEFAULT_RECORDING_KBPS = 18000
+# Each recorded audio track (AdvOut.TrackNBitrate). 192 rather than OBS's
+# 160: FFmpeg's AAC encoder (what OBS records with) still smears sharp sounds
+# a little at 160.
+DEFAULT_AUDIO_TRACK_KBPS = 192
+OLD_AUDIO_TRACK_KBPS = 160
+
+
+def replay_buffer_size_mb(seconds, video_kbps, audio_kbps_total):
+    """RecRBSize for `seconds` of video_kbps video plus audio_kbps_total of
+    audio (every recorded track), with headroom, in whole 64 MB steps."""
+    megabytes = seconds * (video_kbps + audio_kbps_total) * 1000 / 8 / 1024 ** 2 * REPLAY_BUFFER_HEADROOM
+    return max(REPLAY_BUFFER_MIN_MB, int(math.ceil(megabytes / 64)) * 64)
+
+
+def _int(value, default):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def migrate_audio_bitrate():
+    """Moves recorded audio tracks still at the old default (160 kbps) to
+    DEFAULT_AUDIO_TRACK_KBPS. There's no setting for it, so anything else
+    was set in OBS itself and is left alone. Returns True if it changed
+    anything. Only safe while OBS isn't running."""
+    if not os.path.exists(BASIC_INI):
+        return False
+    adv = read_ini_section("AdvOut")
+    old = [f"Track{n}Bitrate" for n in range(1, 7)
+           if _int(adv.get(f"Track{n}Bitrate"), OLD_AUDIO_TRACK_KBPS) == OLD_AUDIO_TRACK_KBPS]
+    if not old:
+        return False
+    update_ini_section(BASIC_INI, "AdvOut", dict.fromkeys(old, DEFAULT_AUDIO_TRACK_KBPS))
+    return True
+
+
+def fit_replay_buffer_size():
+    """Sets AdvOut.RecRBSize from the replay buffer's length (RecRBTime), the
+    recording bitrate (recordEncoder.json) and the audio tracks recorded
+    (RecTracks, each at its TrackNBitrate). Returns the MB written, or None
+    without a basic.ini. Only safe while OBS isn't running."""
+    if not os.path.exists(BASIC_INI):
+        return None
+    adv = read_ini_section("AdvOut")
+    seconds = _int(adv.get("RecRBTime"), 60)
+    tracks = _int(adv.get("RecTracks"), 1)
+    audio_kbps = sum(_int(adv.get(f"Track{n}Bitrate"), DEFAULT_AUDIO_TRACK_KBPS)
+                     for n in range(1, 7) if tracks & (1 << (n - 1)))
+    encoder = load_json(RECORD_ENCODER_JSON)
+    video_kbps = _int(encoder.get("bitrate") if isinstance(encoder, dict) else None, DEFAULT_RECORDING_KBPS)
+    size = replay_buffer_size_mb(seconds, video_kbps, audio_kbps)
+    if _int(adv.get("RecRBSize"), 0) != size:
+        update_ini_section(BASIC_INI, "AdvOut", {"RecRBSize": size})
+    return size
 
 
 def load_clip_folder():
@@ -244,19 +315,36 @@ HOTKEYS_INI_SECTION = "Hotkeys"
 CLIP_HOTKEY_INI_KEY = "ReplayBuffer"
 CLIP_HOTKEY_ACTION = "ReplayBuffer.Save"
 DEFAULT_CLIP_HOTKEY = (False, True, False, "~")  # Alt+~
+# Keys a hotkey can use: what Setup and Settings show -> OBS's name for it.
+NAMED_HOTKEY_KEYS = {
+    "~": "OBS_KEY_ASCIITILDE", "-": "OBS_KEY_MINUS", "=": "OBS_KEY_EQUAL", "[": "OBS_KEY_BRACKETLEFT",
+    "]": "OBS_KEY_BRACKETRIGHT", ";": "OBS_KEY_SEMICOLON", "'": "OBS_KEY_APOSTROPHE", ",": "OBS_KEY_COMMA",
+    ".": "OBS_KEY_PERIOD", "/": "OBS_KEY_SLASH", "\\": "OBS_KEY_BACKSLASH",
+    "Space": "OBS_KEY_SPACE", "Insert": "OBS_KEY_INSERT", "Delete": "OBS_KEY_DELETE", "Home": "OBS_KEY_HOME",
+    "End": "OBS_KEY_END", "Page Up": "OBS_KEY_PAGEUP", "Page Down": "OBS_KEY_PAGEDOWN", "Pause": "OBS_KEY_PAUSE",
+    "Print Screen": "OBS_KEY_PRINT", "Scroll Lock": "OBS_KEY_SCROLLLOCK",
+    "Up": "OBS_KEY_UP", "Down": "OBS_KEY_DOWN", "Left": "OBS_KEY_LEFT", "Right": "OBS_KEY_RIGHT",
+    "Tab": "OBS_KEY_TAB", "Enter": "OBS_KEY_RETURN", "Backspace": "OBS_KEY_BACKSPACE", "Esc": "OBS_KEY_ESCAPE",
+    "Menu": "OBS_KEY_MENU",
+    **{f"Num {d}": f"OBS_KEY_NUM{d}" for d in range(10)},
+    "Num +": "OBS_KEY_NUMPLUS", "Num -": "OBS_KEY_NUMMINUS", "Num *": "OBS_KEY_NUMASTERISK",
+    "Num /": "OBS_KEY_NUMSLASH", "Num .": "OBS_KEY_NUMPERIOD", "Num Enter": "OBS_KEY_ENTER",
+}
 HOTKEY_KEY_CHOICES = (
-    ["~"]
-    + [chr(c) for c in range(ord("A"), ord("Z") + 1)]
+    [chr(c) for c in range(ord("A"), ord("Z") + 1)]
     + [str(d) for d in range(10)]
-    + [f"F{n}" for n in range(1, 13)]
+    + [f"F{n}" for n in range(1, 25)]
+    + list(NAMED_HOTKEY_KEYS)
 )
 
 
 def hotkey_label_to_obs_key(label):
-    normalized = label.strip().upper()
-    aliases = {"~": "OBS_KEY_ASCIITILDE", "TILDE": "OBS_KEY_ASCIITILDE"}
-    if normalized in aliases:
-        return aliases[normalized]
+    stripped = label.strip()
+    if stripped.upper() == "TILDE":
+        stripped = "~"
+    if stripped in NAMED_HOTKEY_KEYS:
+        return NAMED_HOTKEY_KEYS[stripped]
+    normalized = stripped.upper()
     if re.fullmatch(r"F(1[0-9]|2[0-4]|[1-9])", normalized):
         return f"OBS_KEY_{normalized}"
     if len(normalized) == 1 and (normalized.isalpha() or normalized.isdigit()):
@@ -265,10 +353,10 @@ def hotkey_label_to_obs_key(label):
 
 
 def obs_key_to_label(obs_key):
-    name = obs_key.replace("OBS_KEY_", "")
-    if name == "ASCIITILDE":
-        return "~"
-    return name
+    for label, known in NAMED_HOTKEY_KEYS.items():
+        if known == obs_key:
+            return label
+    return obs_key.replace("OBS_KEY_", "")
 
 
 def describe_hotkey(ctrl, alt, shift, key_label):
@@ -336,6 +424,50 @@ def save_clip_hotkey(ctrl, alt, shift, key_label):
     write_ini_lines(lines)
 
 
+# Start/stop hotkeys for recording and the replay buffer: OBS's own hotkey
+# pairs, stored as {"bindings": [...]} under each half's name. Both halves
+# get the same key, which OBS then treats as a toggle (only the half that
+# applies fires). None: no hotkey.
+TOGGLE_HOTKEYS = {
+    "recording": ("OBSBasic.StartRecording", "OBSBasic.StopRecording"),
+    "replay_buffer": ("OBSBasic.StartReplayBuffer", "OBSBasic.StopReplayBuffer"),
+}
+
+
+def _combo_to_hotkey(combo):
+    return (bool(combo.get("control", False)), bool(combo.get("alt", False)), bool(combo.get("shift", False)),
+            obs_key_to_label(combo["key"]))
+
+
+def load_toggle_hotkey(name):
+    """(ctrl, alt, shift, key_label) for TOGGLE_HOTKEYS[name], or None."""
+    value = read_ini_section(HOTKEYS_INI_SECTION).get(TOGGLE_HOTKEYS[name][0])
+    try:
+        bindings = json.loads(value).get("bindings") if value else None
+        return _combo_to_hotkey(bindings[0]) if bindings else None
+    except (ValueError, AttributeError, KeyError, TypeError):
+        return None
+
+
+def save_toggle_hotkey(name, hotkey):
+    """hotkey: (ctrl, alt, shift, key_label), or None to clear it. Raises
+    ValueError for an unrecognized key, FileNotFoundError without basic.ini."""
+    if not os.path.exists(BASIC_INI):
+        raise FileNotFoundError(f"Config file not found: {BASIC_INI}")
+    bindings = []
+    if hotkey:
+        ctrl, alt, shift, key_label = hotkey
+        combo = {"key": hotkey_label_to_obs_key(key_label)}
+        combo.update({mod: True for mod, on in (("control", ctrl), ("alt", alt), ("shift", shift)) if on})
+        bindings.append(combo)
+    value = json.dumps({"bindings": bindings})
+    update_ini_section(BASIC_INI, HOTKEYS_INI_SECTION, {half: value for half in TOGGLE_HOTKEYS[name]})
+
+
+def load_toggle_hotkeys():
+    return {name: load_toggle_hotkey(name) for name in TOGGLE_HOTKEYS}
+
+
 # ---------------------------------------------------------------------------
 # Stuck-screen detection (the tray widget's - see tray-widget/stuck_screen.py)
 # ---------------------------------------------------------------------------
@@ -366,11 +498,61 @@ def save_stuck_check_enabled(enabled):
     clipem_common.save_run_config(config)
 
 
+# What that script still does itself - its options in OBS's Scripts window,
+# shown in Settings > Scripts and Setup's Audio Peak Guard page too. Must
+# match Scripts/stuck_output_check.py's defaults and its ceiling's range.
+DEFAULT_AUDIO_SCRIPT_SETTINGS = {"peak_guard_enabled": True, "peak_ceiling_db": -1.5, "debug_enabled": False}
+PEAK_CEILING_MIN_DB, PEAK_CEILING_MAX_DB = -20.0, -1.1
+
+
+def load_audio_script_settings():
+    """{"peak_guard_enabled", "peak_ceiling_db", "debug_enabled"} - the
+    audio peak guard and debug messages of stuck_output_check.py, from the
+    scene collection, defaults filled in."""
+    settings = dict(DEFAULT_AUDIO_SCRIPT_SETTINGS)
+    try:
+        entry = find_script_entry(load_scene_collection(), STUCK_CHECK_SCRIPT_NAME)
+    except (OSError, ValueError):
+        entry = None
+    saved = (entry or {}).get("settings", {})
+    try:
+        settings["peak_ceiling_db"] = float(saved.get("peak_ceiling_db", settings["peak_ceiling_db"]))
+    except (TypeError, ValueError):
+        pass
+    for key in ("peak_guard_enabled", "debug_enabled"):
+        settings[key] = bool(saved.get(key, settings[key]))
+    return settings
+
+
+def save_audio_script_settings(peak_guard_enabled, peak_ceiling_db, debug_enabled):
+    """Only safe while OBS isn't running - it rewrites the scene collection
+    on exit (Settings queues these otherwise - see apply_obs_settings)."""
+    data = load_scene_collection()
+    entry = find_script_entry(data, STUCK_CHECK_SCRIPT_NAME)
+    if not entry:
+        raise RuntimeError(f"{STUCK_CHECK_SCRIPT_NAME} entry not found in the scene collection")
+    entry.setdefault("settings", {}).update({
+        "peak_guard_enabled": bool(peak_guard_enabled),
+        "peak_ceiling_db": round(max(PEAK_CEILING_MIN_DB, min(PEAK_CEILING_MAX_DB, float(peak_ceiling_db))), 1),
+        "debug_enabled": bool(debug_enabled),
+    })
+    save_scene_collection(data)
+
+
 def load_black_check_enabled():
     """The tray widget's black-screen detection (run_config.json)."""
     run_config = load_json(clipem_common.RUN_CONFIG_PATH)
     if isinstance(run_config, dict) and "black_check_enabled" in run_config:
         return bool(run_config["black_check_enabled"])
+    return True
+
+
+def load_mic_check_enabled():
+    """The tray widget's missing-mic detection (run_config.json - see
+    tray-widget/mic_check.py)."""
+    run_config = load_json(clipem_common.RUN_CONFIG_PATH)
+    if isinstance(run_config, dict) and "mic_check_enabled" in run_config:
+        return bool(run_config["mic_check_enabled"])
     return True
 
 
@@ -681,13 +863,17 @@ def play_clip_sound(volume, wav_path=None):
 
 def apply_obs_settings(settings):
     """Writes settings - "websocket" {"port", "password"}, "clip_hotkey"
-    [ctrl, alt, shift, key], "clip_sound" {"enabled", "volume"},
+    [ctrl, alt, shift, key], "toggle_hotkeys" {name: [ctrl, alt, shift, key] or
+    None} (see TOGGLE_HOTKEYS), "clip_sound" {"enabled", "volume"},
     "clip_folder" (a path), "split_tracks" (bool), "clip_reexport"
-    {"enabled", "target_mb", "crop_seconds"} (the "-small.mp4" copy), and
+    {"enabled", "target_mb", "crop_seconds"} (the "-small.mp4" copy),
+    "audio_script" {"peak_guard_enabled", "peak_ceiling_db", "debug_enabled"}
+    (see save_audio_script_settings), and
     Setup's recording settings - "video" {"base_width", "base_height",
     "output_width", "output_height", "fps"}, "capture_monitor" {"index",
     "device_id"}, "replay_buffer_seconds", "recording_bitrate",
-    "audio_devices" {"output", "input"} and "mic_filter" {"noise_floor_db",
+    "recording_encoder" {"encoder", "device"}, "audio_devices" {"output",
+    "input"} and "mic_filter" {"noise_floor_db",
     "speech_level_db"} - to OBS's config files. Only safe while OBS isn't
     running.
     ("stuck_check_enabled" is only still accepted for queues left from
@@ -696,10 +882,15 @@ def apply_obs_settings(settings):
         save_obs_websocket_settings(settings["websocket"]["port"], settings["websocket"]["password"])
     if "clip_hotkey" in settings:
         save_clip_hotkey(*settings["clip_hotkey"])
+    for name, hotkey in settings.get("toggle_hotkeys", {}).items():
+        save_toggle_hotkey(name, hotkey)
     if "clip_sound" in settings:
         save_clip_sound(settings["clip_sound"]["enabled"], settings["clip_sound"]["volume"])
     if "clip_folder" in settings:
         save_clip_folder(settings["clip_folder"])
+    if "audio_script" in settings:
+        audio = settings["audio_script"]
+        save_audio_script_settings(audio["peak_guard_enabled"], audio["peak_ceiling_db"], audio["debug_enabled"])
     if "split_tracks" in settings:
         # Imported here: setup imports this module, and its split-tracks
         # writer edits the scene collection's audio sources too.
@@ -722,6 +913,9 @@ def apply_obs_settings(settings):
             setup.save_capture_monitor(settings["capture_monitor"]["index"], settings["capture_monitor"].get("device_id"))
         if "replay_buffer_seconds" in settings:
             setup.save_replay_buffer_seconds(settings["replay_buffer_seconds"])
+        if "recording_encoder" in settings:  # before the bitrate: it rewrites recordEncoder.json
+            setup.save_recording_encoder(settings["recording_encoder"]["encoder"],
+                                         settings["recording_encoder"].get("device"))
         if "recording_bitrate" in settings:
             setup.save_recording_bitrate(settings["recording_bitrate"])
         if "audio_devices" in settings:
@@ -733,8 +927,8 @@ def apply_obs_settings(settings):
 
 
 # Setup's recording settings, which Settings queues too (see apply_obs_settings).
-SETUP_RECORDING_KEYS = ("video", "capture_monitor", "replay_buffer_seconds", "recording_bitrate",
-                        "audio_devices", "mic_filter")
+SETUP_RECORDING_KEYS = ("video", "capture_monitor", "replay_buffer_seconds", "recording_encoder",
+                        "recording_bitrate", "audio_devices", "mic_filter")
 
 
 def load_pending_obs_settings():

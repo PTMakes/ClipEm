@@ -29,6 +29,7 @@ from app_recorder import RATE
 from clipem_common import APP_DIR
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Scripts"))
+import clip_naming  # noqa: E402 - Scripts/clip_naming.py, shared with the OBS script
 import clip_tracks  # noqa: E402 - Scripts/clip_tracks.py, shared with the OBS script
 
 log = logging.getLogger("tray")
@@ -107,7 +108,8 @@ def align_tracks(snapshot, track_ids, clip_env, duration, log=log.info):
 
 def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subprocess.run):
     """Everything for one saved clip. options: {"reexport", "target_mb",
-    "crop_seconds"}."""
+    "crop_seconds", "naming"} (naming: clip_naming's settings)."""
+    naming = options.get("naming") or clip_naming.DEFAULTS
     kwargs = clip_tracks.low_priority_kwargs()
     info = clip_edit.probe(ffmpeg, clip_path)
     duration = info["duration"]
@@ -125,9 +127,10 @@ def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subproce
         except Exception as exc:
             log(f"couldn't read the clip's Desktop track ({exc}) - lining the app tracks up by the clock")
         starts = align_tracks(snapshot, list(snapshot.tracks), clip_env, duration, log)
-        split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log)
+        split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log, naming["tracks_suffix"])
     if options.get("reexport"):
-        clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log)
+        clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log,
+                             naming["small_suffix"])
 
 
 def track_titles(snapshot, heard):
@@ -141,11 +144,11 @@ def track_titles(snapshot, heard):
     return titles
 
 
-def split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log):
+def split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log, suffix=clip_tracks.TRACKS_SUFFIX):
     """Writes the "-tracks.mkv" - the clip's three tracks, then a track for
     each app heard during the clip - and strips the clip to the mix. The clip
     keeps every track if the copy couldn't be made."""
-    out_path = clip_tracks.tracks_path_for(clip_path)
+    out_path = clip_tracks.tracks_path_for(clip_path, suffix)
     count = round(duration * RATE)
     heard = [key for key in snapshot.tracks if not starts[key][1]]
     titles = list(clip_tracks.FIXED_TRACK_TITLES) + track_titles(snapshot, heard)
@@ -195,6 +198,7 @@ class ClipFinisher:
             "reexport": bool(settings.get("reexport_enabled")),
             "target_mb": float(settings.get("target_mb", clip_tracks.DEFAULT_TARGET_MB)),
             "crop_seconds": int(settings.get("crop_seconds", clip_tracks.DEFAULT_CROP_SECONDS)),
+            "naming": clip_naming.load(),
         }
         threading.Thread(target=self._finish, args=(clip_path, snapshot, options), daemon=True).start()
 
@@ -208,6 +212,8 @@ class ClipFinisher:
             log.warning(f"Saved clip not found ({clip_path!r}) - skipping.")
             return
         try:
+            # Named first - the copies are named after it.
+            clip_path = clip_naming.rename_clip(clip_path, options["naming"], log=log.info)
             finish_clip(clip_path, snapshot, ffmpeg, options, log.info)
         except Exception:
             log.exception(f"Finishing {clip_path} failed")

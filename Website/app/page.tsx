@@ -197,6 +197,14 @@ export default function Home() {
             without leaving ClipEm. Edits are saved per clip and never touch the
             original file.
           </p>
+          {/* Retaken by Dev/screenshot_editor.py (release.sh) whenever the editor changes. */}
+          <Image
+            className="screenshot"
+            src="/editor-screenshot.webp"
+            alt="ClipEm's clip editor: the clip list beside a clip open for editing, with its timeline, audio tracks and export buttons"
+            width={2000}
+            height={1125}
+          />
           <div className="features features-compact features-two">
             {EDITOR_FEATURES.map((feature) => (
               <div className="feature-card" key={feature.title}>

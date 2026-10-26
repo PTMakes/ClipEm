@@ -63,7 +63,9 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # put the script's own folder on sys.path, so clip_edit wouldn't be found.
 sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(1, INSTALLER_DIR)
+sys.path.insert(2, os.path.join(SHARED_DIR, "Scripts"))
 import clip_edit  # noqa: E402
+import clip_naming  # noqa: E402 - Scripts/clip_naming.py
 import editor_install  # noqa: E402
 import editor_window  # noqa: E402
 import obs_config  # noqa: E402
@@ -122,8 +124,8 @@ LAUNCH_PAGE = b"""<!doctype html>
 URL_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.url")
 
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
-# Copies clip_reexport.py saves next to a clip - listed with it, not as clips.
-COPY_SUFFIXES = {"-small": "small_file", "-tracks": "tracks_file"}
+# Copies clip_reexport.py saves next to a clip - listed with it, not as
+# clips: clip_naming.copy_suffixes(), read each time (Settings changes them).
 THUMB_WIDTH = 320
 MAX_THUMBNAIL_JOBS = 2
 CHUNK_BYTES = 1024 * 1024
@@ -153,10 +155,11 @@ def list_clips(folder):
     stems = {stem: name for name, (stem, _stat) in videos.items()}
     clips = {}
     copies = []
+    copy_suffixes = clip_naming.copy_suffixes()
     for name, (stem, stat) in videos.items():
-        suffix = next((s for s in COPY_SUFFIXES if stem.endswith(s) and stem[: -len(s)] in stems), None)
+        suffix = next((s for s in copy_suffixes if stem.endswith(s) and stem[: -len(s)] in stems), None)
         if suffix:
-            copies.append((stems[stem[: -len(suffix)]], COPY_SUFFIXES[suffix], name))
+            copies.append((stems[stem[: -len(suffix)]], copy_suffixes[suffix], name))
         else:
             clips[name] = {"name": name, "mtime": stat.st_mtime, "size": stat.st_size,
                            "tracks_file": None, "small_file": None}
@@ -527,7 +530,7 @@ class Editor:
         else:
             mp4 = clip_edit.unique_path(folder, exact or f"{stem}-edit", ".mp4")
             mp4_stem = os.path.splitext(os.path.basename(mp4))[0]
-            mkv = os.path.join(folder, f"{mp4_stem}-tracks.mkv")
+            mkv = os.path.join(folder, mp4_stem + clip_naming.load()["tracks_suffix"] + ".mkv")
             mp4_partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
             mkv_partial = os.path.join(folder, f".{os.path.basename(mkv)}.partial")
             steps = clip_edit.full_quality_commands(self.ffmpeg, source, project, info, mkv_partial, mp4_partial)
@@ -664,7 +667,7 @@ def clip_files(folder, name):
     clip = next((c for c in list_clips(folder) if c["name"] == name), None)
     if not clip:
         return []
-    names = [name] + [clip[key] for key in COPY_SUFFIXES.values() if clip[key]]
+    names = [name] + [clip[key] for key in ("tracks_file", "small_file") if clip[key]]
     return [path for n in names if (path := resolve_clip(folder, n))]
 
 

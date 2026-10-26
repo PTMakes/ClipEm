@@ -23,7 +23,7 @@ from conftest import SCRIPTS_DIR
 
 API = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "obspython_api.json")))
 # Modules the scripts import, not scripts OBS loads.
-HELPER_MODULES = {"clip_tracks.py"}
+HELPER_MODULES = {"clip_tracks.py", "clip_naming.py"}
 SCRIPTS = sorted(p for p in glob.glob(os.path.join(SCRIPTS_DIR, "*.py")) if os.path.basename(p) not in HELPER_MODULES)
 
 

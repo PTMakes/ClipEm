@@ -2,7 +2,9 @@
 # Builds and publishes a ClipEm release.
 #
 #   1. Preflight - tools, signing key, version checks, lint + tests. Nothing is
-#      modified if any of these fail. Then any uncommitted changes are
+#      modified if any of these fail. Then the clip editor's screenshot (for
+#      the website and Setup) is retaken if the editor changed since the last
+#      one (screenshot_editor.py), and any uncommitted changes are
 #      committed (you're asked for a message).
 #   2. Build     - everything goes into Dev/dist; the only source-tree
 #                  changes are App/Shared/VERSION + checksums.json (and new
@@ -194,8 +196,8 @@ fi
 
 # Preflight, lint/tests, shared, Linux OBS, ffmpeg, Python, manifest,
 # Windows installer, portable bundle, signing - plus the optional ones
-# (upload; website + commit for a real release).
-STEP_TOTAL=$((10 + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
+# (editor screenshot for a real release; upload; website + commit for a real release).
+STEP_TOTAL=$((10 + (DEV == 0 ? 1 : 0) + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
 
 VERSION_MANIFEST="$WEBSITE_UPDATES/install-manifest.json"
 [[ -f "$VERSION_MANIFEST" ]] || die "Current manifest not found: $VERSION_MANIFEST"
@@ -251,6 +253,12 @@ if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q -rs
 fi
 tail -n 1 "$TEST_LOG"
 grep '^SKIPPED' "$TEST_LOG" || true  # why any test was skipped
+
+# A dev build leaves the source tree alone, so it keeps the last screenshot.
+if [[ "$DEV" == 0 ]]; then
+  step "Clip editor screenshot (retaken only if the editor changed)"
+  python3 "$SCRIPT_DIR/screenshot_editor.py" --if-changed || die "Couldn't take the clip editor screenshot"
+fi
 
 if [[ -n "$PRE_COMMIT_MSG" ]]; then
   step "Committing pre-release changes"
@@ -456,8 +464,10 @@ cp "$RELEASE_DIR/install-manifest.json" "$RELEASE_DIR/install-manifest.json.sig"
 
 # --- 6. Commit, push and publish -------------------------------------------
 step "Committing release $new_version"
-# VERSION + checksums.json, the website's manifests and new upstream pins.
-commit_all "Update $new_version" App/App/Shared Website/public Dev/release/upstream-pins.json
+# VERSION + checksums.json, the website's manifests, new upstream pins and a
+# retaken editor screenshot (with the hash of what it shows).
+commit_all "Update $new_version" App/App/Shared Website/public Dev/release/upstream-pins.json \
+  Dev/assets/editor-screenshot.sha256
 
 end_step
 echo
