@@ -21,7 +21,7 @@ import threading
 import time
 import tkinter as tk
 import webbrowser
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import ttk
 
 USAGE = """
 Usage: settings_dialog.py
@@ -54,6 +54,7 @@ import file_dialogs  # noqa: E402
 import mic_filter  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
+import popups  # noqa: E402
 import reinstall  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
 from app_window import style_app_window, use_windows_app_id  # noqa: E402
@@ -520,7 +521,7 @@ def open_dialog(start_tab=None):
         try:
             obs_config.play_clip_sound(sound_volume_var.get() / 100, chosen_sound["path"])
         except Exception as exc:
-            messagebox.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=root)
+            popups.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=root)
 
     choose_button = tk.Button(sound_row, text="Choose...", command=on_choose_sound)
     choose_button.pack(side="left", padx=(px(4), 0))
@@ -713,7 +714,7 @@ def open_dialog(start_tab=None):
         def on_deps(ok, exc):
             mic_button.config(state="normal", text="Mic Filter Configuration...")
             if exc is not None or not ok:
-                messagebox.showerror("Mic Filter", f"Couldn't set up microphone calibration: {exc or 'install failed'}",
+                popups.showerror("Mic Filter", f"Couldn't set up microphone calibration: {exc or 'install failed'}",
                                      parent=root)
                 return
             controller = {
@@ -1052,11 +1053,11 @@ def open_dialog(start_tab=None):
             save_autostart_flags(True)
             apply_boot_autostart(True)
         except Exception as exc:
-            messagebox.showerror("Install Autostart", f"Couldn't install autostart: {exc}", parent=root)
+            popups.showerror("Install Autostart", f"Couldn't install autostart: {exc}", parent=root)
 
         def check_installed(entries):
             if not any(entry["this_install"] for entry in entries):
-                messagebox.showerror(
+                popups.showerror(
                     "Install Autostart", "Couldn't create the autostart entry - your system may not support it.",
                     parent=root,
                 )
@@ -1068,16 +1069,16 @@ def open_dialog(start_tab=None):
             save_autostart_flags(False)
             remove_autostart_entries([entry for entry in find_autostart_entries() if entry["this_install"]])
         except Exception as exc:
-            messagebox.showerror("Uninstall Autostart", f"Couldn't uninstall autostart: {exc}", parent=root)
+            popups.showerror("Uninstall Autostart", f"Couldn't uninstall autostart: {exc}", parent=root)
         show_autostart_status()
 
     def on_uninstall_other_autostarts():
         try:
             others = [entry for entry in find_autostart_entries() if not entry["this_install"]]
         except Exception as exc:
-            messagebox.showerror("Uninstall Autostart", f"Couldn't look up the autostart entries: {exc}", parent=root)
+            popups.showerror("Uninstall Autostart", f"Couldn't look up the autostart entries: {exc}", parent=root)
             return
-        if others and messagebox.askyesno(
+        if others and popups.askyesno(
             "Uninstall Autostart",
             "These ClipEm autostart entries start another ClipEm folder (or an older version):\n\n"
             + "\n".join(f"  \u2022 {describe_autostart_entry(entry)}" for entry in others)
@@ -1087,7 +1088,7 @@ def open_dialog(start_tab=None):
             try:
                 remove_autostart_entries(others)
             except Exception as exc:
-                messagebox.showerror("Uninstall Autostart", f"Couldn't remove them: {exc}", parent=root)
+                popups.showerror("Uninstall Autostart", f"Couldn't remove them: {exc}", parent=root)
         show_autostart_status()
 
     install_button.configure(command=on_install_autostart)
@@ -1168,7 +1169,7 @@ def open_dialog(start_tab=None):
             try:
                 updater.change_update_config(check_for_updates=check_updates_var.get())
             except Exception as exc:
-                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                popups.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
                 check_updates_var.set(not check_updates_var.get())
 
         tk.Checkbutton(
@@ -1183,12 +1184,12 @@ def open_dialog(start_tab=None):
             try:
                 updater.change_update_config(source_repo=repo, skipped_version=None)
             except Exception as exc:
-                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                popups.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
                 return
             source_repo_var.set(updater.repo_url(repo))
 
         def on_change_source_repo():
-            if not messagebox.askyesno(
+            if not popups.askyesno(
                 "Source Repo",
                 "ClipEm downloads its updates from the releases of this GitHub repository.\n\n"
                 "Only change it if you know the repository publishes ClipEm builds - updates must "
@@ -1197,7 +1198,7 @@ def open_dialog(start_tab=None):
                 parent=root,
             ):
                 return
-            text = simpledialog.askstring(
+            text = popups.askstring(
                 "Source Repo", "GitHub repository link (https://github.com/owner/name):",
                 initialvalue=source_repo_var.get(), parent=root,
             )
@@ -1205,7 +1206,7 @@ def open_dialog(start_tab=None):
                 return
             repo = updater.repo_from_url(text)
             if repo is None:
-                messagebox.showerror(
+                popups.showerror(
                     "Source Repo", f"\"{text.strip()}\" isn't a GitHub repository link like "
                     "https://github.com/owner/name.", parent=root,
                 )
@@ -1243,13 +1244,13 @@ def open_dialog(start_tab=None):
                     "The Main branch installs only published releases. If you're on a dev build, "
                     "the next update check offers the current release instead.\n\nSwitch to Main?"
                 )
-            if not messagebox.askyesno("Update Branch", explanation, parent=root):
+            if not popups.askyesno("Update Branch", explanation, parent=root):
                 branch_var.set(saved_branch["label"])
                 return
             try:
                 updater.change_update_config(update_channel=channel, skipped_version=None)
             except Exception as exc:
-                messagebox.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
+                popups.showerror("Updates", f"Couldn't save the update setting:\n{exc}")
                 branch_var.set(saved_branch["label"])
                 return
             saved_branch["label"] = label
@@ -1270,20 +1271,20 @@ def open_dialog(start_tab=None):
             if error is not None:
                 result = {"error": str(error)}
             if result["error"]:
-                messagebox.showerror(
+                popups.showerror(
                     "Check for Updates",
                     f"Couldn't check {source_repo_var.get()} for updates:\n{result['error']}",
                 )
                 return
             current, latest = result["local_version"], result["remote_version"]
             if not result["update_available"]:
-                messagebox.showinfo(
+                popups.showinfo(
                     "Check for Updates",
                     f"Current version: {current}\nLatest version: {latest}\n\nClipEm is up to date.",
                 )
                 return
             changes = "\n".join(f"  \u2022 {line}" for line in updater.describe_update(result))
-            if messagebox.askyesno(
+            if popups.askyesno(
                 "Check for Updates",
                 f"An update is available:\n\n{changes}\n\nInstall it now? This closes OBS and the "
                 "tray icon, updates ClipEm and starts them again.\n\n(Choosing No offers it again the "
@@ -1292,7 +1293,7 @@ def open_dialog(start_tab=None):
                 try:
                     updater.change_update_config(install_on_next_launch=True)
                 except Exception as exc:
-                    messagebox.showerror("Check for Updates", f"Couldn't save the update choice:\n{exc}")
+                    popups.showerror("Check for Updates", f"Couldn't save the update choice:\n{exc}")
                     return
                 check_button.config(state="disabled", text="Restarting...")
                 restart_clipem_in_background(root, on_clipem_restarted)
@@ -1303,7 +1304,7 @@ def open_dialog(start_tab=None):
                 error_message = (f"Couldn't restart ClipEm ({exc}). The update will be installed the "
                                  "next time ClipEm starts.")
             if error_message:
-                messagebox.showwarning("Check for Updates", error_message)
+                popups.showwarning("Check for Updates", error_message)
             root.destroy()
 
         check_button = tk.Button(frame, text="Check for Updates", command=on_check_for_updates)
@@ -1319,7 +1320,7 @@ def open_dialog(start_tab=None):
         dialog.resizable(False, False)
         dialog.transient(root)
         body = tk.Frame(dialog, padx=px(16), pady=px(12))
-        body.pack()
+        body.pack(fill="both", expand=True)
         tk.Label(
             body, justify="left", wraplength=px(380),
             text="What happened? What were you doing when it went wrong?",
@@ -1349,7 +1350,7 @@ def open_dialog(start_tab=None):
         def on_send():
             description = description_text.get("1.0", "end").strip()
             if not description:
-                messagebox.showwarning("Send Bug Report", "Describe what happened first.", parent=dialog)
+                popups.showwarning("Send Bug Report", "Describe what happened first.", parent=dialog)
                 return
             set_sending(True)
             run_in_background(root, lambda: bug_report.send_bug_report(description), on_sent)
@@ -1358,10 +1359,10 @@ def open_dialog(start_tab=None):
             if error is not None:
                 log.warning(f"Sending the bug report failed: {error}")
                 if not dialog.winfo_exists():
-                    messagebox.showerror("Send Bug Report", f"Couldn't send the bug report:\n{error}", parent=root)
+                    popups.showerror("Send Bug Report", f"Couldn't send the bug report:\n{error}", parent=root)
                     return
                 set_sending(False)
-                if messagebox.askyesno(
+                if popups.askyesno(
                     "Send Bug Report",
                     f"Couldn't send the bug report:\n{error}\n\nSave it to a file instead, to attach it "
                     "to an issue or a message yourself?",
@@ -1373,24 +1374,25 @@ def open_dialog(start_tab=None):
             log.info(f"Bug report sent: {report_id} ({issue_url})")
             if dialog.winfo_exists():
                 dialog.destroy()
-            if issue_url and messagebox.askyesno(
+            if issue_url and popups.askyesno(
                 "Send Bug Report",
                 f"Thanks - the bug report was sent (report ID {report_id}).\n\nOpen the GitHub issue in your browser?",
                 parent=root,
             ):
                 webbrowser.open(issue_url)
             elif not issue_url:
-                messagebox.showinfo("Send Bug Report", f"Thanks - the bug report was sent (report ID {report_id}).",
+                popups.showinfo("Send Bug Report", f"Thanks - the bug report was sent (report ID {report_id}).",
                                     parent=root)
 
         dialog_buttons = tk.Frame(body)
-        dialog_buttons.pack(anchor="e", pady=(px(12), 0))
+        dialog_buttons.pack(side="bottom", anchor="e", pady=(px(12), 0))
         tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
         tk.Button(dialog_buttons, text="Save to File Instead...", command=on_save_instead).pack(
             side="left", padx=px(4))
         send_button = tk.Button(dialog_buttons, text="Send", command=on_send, width=10)
         send_button.pack(side="left", padx=px(4))
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        popups.place(dialog, root)
         description_text.focus_set()
         dialog.grab_set()
 
@@ -1412,10 +1414,10 @@ def open_dialog(start_tab=None):
         bug_button.config(state="normal")
         if error is not None:
             log.warning(f"Bug report failed: {error}")
-            messagebox.showerror("Bug Report", f"Couldn't create the bug report:\n{error}", parent=root)
+            popups.showerror("Bug Report", f"Couldn't create the bug report:\n{error}", parent=root)
             return
         log.info(f"Bug report saved: {path} ({count} log files)")
-        if messagebox.askyesno(
+        if popups.askyesno(
             "Bug Report",
             f"Saved the bug report ({count} log files) to:\n{path}\n\n"
             "It holds ClipEm's and OBS's logs and a summary of this install (versions, settings and "
@@ -1426,7 +1428,7 @@ def open_dialog(start_tab=None):
             try:
                 reveal_file(path)
             except OSError as exc:
-                messagebox.showerror("Bug Report", f"Couldn't open the folder: {exc}", parent=root)
+                popups.showerror("Bug Report", f"Couldn't open the folder: {exc}", parent=root)
 
     def on_reinstall():
         dialog = tk.Toplevel(root)
@@ -1434,7 +1436,7 @@ def open_dialog(start_tab=None):
         dialog.resizable(False, False)
         dialog.transient(root)
         body = tk.Frame(dialog, padx=px(16), pady=px(12))
-        body.pack()
+        body.pack(fill="both", expand=True)
         tk.Label(
             body, justify="left", wraplength=px(380),
             text=(
@@ -1462,7 +1464,7 @@ def open_dialog(start_tab=None):
             try:
                 reinstall.request_reinstall(keep_obs_var.get(), keep_clipem_var.get())
             except Exception as exc:
-                messagebox.showerror("Reinstall ClipEm", f"Couldn't start the reinstall: {exc}", parent=dialog)
+                popups.showerror("Reinstall ClipEm", f"Couldn't start the reinstall: {exc}", parent=dialog)
                 return
             log.info(f"Reinstall requested (keep OBS settings: {keep_obs_var.get()}, "
                      f"keep ClipEm settings: {keep_clipem_var.get()})")
@@ -1474,10 +1476,11 @@ def open_dialog(start_tab=None):
             restart_clipem_in_background(root, on_reinstall_restarted, REINSTALL_PENDING_MESSAGE)
 
         dialog_buttons = tk.Frame(body)
-        dialog_buttons.pack(anchor="e", pady=(px(12), 0))
+        dialog_buttons.pack(side="bottom", anchor="e", pady=(px(12), 0))
         tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
         tk.Button(dialog_buttons, text="Reinstall", command=on_confirm, width=10).pack(side="left", padx=px(4))
         dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        popups.place(dialog, root)
         dialog.grab_set()
 
     def on_reinstall_restarted(error_message, exc):
@@ -1485,7 +1488,7 @@ def open_dialog(start_tab=None):
             log.warning(f"Restart ClipEm for the reinstall failed: {exc}")
             error_message = f"Couldn't restart ClipEm ({exc}). {REINSTALL_PENDING_MESSAGE}"
         if error_message:
-            messagebox.showwarning("Reinstall ClipEm", error_message)
+            popups.showwarning("Reinstall ClipEm", error_message)
         root.destroy()
 
     troubleshooting_row = tk.Frame(frame)
@@ -1499,22 +1502,22 @@ def open_dialog(start_tab=None):
     def on_save():
         if (not editors_off_var.get() and editor_kind_var.get() == editor_install.EXTERNAL
                 and not editor_path_var.get().strip()):
-            messagebox.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.", parent=root)
+            popups.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.", parent=root)
             return
         try:
             port_val = obs_config.validate_port(port_var.get().strip())
         except ValueError:
-            messagebox.showerror("Invalid Port", "Port must be a number from 1 to 65535.")
+            popups.showerror("Invalid Port", "Port must be a number from 1 to 65535.")
             return
         password_val = password_var.get()
         if not password_val:
-            messagebox.showerror("Invalid Password", "Password can't be empty.")
+            popups.showerror("Invalid Password", "Password can't be empty.")
             return
         hotkey_val = [hotkey_ctrl_var.get(), hotkey_alt_var.get(), hotkey_shift_var.get(), hotkey_key_var.get()]
         try:
             obs_config.hotkey_label_to_obs_key(hotkey_val[3])
         except ValueError:
-            messagebox.showerror("Invalid Hotkey", "Pick a key for the clip hotkey.")
+            popups.showerror("Invalid Hotkey", "Pick a key for the clip hotkey.")
             return
         obs_settings = {
             "websocket": {"port": port_val, "password": password_val},
@@ -1528,7 +1531,7 @@ def open_dialog(start_tab=None):
             buffer_seconds = int(float(buffer_var.get()))
             recording_bitrate = int(float(recording_bitrate_var.get()))
         except ValueError:
-            messagebox.showerror("Recording", "Enter numbers for the replay buffer and bitrate.", parent=root)
+            popups.showerror("Recording", "Enter numbers for the replay buffer and bitrate.", parent=root)
             return
         buffer_seconds = max(setup.REPLAY_BUFFER_MIN_SECONDS, min(buffer_seconds, setup.REPLAY_BUFFER_MAX_SECONDS))
         recording_bitrate = max(setup.BITRATE_MIN_KBPS, min(recording_bitrate, setup.BITRATE_MAX_KBPS))
@@ -1558,7 +1561,7 @@ def open_dialog(start_tab=None):
 
         values = reexport_values()
         if reexport_var.get() and (not values or values[0] <= 0):
-            messagebox.showerror("Smaller Copy", "Enter a target size (MB, more than 0) and how many "
+            popups.showerror("Smaller Copy", "Enter a target size (MB, more than 0) and how many "
                                  "seconds to keep.", parent=root)
             return
         if values and values[0] > 0:
@@ -1569,7 +1572,7 @@ def open_dialog(start_tab=None):
             try:
                 os.makedirs(obs_settings["clip_folder"], exist_ok=True)
             except OSError as exc:
-                messagebox.showerror("Clip Folder", f"Couldn't create the clip folder: {exc}", parent=root)
+                popups.showerror("Clip Folder", f"Couldn't create the clip folder: {exc}", parent=root)
                 return
         if chosen_sound["path"]:
             # A plain file OBS's script reads on every clip - takes effect
@@ -1577,7 +1580,7 @@ def open_dialog(start_tab=None):
             try:
                 obs_config.replace_clip_sound_wav(chosen_sound["path"])
             except Exception as exc:
-                messagebox.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=root)
+                popups.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=root)
                 return
             chosen_sound["path"] = None
 
@@ -1602,7 +1605,7 @@ def open_dialog(start_tab=None):
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())
             save_run_config(run_config)
         except Exception as exc:
-            messagebox.showerror("Save Failed", f"Couldn't save screen-detection and disk-space settings: {exc}")
+            popups.showerror("Save Failed", f"Couldn't save screen-detection and disk-space settings: {exc}")
             return
         # The editor and the tray menu pick the colors up themselves (they
         # poll run_config); this window is rebuilt with them once it closes.
@@ -1612,17 +1615,17 @@ def open_dialog(start_tab=None):
         try:
             outcome = save_obs_settings(obs_settings, initial_obs_settings)
         except Exception as exc:
-            messagebox.showerror("Save Failed", f"Couldn't save settings: {exc}")
+            popups.showerror("Save Failed", f"Couldn't save settings: {exc}")
             return
         if outcome == "unchanged":
             root.destroy()
             return
         if outcome == "applied":
-            messagebox.showinfo("Saved", "Settings saved.")
+            popups.showinfo("Saved", "Settings saved.")
             root.destroy()
             return
 
-        if not messagebox.askyesno(
+        if not popups.askyesno(
             "Restart OBS?",
             "OBS only picks up websocket, hotkey, clip sound, clip folder and multitrack "
             "audio settings when it starts. Restart OBS now to apply them?\n\n"
@@ -1643,7 +1646,7 @@ def open_dialog(start_tab=None):
                     "apply the next time ClipEm starts OBS."
                 )
             if error_message:
-                messagebox.showwarning("Restart OBS", error_message)
+                popups.showwarning("Restart OBS", error_message)
             root.destroy()
 
         run_in_background(root, restart_obs_with_queued_settings, on_restarted)

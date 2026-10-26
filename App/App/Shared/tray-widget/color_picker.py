@@ -14,6 +14,7 @@ import tkinter as tk
 import zlib
 
 import dark_theme
+import popups
 
 
 def _png(width, height, row):
@@ -56,7 +57,7 @@ def ask_color(parent, initial, title, px=lambda n: n):
     dialog.resizable(False, False)
     dialog.transient(parent)
     body = tk.Frame(dialog, padx=px(14), pady=px(14))
-    body.pack(fill="both", expand=True)
+    body.pack(expand=True)
 
     h, s, v = _hex_to_hsv(initial)
     state = {"h": h, "s": s, "v": v, "result": None, "busy": False}
@@ -173,10 +174,7 @@ def ask_color(parent, initial, title, px=lambda n: n):
     dialog.protocol("WM_DELETE_WINDOW", lambda: finish(None))
 
     show()
-    dialog.update_idletasks()
-    x = parent.winfo_rootx() + (parent.winfo_width() - dialog.winfo_reqwidth()) // 2
-    y = parent.winfo_rooty() + (parent.winfo_height() - dialog.winfo_reqheight()) // 3
-    dialog.geometry(f"+{max(x, 0)}+{max(y, 0)}")
+    popups.place(dialog, parent)
     dialog.grab_set()
     dialog.focus_set()
     parent.wait_window(dialog)

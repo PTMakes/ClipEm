@@ -15,12 +15,13 @@ import queue
 import sys
 import threading
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import ttk
 
 import dark_theme
 import editor_install
 import file_dialogs
 import obs_config
+import popups
 import updater
 from app_window import style_app_window, use_windows_app_id
 from mic_filter_gui import MicFilterWizard
@@ -504,7 +505,7 @@ class Wizard(tk.Tk):
         if not self.controller["obs_running"]():
             self._show_provisioning()
             return
-        choice = messagebox.askyesnocancel(
+        choice = popups.askyesnocancel(
             "OBS is running",
             f"{self.controller['obs_running_message']}\n\n"
             "Close OBS now? Any recording in progress is stopped and saved first.\n\n"
@@ -548,7 +549,7 @@ class Wizard(tk.Tk):
         def on_done(ok, result):
             self.provision_back_btn.configure(state="normal")
             if not ok:
-                messagebox.showerror("Setup", f"Setup failed:\n{result}")
+                popups.showerror("Setup", f"Setup failed:\n{result}")
                 self.provision_continue_btn.configure(
                     text="Close", state="normal", command=self.destroy
                 )
@@ -682,7 +683,7 @@ class Wizard(tk.Tk):
         try:
             self._call_logged(self.controller["set_clip_folder"], folder)
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not set clip folder:\n{exc}")
+            popups.showerror("Setup", f"Could not set clip folder:\n{exc}")
             return
         self._show_video_quality()
 
@@ -747,7 +748,7 @@ class Wizard(tk.Tk):
             out_width, out_height = (int(v) for v in self.resolution_var.get().split("x"))
             fps = int(self.fps_var.get())
         except ValueError:
-            messagebox.showerror("Setup", "Please enter valid numbers for resolution and FPS.")
+            popups.showerror("Setup", "Please enter valid numbers for resolution and FPS.")
             return
         try:
             self._call_logged(
@@ -759,7 +760,7 @@ class Wizard(tk.Tk):
                 display_combo.current(), display.get("device_id"),
             )
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save video settings:\n{exc}")
+            popups.showerror("Setup", f"Could not save video settings:\n{exc}")
             return
         self._follow_resolution_with_bitrate(out_width, out_height)
         self._show_audio_devices()
@@ -829,7 +830,7 @@ class Wizard(tk.Tk):
         try:
             self._call_logged(self.controller["save_audio_devices"], output_id, input_id)
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save audio device settings:\n{exc}")
+            popups.showerror("Setup", f"Could not save audio device settings:\n{exc}")
             return
         self._show_split_tracks()
 
@@ -846,8 +847,9 @@ class Wizard(tk.Tk):
         progress.title("Mic Filter Configuration")
         progress.transient(self)
         progress.resizable(False, False)
+        ttk.Label(progress, text="Preparing microphone calibration...", padding=self.px(PAD)).pack(expand=True)
+        popups.place(progress, self)
         progress.grab_set()
-        ttk.Label(progress, text="Preparing microphone calibration...", padding=self.px(PAD)).pack()
 
         deps_queue = queue.Queue()
 
@@ -873,7 +875,7 @@ class Wizard(tk.Tk):
                 )
             else:
                 detail = payload if kind == "error" else "dependency install failed"
-                messagebox.showerror(
+                popups.showerror(
                     "Mic Filter Configuration",
                     f"Could not set up microphone calibration:\n{detail}",
                 )
@@ -916,7 +918,7 @@ class Wizard(tk.Tk):
         try:
             self._call_logged(self.controller["save_split_tracks"], self.split_tracks_var.get())
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save the split audio tracks setting:\n{exc}")
+            popups.showerror("Setup", f"Could not save the split audio tracks setting:\n{exc}")
             return
         self._show_clip_quality()
 
@@ -981,7 +983,7 @@ class Wizard(tk.Tk):
             self.replay_buffer_var.get()
             self.bitrate_var.get()
         except (ValueError, tk.TclError):
-            messagebox.showerror(
+            popups.showerror(
                 "Setup", "Please enter valid numbers for replay buffer length and bitrate."
             )
             return
@@ -1104,7 +1106,7 @@ class Wizard(tk.Tk):
             buffer_seconds = self.replay_buffer_var.get()
             bitrate = self.bitrate_var.get()
         except (ValueError, tk.TclError):
-            messagebox.showerror(
+            popups.showerror(
                 "Setup", "Please enter valid numbers for replay buffer length and bitrate."
             )
             return
@@ -1117,13 +1119,13 @@ class Wizard(tk.Tk):
             crop_seconds = self.crop_duration_var.get()
         except (ValueError, tk.TclError):
             if reexport_enabled:
-                messagebox.showerror(
+                popups.showerror(
                     "Setup", "Please enter a valid target file size and crop duration."
                 )
                 return
             target_mb, crop_seconds = self.controller["default_target_filesize_mb"], buffer_seconds
         if reexport_enabled and target_mb <= 0:
-            messagebox.showerror("Setup", "The target file size must be more than 0 MB.")
+            popups.showerror("Setup", "The target file size must be more than 0 MB.")
             return
         crop_seconds = max(1, min(crop_seconds, buffer_seconds))
         try:
@@ -1133,7 +1135,7 @@ class Wizard(tk.Tk):
                 self.controller["save_clip_reexport"], reexport_enabled, target_mb, crop_seconds
             )
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save clip quality settings:\n{exc}")
+            popups.showerror("Setup", f"Could not save clip quality settings:\n{exc}")
             return
         self._show_hotkey()
 
@@ -1174,7 +1176,7 @@ class Wizard(tk.Tk):
                 self.hotkey_key_var.get(),
             )
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save the clip hotkey:\n{exc}")
+            popups.showerror("Setup", f"Could not save the clip hotkey:\n{exc}")
             return
         self._show_sound()
 
@@ -1256,7 +1258,7 @@ class Wizard(tk.Tk):
                 self.sound_volume_var.get(), self.sound_file_var.get() or None
             )
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not play the clip sound:\n{exc}")
+            popups.showerror("Setup", f"Could not play the clip sound:\n{exc}")
 
     def _pick_sound_preset(self, _event=None):
         self.sound_file_var.set(obs_config.clip_sound_preset_path(self.sound_name_var.get()))
@@ -1278,7 +1280,7 @@ class Wizard(tk.Tk):
             if self.sound_file_var.get():
                 self._call_logged(self.controller["replace_clip_sound_wav"], self.sound_file_var.get())
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save the clip sound settings:\n{exc}")
+            popups.showerror("Setup", f"Could not save the clip sound settings:\n{exc}")
             return
         self._show_clip_editor()
 
@@ -1350,7 +1352,7 @@ class Wizard(tk.Tk):
         def next_page():
             if (self.editors_enabled_var.get() and self.editor_kind_var.get() == editor_install.EXTERNAL
                     and not self.editor_path_var.get().strip()):
-                messagebox.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.")
+                popups.showerror("Clip Editor", "Choose your external editor, or pick ClipEm's editor.")
                 return
             self._show_tray_menu()
 
@@ -1442,16 +1444,16 @@ class Wizard(tk.Tk):
         try:
             port = int(self.ws_port_var.get())
         except ValueError:
-            messagebox.showerror("Setup", "Please enter a valid port number.")
+            popups.showerror("Setup", "Please enter a valid port number.")
             return
         password = self.ws_password_var.get().strip()
         if not password:
-            messagebox.showerror("Setup", "Please enter a websocket password.")
+            popups.showerror("Setup", "Please enter a websocket password.")
             return
         try:
             self._call_logged(self.controller["save_obs_websocket_settings"], port, password)
         except Exception as exc:
-            messagebox.showerror("Setup", f"Could not save the OBS websocket settings:\n{exc}")
+            popups.showerror("Setup", f"Could not save the OBS websocket settings:\n{exc}")
             return
         self._show_auto_update()
 
@@ -1501,7 +1503,7 @@ class Wizard(tk.Tk):
         ttk.Button(bar, text="Continue", command=self._show_autostart).pack(side="right")
 
     def _change_source_repo(self):
-        if not messagebox.askyesno(
+        if not popups.askyesno(
             "Source Repo",
             "ClipEm downloads its updates from the releases of this GitHub repository.\n\n"
             "Only change it if you know the repository publishes ClipEm builds - updates must "
@@ -1509,7 +1511,7 @@ class Wizard(tk.Tk):
             "makes update checks fail.\n\nChange the source repo?",
         ):
             return
-        text = simpledialog.askstring(
+        text = popups.askstring(
             "Source Repo", "GitHub repository link (https://github.com/owner/name):",
             initialvalue=self.source_repo_var.get(), parent=self,
         )
@@ -1517,7 +1519,7 @@ class Wizard(tk.Tk):
             return
         repo = updater.repo_from_url(text)
         if repo is None:
-            messagebox.showerror(
+            popups.showerror(
                 "Source Repo",
                 f"\"{text.strip()}\" isn't a GitHub repository link like https://github.com/owner/name.",
             )
@@ -1539,7 +1541,7 @@ class Wizard(tk.Tk):
                 "The Main branch installs only published releases. If you're on a dev build, "
                 "the next update check offers the current release instead.\n\nSwitch to Main?"
             )
-        if messagebox.askyesno("Update Branch", explanation):
+        if popups.askyesno("Update Branch", explanation):
             self._saved_branch = label
         else:
             self.update_branch_var.set(self._saved_branch)
@@ -1648,7 +1650,7 @@ class Wizard(tk.Tk):
 
         def on_done(ok, result):
             if not ok:
-                messagebox.showerror("Setup", f"Finishing steps failed:\n{result}")
+                popups.showerror("Setup", f"Finishing steps failed:\n{result}")
             self.finish_btn.configure(state="normal")
             self.finish_back_btn.configure(state="normal")
 
@@ -1659,7 +1661,7 @@ class Wizard(tk.Tk):
             try:
                 self.controller["launch_app"]()
             except Exception as exc:
-                messagebox.showerror("Setup", f"Could not start OBS:\n{exc}")
+                popups.showerror("Setup", f"Could not start OBS:\n{exc}")
         self.destroy()
 
 

@@ -208,12 +208,16 @@ def _show_error(message):
     try:
         _enable_windows_tk()
         import tkinter
-        from tkinter import messagebox
+
+        import popups
+        from ui_scale import UiScale
 
         root = tkinter.Tk(className="ClipEm")
         root.withdraw()
+        root.px = UiScale(root).px  # popups size themselves with it
+        dark_theme.apply_theme(root)
         app_window.set_window_icon(root)
-        messagebox.showerror("ClipEm", message, parent=root)
+        popups.showerror("ClipEm", message, parent=root)
         root.destroy()
     except Exception:
         pass

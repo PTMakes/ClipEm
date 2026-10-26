@@ -9,7 +9,9 @@ try_launch_gui) so it has no import-time dependency on setup.py either.
 import threading
 import time
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import ttk
+
+import popups
 
 PAD = 16
 MIC_FILTER_SENTENCE = "The quick brown fox jumped over the lazy dog"
@@ -31,7 +33,6 @@ class MicFilterWizard(tk.Toplevel):
         # Same 96 DPI pixel scaling as the wizard - see ui_scale.py.
         self.px = parent.px
         self.title("Mic Filter Configuration")
-        self.geometry(f"{self.px(560)}x{self.px(380)}")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -44,6 +45,7 @@ class MicFilterWizard(tk.Toplevel):
         self.speech_level_db = None
 
         self._show_intro()
+        popups.place(self, parent)
 
     def _clear(self):
         for widget in self.container.winfo_children():
@@ -74,7 +76,7 @@ class MicFilterWizard(tk.Toplevel):
                 self.after(100, poll)
                 return
             if "error" in result:
-                messagebox.showerror(
+                popups.showerror(
                     "Mic Filter Configuration", f"Could not record audio:\n{result['error']}", parent=self,
                 )
                 self.destroy()
@@ -234,7 +236,7 @@ class MicFilterWizard(tk.Toplevel):
             try:
                 self.controller["save_mic_filter_levels"](self.noise_floor_db, self.speech_level_db)
             except Exception as exc:
-                messagebox.showerror(
+                popups.showerror(
                     "Mic Filter Configuration", f"Could not save filter settings:\n{exc}", parent=self,
                 )
                 return
