@@ -335,11 +335,23 @@ def _extract_zip(zip_path, dest, skip_suffixes=()) -> None:
             zf.extract(member, dest)
 
 
-def build_windows_offline_bundle(manifest_path, shared_zip, ffmpeg_zip, tcltk_zip, vcruntime_zip, setup_script,
+def _extract_windows_python(tar_path, python_root) -> None:
+    """python-build-standalone's Windows tar: its python/ folder's contents
+    into python_root, without the debug symbols."""
+    python_root = Path(python_root)
+    with tarfile.open(tar_path) as tf:
+        for member in tf.getmembers():
+            if not member.name.startswith("python/") or member.name.lower().endswith(".pdb"):
+                continue
+            member.name = member.name.removeprefix("python/")
+            tf.extract(member, python_root, filter="data")
+
+
+def build_windows_offline_bundle(manifest_path, shared_zip, ffmpeg_zip, vcruntime_zip, setup_script,
                                  wheelhouse, stage_dir, out_zip, epoch, cache_dir=DOWNLOAD_CACHE_DIR) -> None:
     """The offline alternative to ClipEmSetupWindows.exe: a ClipEm/ folder laid
-    out exactly as bootstrap.ps1 + Setup leave an install - the embeddable
-    Python with Tcl/Tk, site-packages and pip already set up, OBS with the
+    out exactly as bootstrap.ps1 + Setup leave an install - the bundled
+    Python (with Tcl/Tk and pip) and its ._pth already set up, OBS with the
     VC++ runtime next to it, ffmpeg, the shared files and the wheelhouse -
     plus Setup_Windows.bat to run Setup from it. OBS and Python are the
     manifest's (downloaded once into cache_dir and sha256-checked)."""
@@ -355,16 +367,11 @@ def build_windows_offline_bundle(manifest_path, shared_zip, ffmpeg_zip, tcltk_zi
 
     print("  shared files")
     _extract_zip(shared_zip, bundle / "App")
-    print("  Python, Tcl/Tk and pip")
-    _extract_zip(cached_download(manifest["python"], cache_dir), python_root)
-    _extract_zip(tcltk_zip, python_root)
-    version_info = updater._parse_version(updater.artifact_version(manifest["python"]))[:2]
-    if not windows_python.own_pth_path(str(python_root), version_info):
-        raise SystemExit(f"The embeddable Python has no python{version_info[0]}{version_info[1]}._pth")
-    windows_python.enable_site(str(python_root), version_info)
-    windows_python.add_lib_to_pth(str(python_root), version_info)
-    # A pure-Python wheel installs by unpacking it into site-packages.
-    _extract_zip(cached_download(manifest["pip_wheel"], cache_dir), python_root / "Lib" / "site-packages")
+    print("  Python")
+    _extract_windows_python(cached_download(manifest["python"], cache_dir), python_root)
+    if not (python_root / "python.exe").is_file() or not windows_python.tcltk_installed(str(python_root)):
+        raise SystemExit("The Windows Python tar has no python/python.exe or Tcl/Tk")
+    windows_python.isolate(str(python_root), updater._parse_version(updater.artifact_version(manifest["python"]))[:2])
     print("  OBS and the VC++ runtime")
     _extract_zip(cached_download(manifest["obs"], cache_dir), windows, skip_suffixes=(".pdb",))
     if not (windows / "bin" / "64bit" / "obs64.exe").is_file():
@@ -612,7 +619,7 @@ def main(argv=None) -> None:
         bundle.add_argument(option, required=True)
     bundle.add_argument("--wheelhouse")
     windows_bundle = sub.add_parser("windows-offline-bundle")
-    for option in ("--manifest", "--shared-zip", "--ffmpeg-zip", "--tcltk-zip", "--vcruntime-zip",
+    for option in ("--manifest", "--shared-zip", "--ffmpeg-zip", "--vcruntime-zip",
                    "--setup-script", "--wheelhouse", "--stage-dir", "--out"):
         windows_bundle.add_argument(option, required=True)
     wheels = sub.add_parser("wheelhouse")
@@ -666,8 +673,7 @@ def main(argv=None) -> None:
         epoch = os.environ.get("SOURCE_DATE_EPOCH")
         if not epoch:
             raise SystemExit("Set SOURCE_DATE_EPOCH (release.sh uses the App repo's HEAD commit time).")
-        build_windows_offline_bundle(args.manifest, args.shared_zip, args.ffmpeg_zip, args.tcltk_zip,
-                                     args.vcruntime_zip, args.setup_script, args.wheelhouse, args.stage_dir,
+        build_windows_offline_bundle(args.manifest, args.shared_zip, args.ffmpeg_zip, args.vcruntime_zip, args.setup_script, args.wheelhouse, args.stage_dir,
                                      args.out, epoch)
         print(f" - Wrote {args.out}")
     elif args.command == "wheelhouse":

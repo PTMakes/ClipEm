@@ -20,18 +20,21 @@ if defined SHOW_HELP (
 
 set "PYTHON_DIR=%~dp0App\Windows\Python"
 set "PYTHON_EXE=%PYTHON_DIR%\python.exe"
-rem sha256 of python-3.12.10-embed-amd64.zip - must match Dev/release/upstream-pins.json
-rem (and WINDOWS_PYTHON_VERSION in setup.py); CI checks the two agree.
-set "PYTHON_SHA256=4acbed6dd1c744b0376e3b1cf57ce906f9dc9e95e68824584c8099a63025a3c3"
+rem python-build-standalone's Windows Python and its sha256 - must match
+rem WINDOWS_PYTHON_VERSION/_PBS_TAG in setup.py and Dev/release/upstream-pins.json
+rem (release.sh checks).
+set "PYTHON_URL=https://github.com/astral-sh/python-build-standalone/releases/download/20261026/cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz"
+set "PYTHON_SHA256=590dfcbe3a34c07301e6332e13e2188b98655cd072b08afa45a7998dc4c22bc5"
 
 if not exist "%PYTHON_EXE%" (
-    echo Python not found - fetching the embeddable distribution ^(one-time, ~10MB, stays inside App\Windows\Python^)...
+    echo Python not found - fetching it ^(one-time, ~45MB, stays inside App\Windows\Python^)...
+    if not exist "%PYTHON_DIR%" mkdir "%PYTHON_DIR%"
     powershell -NoProfile -Command ^
         "$ProgressPreference = 'SilentlyContinue';" ^
-        "Invoke-WebRequest -Uri 'https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip' -OutFile '%TEMP%\python-embed.zip';" ^
-        "if ((Get-FileHash '%TEMP%\python-embed.zip' -Algorithm SHA256).Hash -ne '%PYTHON_SHA256%') { Remove-Item '%TEMP%\python-embed.zip'; Write-Host 'Checksum mismatch for the Python download - aborting.'; exit 1 };" ^
-        "Expand-Archive -Path '%TEMP%\python-embed.zip' -DestinationPath '%PYTHON_DIR%' -Force;" ^
-        "Remove-Item '%TEMP%\python-embed.zip'"
+        "Invoke-WebRequest -Uri '%PYTHON_URL%' -OutFile '%TEMP%\clipem-python.tar.gz';" ^
+        "if ((Get-FileHash '%TEMP%\clipem-python.tar.gz' -Algorithm SHA256).Hash -ne '%PYTHON_SHA256%') { Remove-Item '%TEMP%\clipem-python.tar.gz'; Write-Host 'Checksum mismatch for the Python download - aborting.'; exit 1 };" ^
+        "& (Join-Path $env:SystemRoot 'System32\tar.exe') -xzf '%TEMP%\clipem-python.tar.gz' -C '%PYTHON_DIR%' --strip-components=1 --exclude '*.pdb';" ^
+        "Remove-Item '%TEMP%\clipem-python.tar.gz'"
     if not exist "%PYTHON_EXE%" (
         echo Failed to fetch Python. Check your internet connection and try again.
         pause

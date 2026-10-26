@@ -103,6 +103,7 @@ __pycache__/
 
 # dependencies
 /Website/node_modules/
+/BugReportWorker/node_modules/
 
 # next.js
 /Website/.next/
@@ -114,7 +115,7 @@ __pycache__/
 /Website/build/
 
 # Cloudflare wrangler local state
-/Website/.wrangler/
+.wrangler/
 
 # debug
 npm-debug.log*

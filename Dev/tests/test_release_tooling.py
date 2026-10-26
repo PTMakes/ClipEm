@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import subprocess
+import tarfile
 import zipfile
 
 import ed25519_verify
@@ -82,7 +83,8 @@ def manifest(tmp_path, monkeypatch):
     argv = ["--version", "v1.2.3", "--out", str(out)]
     for arg, path in files.items():
         argv += [arg, path]
-    argv += ["--windows-obs-version", "32.2.2", "--windows-python-version", "3.12.10",
+    argv += ["--windows-obs-version", "32.2.2", "--windows-python-version", "3.12.16",
+             "--windows-python-pbs-tag", "20261026",
              "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2",
              "--electron-version", "44.5.1"]
     generate_install_manifest.main(argv)
@@ -101,6 +103,11 @@ def test_manifest_layout(manifest):
         assert python["sha256"] == hashlib.sha256(f.read()).hexdigest()
     assert data["sources"]["ffmpeg"]["url"].endswith("ffmpeg-9.0.2-source.tar.gz")
     assert data["windows"]["obs"]["url"].endswith("OBS-Studio-32.2.2-Windows-x64.zip")
+    assert data["windows"]["python"]["url"] == (
+        "https://github.com/astral-sh/python-build-standalone/releases/download/20261026/"
+        "cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz"
+    )
+    assert data["windows"]["tcltk_msi"]["url"].endswith("/3.12.10/amd64/tcltk.msi")
     electron = "https://github.com/electron/electron/releases/download/v44.5.1/electron-v44.5.1-"
     assert data["linux"]["editor_window"]["url"] == electron + "linux-x64.zip"
     assert data["windows"]["editor_window"]["url"] == electron + "win32-x64.zip"
@@ -221,6 +228,15 @@ def test_portable_bundle_layout_and_exec_bits(tmp_path):
     assert (tmp_path / "stage" / "ClipEm" / "App" / "Linux" / "obs-install" / "lib" / "libobs.so").is_symlink()
 
 
+def _tar_file(path, files):
+    with tarfile.open(path, "w:gz") as tf:
+        for name, data in files.items():
+            info = tarfile.TarInfo(name)
+            info.size = len(data.encode())
+            tf.addfile(info, io.BytesIO(data.encode()))
+    return path
+
+
 def _zip_file(path, files):
     with zipfile.ZipFile(path, "w") as zf:
         for name, data in files.items():
@@ -234,11 +250,10 @@ def test_windows_offline_bundle_is_a_ready_install(tmp_path):
     cache = tmp_path / "cache"
     cache.mkdir()
     upstream = {
-        "python": _zip_file(cache / "python-3.12.10-embed-amd64.zip", {
-            "python.exe": "py", "python312._pth": "python312.zip\n.\n\n#import site\n",
-        }),
-        "pip_wheel": _zip_file(cache / "pip-26.2.1-py3-none-any.whl", {
-            "pip/__init__.py": "", "pip-26.2.1.dist-info/METADATA": "Name: pip\nVersion: 26.2.1\n",
+        "python": _tar_file(cache / "cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz", {
+            "python/python.exe": "py", "python/python312.pdb": "symbols", "python/DLLs/_tkinter.pyd": "tk",
+            "python/tcl/tcl8.6/init.tcl": "", "python/Lib/tkinter/__init__.py": "",
+            "python/Lib/site-packages/pip/__init__.py": "",
         }),
         "obs": _zip_file(cache / "OBS-Studio-32.2.2-Windows-x64.zip", {
             "bin/64bit/obs64.exe": "obs", "bin/64bit/obs64.pdb": "symbols", "data/libobs/x.effect": "fx",
@@ -252,7 +267,6 @@ def test_windows_offline_bundle_is_a_ready_install(tmp_path):
     }}))
     shared = _zip_file(tmp_path / "shared.zip", {"Shared/VERSION": "1.4.0"})
     ffmpeg = _zip_file(tmp_path / "ffmpeg.zip", {"ffmpeg/bin/ffmpeg.exe": "ff"})
-    tcltk = _zip_file(tmp_path / "tcltk.zip", {"_tkinter.pyd": "tk", "tcl/tcl8.6/init.tcl": "", "Lib/tkinter/__init__.py": ""})
     vcruntime = _zip_file(tmp_path / "vcruntime.zip", {"msvcp140.dll": "vc", "vcruntime140.dll": "vc"})
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
@@ -262,7 +276,7 @@ def test_windows_offline_bundle_is_a_ready_install(tmp_path):
 
     out = tmp_path / "clipem-windows-portable-1.4.0.zip"
     release_common.build_windows_offline_bundle(
-        manifest, shared, ffmpeg, tcltk, vcruntime, setup_bat, wheelhouse, tmp_path / "stage", out, 1700000000,
+        manifest, shared, ffmpeg, vcruntime, setup_bat, wheelhouse, tmp_path / "stage", out, 1700000000,
         cache_dir=cache,
     )
 
@@ -274,7 +288,7 @@ def test_windows_offline_bundle_is_a_ready_install(tmp_path):
         "ClipEm/Setup_Windows.bat",
         "ClipEm/App/Shared/VERSION",
         "ClipEm/App/Windows/Python/python.exe",
-        "ClipEm/App/Windows/Python/_tkinter.pyd",
+        "ClipEm/App/Windows/Python/DLLs/_tkinter.pyd",
         "ClipEm/App/Windows/Python/Lib/tkinter/__init__.py",
         "ClipEm/App/Windows/Python/Lib/site-packages/pip/__init__.py",
         "ClipEm/App/Windows/bin/64bit/obs64.exe",
@@ -285,7 +299,7 @@ def test_windows_offline_bundle_is_a_ready_install(tmp_path):
     ):
         assert expected in names, expected
     assert not any(name.endswith(".pdb") for name in names)
-    assert "import site" in pth.splitlines() and "#import site" not in pth and "Lib" in pth.splitlines()
+    assert pth.splitlines() == [".", "Lib", "DLLs", "import site"]
     assert versions == {"obs": "32.2.2"}
 
 

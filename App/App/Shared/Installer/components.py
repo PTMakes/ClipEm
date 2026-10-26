@@ -614,30 +614,30 @@ Start-Process -FilePath (Join-Path $live "pythonw.exe") -ArgumentList $arguments
 
 
 def stage_windows_python(manifest, log):
-    """Prepares the manifest's Python completely in App/Windows/
-    .python.update-staging: Tcl/Tk, site-packages and pip, and every package
-    set the current Python has. Returns its folder."""
+    """Prepares the manifest's Python (python-build-standalone's, which has
+    pip and Tcl/Tk) completely in App/Windows/.python.update-staging: its
+    ._pth (windows_python.isolate) and every package set the current Python
+    has. Returns its folder."""
     windows_dir = os.path.join(APP_DIR, "Windows")
     staging = os.path.join(windows_dir, ".python" + STAGING_SUFFIX)
-    archive = os.path.join(windows_dir, "python-update.zip")
+    extract_dir = os.path.join(windows_dir, ".python-extract" + STAGING_SUFFIX)
+    archive = os.path.join(windows_dir, "python-update.tar.gz")
     package_sets = installed_package_sets("Windows")
-    _clean(staging)
-    os.makedirs(staging)
+    _clean(staging, extract_dir)
+    os.makedirs(extract_dir)
     try:
         entry = _download(manifest, "Windows", "python", archive, log)
         log("Extracting Python...")
-        with zipfile.ZipFile(archive) as zf:
-            zf.extractall(staging)
+        obs_install._extract(archive, extract_dir)
         os.remove(archive)
+        # The archive's single python\ folder becomes App\Windows\Python.
+        if sorted(os.listdir(extract_dir)) != ["python"]:
+            raise updater.UpdateError("the downloaded Python package has an unexpected layout")
+        os.replace(os.path.join(extract_dir, "python"), staging)
         new_python = os.path.join(staging, "python.exe")
-        if not os.path.exists(new_python):
-            raise updater.UpdateError("the downloaded Python package has no python.exe")
-        version_info = updater._parse_version(updater.artifact_version(entry))[:2]
-        windows_python.enable_site(staging, version_info)
-        if not windows_python.install_tcltk(staging):
-            raise updater.UpdateError("couldn't add Tcl/Tk to the new Python (see the log)")
-        windows_python.add_lib_to_pth(staging, version_info)
-        windows_python.bootstrap_pip(new_python, log)
+        if not os.path.exists(new_python) or not windows_python.tcltk_installed(staging):
+            raise updater.UpdateError("the downloaded Python package has no python.exe or Tcl/Tk")
+        windows_python.isolate(staging, updater._parse_version(updater.artifact_version(entry))[:2])
         for requirements in package_sets:
             _pip_install(new_python, requirements, log)
     except BaseException:
@@ -646,6 +646,7 @@ def stage_windows_python(manifest, log):
     finally:
         if os.path.exists(archive):
             os.remove(archive)
+        _clean(extract_dir)
     log(f"Python {updater.artifact_version(entry)} is ready - swapping it in once ClipEm exits.")
     return staging
 

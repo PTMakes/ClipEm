@@ -1,0 +1,11 @@
+{
+  "name": "clipem-bug-reports",
+  "private": true,
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "wrangler": "4.153.0"
+  }
+}

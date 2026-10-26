@@ -1,10 +1,15 @@
-# Exact pins so every install gets the versions a release was tested with.
+# Exact pins so every install gets the versions a release was tested with -
+# their dependencies too, so a release never picks up a new one unreviewed.
 # Each must have wheels for every interpreter ClipEm runs on: the bundled
-# Windows and portable Linux Pythons (both 3.12), older Windows installs'
-# 3.10, and macOS system Pythons (3.10 up to 3.14).
+# Windows and portable Linux Pythons (both 3.12), and macOS system Pythons
+# (3.11 up to 3.14).
 pystray==0.19.5; sys_platform != "linux"
+six==1.17.0; sys_platform != "linux"
+pyobjc-core==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Cocoa==12.2.2; sys_platform == "darwin"
+pyobjc-framework-Quartz==12.2.2; sys_platform == "darwin"
 dbus-next==0.2.3; sys_platform == "linux"
-Pillow==12.3.0
+Pillow==13.0.0
 websocket-client==1.9.2
 # Split audio tracks: which apps are playing sound (app_audio.py).
 pycaw==20260927; sys_platform == "win32"

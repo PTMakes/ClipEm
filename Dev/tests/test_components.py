@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import tarfile
+import types
 import zipfile
 
 import components
@@ -94,14 +95,15 @@ def test_shipped_requirements_resolve_for_every_platform():
     """Every marker the shipped requirements files use must be one
     components can evaluate, or package updates would fail."""
     tray, mic = components.TRAY_REQUIREMENTS, components.MIC_FILTER_REQUIREMENTS
-    windows = components.requirement_pins(tray, "Windows", "3.12.10")
-    linux = components.requirement_pins(tray, "Linux", "3.12.14")
+    windows = components.requirement_pins(tray, "Windows", "3.12.16")
+    linux = components.requirement_pins(tray, "Linux", "3.12.16")
     assert "pystray" in windows and "dbus-next" not in windows
     assert "dbus-next" in linux and "pystray" not in linux
+    assert not any(name.startswith("pyobjc") for name in set(windows) | set(linux))
     assert {"pillow", "websocket-client"} <= set(windows) & set(linux)
-    assert components.requirement_pins(mic, "Windows", "3.10.11")["numpy"].startswith("2.2.")
-    assert components.requirement_pins(mic, "Windows", "3.12.10")["numpy"] != (
-        components.requirement_pins(mic, "Windows", "3.10.11")["numpy"]
+    assert components.requirement_pins(mic, "Windows", "3.11.9")["numpy"].startswith("2.4.")
+    assert components.requirement_pins(mic, "Windows", "3.12.16")["numpy"] != (
+        components.requirement_pins(mic, "Windows", "3.11.9")["numpy"]
     )
 
 
@@ -423,6 +425,61 @@ def test_linux_python_update_rebuilds_the_tray_packages_for_it(app, monkeypatch)
     pin = (deps / components.TRAY_PYTHON_PIN_FILENAME).read_text()
     assert pin == os.path.realpath(linux / "python" / "bin" / "python3")
     assert sorted(p.name for p in linux.iterdir()) == ["python", "tray-deps"]
+
+
+PBS_WINDOWS = "cpython-3.12.16+20261026-x86_64-pc-windows-msvc-install_only.tar.gz"
+
+
+def test_windows_python_update_stages_an_isolated_pbs_python(app, monkeypatch):
+    """An embeddable 3.10 install's Python is replaced by PBS's: python\\'s
+    contents become the staged folder (no .pdb), it gets a ._pth, and every
+    package set the old one had is installed into it."""
+    app_dir, archives, _downloads = app
+    old = app_dir / "Windows" / "Python"
+    old.mkdir(parents=True)
+    (old / "python.exe").write_text("old python")
+    (old / "python310._pth").write_text("python310.zip\n.\nimport site\n")
+    _install_pins(str(old / "Lib" / "site-packages"), components.TRAY_REQUIREMENTS, "Windows", "3.10.11")
+    pip_calls = []
+    monkeypatch.setattr(components, "_pip_install", lambda python, requirements, log: pip_calls.append(
+        (python, os.path.basename(os.path.dirname(requirements)))))
+    archives[PBS_WINDOWS] = lambda dest: _tar(dest, {
+        "python/python.exe": b"new python", "python/python312.pdb": b"symbols",
+        "python/DLLs/_tkinter.pyd": b"tk", "python/tcl/tcl8.6/init.tcl": b"",
+    })
+    staging = components.stage_windows_python(_manifest(windows_python=f"https://x.invalid/{PBS_WINDOWS}"),
+                                               log=lambda message: None)
+
+    assert os.path.basename(staging) == ".python" + components.STAGING_SUFFIX
+    assert sorted(os.listdir(staging)) == ["DLLs", "python.exe", "python312._pth", "tcl"]
+    with open(os.path.join(staging, "python312._pth"), encoding="utf-8") as f:
+        assert f.read().splitlines() == [".", "Lib", "DLLs", "import site"]
+    assert pip_calls == [(os.path.join(staging, "python.exe"), "tray-widget")]
+    assert sorted(p.name for p in (app_dir / "Windows").iterdir()) == [".python.update-staging", "Python"]
+
+
+def test_windows_python_update_refuses_an_unexpected_layout(app, monkeypatch):
+    app_dir, archives, _downloads = app
+    (app_dir / "Windows").mkdir()
+    archives[PBS_WINDOWS] = lambda dest: _tar(dest, {"python.exe": b"not in python/"})
+    with pytest.raises(updater.UpdateError):
+        components.stage_windows_python(_manifest(windows_python=f"https://x.invalid/{PBS_WINDOWS}"),
+                                        log=lambda message: None)
+    assert list((app_dir / "Windows").iterdir()) == []
+
+
+def test_tar_extraction_without_filters_still_refuses_escapes(tmp_path, monkeypatch):
+    """Python 3.10.11 (old Windows installs) has no tarfile.data_filter."""
+    monkeypatch.setattr(obs_install, "tarfile", types.SimpleNamespace(open=tarfile.open))
+    good = tmp_path / "good.tar.gz"
+    _tar(good, {"python/python.exe": b"py", "python/python.pdb": b"symbols"})
+    obs_install._extract(str(good), str(tmp_path / "out"))
+    assert sorted(os.listdir(tmp_path / "out" / "python")) == ["python.exe"]
+    bad = tmp_path / "bad.tar.gz"
+    _tar(bad, {"../escape.txt": b"x"})
+    with pytest.raises(updater.UpdateError):
+        obs_install._extract(str(bad), str(tmp_path / "out2"))
+    assert not (tmp_path / "escape.txt").exists()
 
 
 def test_failed_linux_package_update_keeps_the_old_packages(app, monkeypatch):

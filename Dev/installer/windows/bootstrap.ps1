@@ -6,10 +6,10 @@ OBS configuration, wizard or shortcuts - App\Shared\Installer\setup.py,
 launched from the installer's Finish page, handles all of that).
 
 Trust chain (nothing unverified is ever extracted or run):
-  1. The embeddable Python's URL and sha256 are baked into the installer at
-     build time (bootstrap-pins.json, next to this script in $BundleDir),
-     as are Tcl/Tk (tcltk.zip, from a pinned tcltk.msi) and the VC++ runtime
-     OBS needs (vcruntime.zip, from a pinned VC_redist.x64.exe).
+  1. The Windows Python's URL and sha256 (python-build-standalone's build,
+     which has Tcl/Tk and pip) are baked into the installer at build time
+     (bootstrap-pins.json, next to this script in $BundleDir), as is the
+     VC++ runtime OBS needs (vcruntime.zip, from a pinned VC_redist.x64.exe).
   2. That Python runs ed25519_verify.py (also bundled) to check
      install-manifest.json's release signature against the bundled public
      key (signing_public_key.txt). Windows PowerShell 5.1 has no Ed25519.
@@ -282,18 +282,18 @@ try {
     $pins = Get-Content (Join-Path $BundleDir "bootstrap-pins.json") -Raw | ConvertFrom-Json
 
     Start-Step 0 40 "Fetching portable Python"
-    $pythonZip = Join-Path $TempDir "python.zip"
-    Get-VerifiedDownload $pins.python $pythonZip "Python"
-    # The embeddable zip's contents land directly in App\Windows\Python.
-    Start-Step 40 52 "Extracting Python"
-    Expand-ZipWithProgress $pythonZip $StagePythonDir "Python"
+    $pythonTar = Join-Path $TempDir "python.tar.gz"
+    Get-VerifiedDownload $pins.python $pythonTar "Python"
+    # The tar's python\ folder becomes App\Windows\Python, without its
+    # debug symbols. Windows' own tar.exe (bsdtar, Windows 10 1803 and later);
+    # setup.py adds the ._pth (windows_python.isolate).
+    Start-Step 40 58 "Extracting Python"
+    Write-Transient "Extracting Python"
+    & (Join-Path $env:SystemRoot "System32\tar.exe") -xzf $pythonTar -C $StagePythonDir --strip-components=1 --exclude "*.pdb"
+    if ($LASTEXITCODE -ne 0) { throw "Extracting Python failed (tar exit code $LASTEXITCODE)." }
+    Set-StepProgress 1
     $pythonExe = Join-Path $StagePythonDir "python.exe"
-
-    # Tcl/Tk + tkinter for the GUI setup wizard (the embeddable Python has
-    # none) - bundled in the installer, pre-extracted from python.org's
-    # pinned tcltk.msi by build.sh. setup.py adds Lib to the ._pth.
-    Start-Step 52 58 "Adding Tcl/Tk for the setup wizard"
-    Expand-ZipWithProgress (Join-Path $BundleDir "tcltk.zip") $StagePythonDir "Tcl/Tk"
+    if (-not (Test-Path -LiteralPath $pythonExe)) { throw "The Python download has no python.exe." }
 
     Start-Step 58 65 "Fetching and verifying the release manifest"
     $manifestPath = Join-Path $TempDir "install-manifest.json"

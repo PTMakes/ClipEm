@@ -111,10 +111,16 @@ def get_clipem_version():
 MACOS_OBS_VERSION = "32.2.2"
 WINDOWS_OBS_VERSION = "32.2.2"
 # Windows' Python is also the one OBS runs ClipEm's scripts with, and OBS
-# (up to at least 32.x - PY_MINOR_VERSION_MAX in obs-scripting-python-
+# (up to at least 33.x - PY_MINOR_VERSION_MAX in obs-scripting-python-
 # import.c) only loads Python 3.6-3.12, so this can't move past 3.12.
-# 3.12.10 is the last 3.12 release with Windows binaries.
-WINDOWS_PYTHON_VERSION = "3.12.10"
+# python.org's last 3.12 Windows build is 3.12.10, so it's
+# python-build-standalone's (the same as Linux's - see windows_python.py).
+WINDOWS_PYTHON_VERSION = "3.12.16"
+WINDOWS_PYTHON_PBS_TAG = "20261026"
+# Pillow and numpy need 3.11+. The bundled Pythons are newer - this is for
+# macOS system Pythons, and Windows installs still on an older bundled one
+# (ClipEm's updater replaces it).
+MIN_PYTHON = (3, 11)
 
 
 # ---------------------------------------------------------------------------
@@ -1831,10 +1837,9 @@ def ensure_windows_tkinter():
     embeddable distribution) so the GUI setup wizard can't run on it as-is.
     Pulls just those pieces out of python.org's tcltk.msi for the same
     version (windows_python.install_tcltk). Idempotent - skipped once the
-    pieces are in place, which they already are for installs made with
-    ClipEmSetupWindows.exe (it bundles them - Dev/installer/windows/
-    extract_tcltk.py), so this is the fallback for from-source checkouts
-    (Setup_Windows.bat) and older installs.
+    pieces are in place, which they always are in python-build-standalone's
+    Python (what current installs get), so this is only for installs made
+    with an older ClipEmSetupWindows.exe that bundled none.
 
     Every step is logged with a [tkinter] prefix; on failure, setup falls
     back to the text-based wizard.
@@ -1851,9 +1856,9 @@ def ensure_windows_tkinter():
             sys.path.append(lib_dir)
         return True
 
-    # The manifest's tcltk.msi is built for WINDOWS_PYTHON_VERSION - its
-    # _tkinter.pyd won't load into any other Python (e.g. an install whose
-    # Python hasn't been updated yet).
+    # Only an embeddable Python (from an older ClipEmSetupWindows.exe) gets
+    # here. The manifest's tcltk.msi is python.org's last 3.12 one - its
+    # _tkinter.pyd won't load into any other minor version.
     wanted = tuple(int(part) for part in WINDOWS_PYTHON_VERSION.split(".")[:2])
     if sys.version_info[:2] != wanted:
         _tcltk_log(
@@ -2287,7 +2292,17 @@ def main():
     if system not in ("Windows", "Darwin", "Linux"):
         sys.exit(f"Unsupported platform: {system}")
 
+    if sys.version_info[:2] < MIN_PYTHON:
+        wanted = ".".join(map(str, MIN_PYTHON))
+        if system == "Windows":
+            sys.exit(f"ClipEm needs Python {wanted} or newer, and this install's Python is "
+                     f"{platform.python_version()}. Start ClipEm and accept its update (it replaces its own "
+                     f"Python), or install the latest ClipEmSetupWindows.exe over it, then run Setup again.")
+        sys.exit(f"ClipEm needs Python {wanted} or newer - this is {platform.python_version()} "
+                 f"({sys.executable}). Install a newer Python and run Setup with it.")
+
     if system == "Windows":
+        windows_python.isolate(os.path.dirname(sys.executable))
         ensure_windows_pip()
 
     if try_launch_gui(system):

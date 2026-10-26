@@ -9,11 +9,10 @@
 #   build/ed25519_verify.py        - from App
 #   build/signing_public_key.txt   - from App (must be set - see
 #                                    Dev/generate-signing-key.sh)
-#   build/bootstrap-pins.json      - URL + pinned sha256 of the embeddable
-#                                    Windows Python (setup.py's
-#                                    WINDOWS_PYTHON_VERSION, upstream-pins.json)
-#   build/tcltk.zip                - Tcl/Tk + tkinter for that Python, from
-#                                    the pinned tcltk.msi (extract_tcltk.py)
+#   build/bootstrap-pins.json      - URL + pinned sha256 of the Windows
+#                                    Python (python-build-standalone's, with
+#                                    Tcl/Tk and pip - setup.py's
+#                                    WINDOWS_PYTHON_VERSION/_PBS_TAG, upstream-pins.json)
 #   build/vcruntime.zip            - the VC++ runtime DLLs OBS needs, from a
 #                                    pinned VC_redist.x64.exe (extract_vcruntime.py)
 #
@@ -60,8 +59,11 @@ cp "$INSTALLER_SRC/ed25519_verify.py" "$INSTALLER_SRC/signing_public_key.txt" "$
 python3 - "$INSTALLER_SRC/setup.py" "$DEV_DIR/release/upstream-pins.json" "$BUILD_DIR/bootstrap-pins.json" <<'PYEOF'
 import json, re, sys
 setup_py, pins_path, out_path = sys.argv[1:4]
-version = re.search(r'^WINDOWS_PYTHON_VERSION = "([^"]+)"', open(setup_py).read(), re.M).group(1)
-url = f"https://www.python.org/ftp/python/{version}/python-{version}-embed-amd64.zip"
+source = open(setup_py).read()
+version = re.search(r'^WINDOWS_PYTHON_VERSION = "([^"]+)"', source, re.M).group(1)
+tag = re.search(r'^WINDOWS_PYTHON_PBS_TAG = "([^"]+)"', source, re.M).group(1)
+url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{tag}/"
+       f"cpython-{version}+{tag}-x86_64-pc-windows-msvc-install_only.tar.gz")
 sha256 = json.load(open(pins_path)).get(url)
 if not sha256:
     sys.exit(f"{url} isn't pinned in {pins_path} - run generate_install_manifest.py (release.sh) first.")
@@ -86,13 +88,6 @@ open(out_path, "wb").write(data)
 print(f"Downloaded {url} (sha256 OK)")
 PYEOF
 }
-
-# Tcl/Tk for the GUI setup wizard, pre-extracted from python.org's
-# tcltk.msi (same version as the embeddable Python) so the installer
-# needs neither a download nor msiexec for it - see extract_tcltk.py.
-WINDOWS_PYTHON_VERSION="$(sed -n 's/^WINDOWS_PYTHON_VERSION = "\([^"]*\)"/\1/p' "$INSTALLER_SRC/setup.py")"
-fetch_pinned "https://www.python.org/ftp/python/$WINDOWS_PYTHON_VERSION/amd64/tcltk.msi" "$BUILD_DIR/tcltk.msi"
-python3 "$SCRIPT_DIR/extract_tcltk.py" "$BUILD_DIR/tcltk.msi" "$BUILD_DIR/tcltk.zip"
 
 # The Visual C++ runtime OBS needs (MSVCP140.dll, VCRUNTIME140_1.dll...),
 # deployed app-local next to obs64.exe - see extract_vcruntime.py. A fixed

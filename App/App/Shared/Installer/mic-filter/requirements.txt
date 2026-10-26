@@ -1,6 +1,8 @@
-# Exact pins - see tray-widget/requirements.txt. numpy has no single
-# release with wheels for both Python 3.10 (older Windows installs, macOS
-# system Pythons) and 3.14, hence the split.
+# Exact pins, dependencies included - see tray-widget/requirements.txt.
+# numpy has no single release with wheels for both Python 3.11 (macOS system
+# Pythons) and 3.14, hence the split.
 sounddevice==0.5.6
-numpy==2.2.6; python_version < "3.12"
+cffi==2.1.1
+pycparser==3.12
+numpy==2.4.6; python_version < "3.12"
 numpy==2.5.3; python_version >= "3.12"

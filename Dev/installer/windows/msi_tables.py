@@ -1,7 +1,6 @@
 """Reads an MSI's database tables and unpacks its files, on Linux, with 7z
-(p7zip) - enough of the format for extract_tcltk.py and
-extract_vcruntime.py, which bundle files from python.org / Microsoft MSIs
-into the Windows installer at build time.
+(p7zip) - enough of the format for extract_vcruntime.py, which bundles
+files from Microsoft's MSIs into the Windows installer at build time.
 
 An MSI is an OLE compound file: 7z pulls out its database streams (and any
 embedded cab), and the File/Component/Directory tables say where each cab

@@ -120,6 +120,7 @@ read_setup_constant() {
 }
 WINDOWS_OBS_VERSION="$(read_setup_constant WINDOWS_OBS_VERSION)"
 WINDOWS_PYTHON_VERSION="$(read_setup_constant WINDOWS_PYTHON_VERSION)"
+WINDOWS_PYTHON_PBS_TAG="$(read_setup_constant WINDOWS_PYTHON_PBS_TAG)"
 MACOS_OBS_VERSION="$(read_setup_constant MACOS_OBS_VERSION)"
 # Electron for the clip editor's window - Installer/editor_window.py is its source of truth.
 ELECTRON_VERSION="$(grep -oP '(?<=^ELECTRON_VERSION = ")[^"]+' "$APP_DIR/App/Shared/Installer/editor_window.py" || true)"
@@ -137,11 +138,10 @@ LINUX_OBS_VERSION="$(grep -oP '(?<=^set\(PACKAGE_VERSION ")[0-9.]+(?="\))' "$LIB
 # The Linux portable Python (python-build-standalone, Xft-repacked by
 # build/repack-linux-python-xft.sh). Bump both together when moving to a new PBS
 # release; the repack script pins it from PBS's published SHA256SUMS. Kept
-# on the same minor version as WINDOWS_PYTHON_VERSION (checked below) - the
-# patch can be newer, since python.org stopped shipping Windows builds of
-# 3.12 while PBS keeps building its security releases.
-LINUX_PYTHON_VERSION="3.12.14"
-LINUX_PYTHON_PBS_TAG="20260924"
+# the same as setup.py's WINDOWS_PYTHON_VERSION + WINDOWS_PYTHON_PBS_TAG
+# (checked below) - both platforms run PBS's build.
+LINUX_PYTHON_VERSION="3.12.16"
+LINUX_PYTHON_PBS_TAG="20261026"
 
 # --- 1. Preflight ----------------------------------------------------------
 step "Preflight"
@@ -150,20 +150,21 @@ for tool in "${required_tools[@]}"; do
   command -v "$tool" >/dev/null 2>&1 || die "$tool is required (see Dev/README.md)"
 done
 python3 "$SCRIPT_DIR/release/release_common.py" check-key
-[[ "${LINUX_PYTHON_VERSION%.*}" == "${WINDOWS_PYTHON_VERSION%.*}" ]] \
-  || die "Linux Python $LINUX_PYTHON_VERSION and Windows Python $WINDOWS_PYTHON_VERSION should be the same minor version"
+[[ "$LINUX_PYTHON_VERSION+$LINUX_PYTHON_PBS_TAG" == "$WINDOWS_PYTHON_VERSION+$WINDOWS_PYTHON_PBS_TAG" ]] \
+  || die "Linux Python $LINUX_PYTHON_VERSION+$LINUX_PYTHON_PBS_TAG and Windows Python $WINDOWS_PYTHON_VERSION+$WINDOWS_PYTHON_PBS_TAG should be the same build"
 python3 -m pytest --version >/dev/null 2>&1 \
-  || die "pytest is required: python3 -m pip install 'pytest==8.*' 'ruff==0.16.*' 'Pillow==12.3.0'"
+  || die "pytest is required: python3 -m pip install 'pytest==9.1.*' 'ruff==0.16.*' 'Pillow==13.0.0'"
 if command -v ruff >/dev/null 2>&1; then RUFF=(ruff); else RUFF=(python3 -m ruff); fi
 "${RUFF[@]}" --version >/dev/null 2>&1 || die "ruff is required: python3 -m pip install 'ruff==0.16.*'"
 
-# Setup_Windows.bat (the from-checkout path) hardcodes the embeddable
+# Setup_Windows.bat (the from-checkout path) hardcodes the Windows
 # Python's URL + sha256 - they must match setup.py and the pinned hash.
 SETUP_BAT="$APP_DIR/App/Shared/Installer/Scripts/Setup_Windows.bat"
 BAT_SHA256="$(grep -oP '(?<=^set "PYTHON_SHA256=)[0-9a-f]{64}' "$SETUP_BAT" || true)"
-PINNED_PY_SHA256="$(jq -r --arg url "https://www.python.org/ftp/python/$WINDOWS_PYTHON_VERSION/python-$WINDOWS_PYTHON_VERSION-embed-amd64.zip" '.[$url] // empty' "$SCRIPT_DIR/release/upstream-pins.json")"
-grep -q "python-$WINDOWS_PYTHON_VERSION-embed-amd64.zip" "$SETUP_BAT" \
-  || die "Setup_Windows.bat doesn't fetch Python $WINDOWS_PYTHON_VERSION (setup.py's WINDOWS_PYTHON_VERSION)"
+WINDOWS_PYTHON_ASSET="cpython-$WINDOWS_PYTHON_VERSION+$WINDOWS_PYTHON_PBS_TAG-x86_64-pc-windows-msvc-install_only.tar.gz"
+PINNED_PY_SHA256="$(jq -r --arg url "https://github.com/astral-sh/python-build-standalone/releases/download/$WINDOWS_PYTHON_PBS_TAG/$WINDOWS_PYTHON_ASSET" '.[$url] // empty' "$SCRIPT_DIR/release/upstream-pins.json")"
+grep -qF "/$WINDOWS_PYTHON_PBS_TAG/$WINDOWS_PYTHON_ASSET" "$SETUP_BAT" \
+  || die "Setup_Windows.bat doesn't fetch $WINDOWS_PYTHON_ASSET (setup.py's WINDOWS_PYTHON_VERSION/_PBS_TAG)"
 [[ -z "$PINNED_PY_SHA256" || "$BAT_SHA256" == "$PINNED_PY_SHA256" ]] \
   || die "Setup_Windows.bat's PYTHON_SHA256 ($BAT_SHA256) doesn't match upstream-pins.json ($PINNED_PY_SHA256)"
 
@@ -345,6 +346,7 @@ python3 "$SCRIPT_DIR/release/generate_install_manifest.py" \
   --ffmpeg-source "$FFMPEG_SOURCE" \
   --windows-obs-version "$WINDOWS_OBS_VERSION" \
   --windows-python-version "$WINDOWS_PYTHON_VERSION" \
+  --windows-python-pbs-tag "$WINDOWS_PYTHON_PBS_TAG" \
   --windows-pip-version "$WINDOWS_PIP_VERSION" \
   --macos-obs-version "$MACOS_OBS_VERSION" \
   --electron-version "$ELECTRON_VERSION"
@@ -356,7 +358,7 @@ python3 "$SCRIPT_DIR/release/generate_checksums.py" "$APP_DIR/App/Shared" --skip
   --manifest-out "$RELEASE_DIR/clipem-latest.json"
 
 step "Windows installer"
-# Built after the manifest step so the embeddable Python it bundles a pin
+# Built after the manifest step so the Windows Python it bundles a pin
 # for is guaranteed to be in upstream-pins.json.
 "$SCRIPT_DIR/installer/windows/build.sh" "$new_version"
 cp "$SCRIPT_DIR/installer/windows/dist/ClipEmSetupWindows.exe" "$RELEASE_DIR/"
@@ -388,7 +390,7 @@ WINDOWS_PORTABLE_ZIP="$RELEASE_DIR/clipem-windows-portable-$new_version.zip"
 WINDOWS_INSTALLER_BUILD="$SCRIPT_DIR/installer/windows/build"
 python3 "$SCRIPT_DIR/release/release_common.py" windows-offline-bundle \
   --manifest "$RELEASE_DIR/install-manifest.json" --shared-zip "$SHARED_ZIP" --ffmpeg-zip "$WINDOWS_FFMPEG" \
-  --tcltk-zip "$WINDOWS_INSTALLER_BUILD/tcltk.zip" --vcruntime-zip "$WINDOWS_INSTALLER_BUILD/vcruntime.zip" \
+  --vcruntime-zip "$WINDOWS_INSTALLER_BUILD/vcruntime.zip" \
   --setup-script "$APP_DIR/App/Shared/Installer/Scripts/Setup_Windows.bat" \
   --wheelhouse "$WINDOWS_WHEELHOUSE" --stage-dir "$RELEASE_DIR/stage-windows" --out "$WINDOWS_PORTABLE_ZIP"
 rm -rf "$RELEASE_DIR/stage-windows"

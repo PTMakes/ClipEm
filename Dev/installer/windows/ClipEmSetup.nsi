@@ -106,11 +106,11 @@ Var StatusOffset
 Section "Install"
     ; Everything is downloaded, so NSIS can't size it itself (it showed
     ; "0.0 KB required"). Unpacked sizes as of OBS 32.2.2 / ffmpeg 9.0.2:
-    ; OBS ~390 MB (its ~76 MB of .pdb debug symbols aren't extracted), ffmpeg ~10 MB, embeddable Python ~17 MB, Shared <1 MB,
-    ; Tcl/Tk (bundled) ~10 MB, plus headroom for the pip packages setup.py
-    ; adds later.
+    ; OBS ~390 MB (its ~76 MB of .pdb debug symbols aren't extracted), ffmpeg ~10 MB,
+    ; Python with Tcl/Tk ~63 MB (without its ~87 MB of .pdb), Shared <1 MB,
+    ; plus headroom for the pip packages setup.py adds later.
     ; Revisit when bumping OBS.
-    AddSize 471040 ; KB - shown as 460 MB (NSIS counts 1 MB = 1024 KB)
+    AddSize 507904 ; KB - shown as 496 MB (NSIS counts 1 MB = 1024 KB)
     Call DoInstall
 SectionEnd
 
@@ -124,7 +124,6 @@ Function DoInstall
     File "/oname=$PLUGINSDIR\ed25519_verify.py" "build\ed25519_verify.py"
     File "/oname=$PLUGINSDIR\signing_public_key.txt" "build\signing_public_key.txt"
     File "/oname=$PLUGINSDIR\bootstrap-pins.json" "build\bootstrap-pins.json"
-    File "/oname=$PLUGINSDIR\tcltk.zip" "build\tcltk.zip"
     File "/oname=$PLUGINSDIR\vcruntime.zip" "build\vcruntime.zip"
 
     FindWindow $0 "#32770" "" $HWNDPARENT

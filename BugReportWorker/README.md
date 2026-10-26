@@ -9,6 +9,8 @@ Each IP may send 2 reports a minute, each zip may be up to 20 MB, and descriptio
 
 ## One-time setup
 
+Run `npm ci` first: `npx wrangler` then uses the Wrangler version pinned in `package-lock.json`.
+
 1. Create the bucket with `npx wrangler r2 bucket create clipem-bug-reports`. Then add a lifecycle rule that deletes objects after 90 days: `npx wrangler r2 bucket lifecycle add clipem-bug-reports expire-reports reports/ --expire-days 90`.
 2. Create the `bug-report` and `from-app` labels on the GitHub repo.
 3. Create a fine-grained GitHub token. Limit it to the `PTMakes/ClipEm` repository, with **Issues: Read and write** as its only permission. Then run `npx wrangler secret put GITHUB_TOKEN`.

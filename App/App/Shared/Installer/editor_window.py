@@ -24,7 +24,7 @@ import zipfile
 
 from clipem_common import APP_DIR
 
-ELECTRON_VERSION = "44.5.1"
+ELECTRON_VERSION = "44.9.3"
 DIR_NAME = "editor-window"
 EXE_NAMES = {"Linux": "clipem-editor", "Windows": "ClipEm Editor.exe"}
 _ORIGINAL_EXE = {"Linux": "electron", "Windows": "electron.exe"}

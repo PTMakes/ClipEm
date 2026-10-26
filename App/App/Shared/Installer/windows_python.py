@@ -1,8 +1,12 @@
 """
-ClipEm's bundled Windows Python (App/Windows/Python - python.org's
-embeddable distribution) and what ClipEm adds to it: site-packages + pip
-(for the tray widget's packages) and Tcl/Tk (tkinter, for the setup wizard
-and the tray's dialogs).
+ClipEm's bundled Windows Python (App/Windows/Python). Current installs get
+python-build-standalone's build (the same as Linux's - python.org stopped
+publishing Windows builds of 3.12 after 3.12.10, and OBS can't load 3.13),
+which already has pip and Tcl/Tk; ClipEm adds a ._pth file so it runs
+isolated, as the embeddable one does (isolate). Installs made by an older
+ClipEmSetupWindows.exe have python.org's embeddable distribution, which
+needs site-packages + pip (for the tray widget's packages) and Tcl/Tk
+(tkinter, for the setup wizard and the tray's dialogs) added.
 
 Used by setup.py for the interpreter it runs on, and by components.py to
 fully prepare a replacement Python in a staging folder before it's swapped
@@ -39,6 +43,21 @@ def own_pth_path(python_root, version_info=None):
     version_info = version_info or sys.version_info
     path = os.path.join(python_root, f"python{version_info[0]}{version_info[1]}._pth")
     return path if os.path.exists(path) else None
+
+
+def isolate(python_root, version_info=None):
+    """Gives a python-build-standalone Python a ._pth file like the
+    embeddable one's: isolated mode, so the user's own PYTHONPATH can't
+    shadow ClipEm's pinned packages, and the same sys.path for OBS's
+    scripts. (As with the embeddable one, a ._pth doesn't turn off user
+    site-packages.) Takes effect from the next start. Leaves an
+    embeddable Python (which has one) alone."""
+    version_info = version_info or sys.version_info
+    if own_pth_path(python_root, version_info) or not os.path.isdir(os.path.join(python_root, "DLLs")):
+        return
+    path = os.path.join(python_root, f"python{version_info[0]}{version_info[1]}._pth")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join([".", "Lib", "DLLs", "import site"]) + "\n")
 
 
 def _edit_pth(python_root, version_info, edit):
@@ -91,8 +110,10 @@ def bootstrap_pip(python_exe, log=print):
 
 
 def tcltk_installed(python_root):
-    return os.path.exists(os.path.join(python_root, TCLTK_TCL_MARKER)) and os.path.exists(
-        os.path.join(python_root, "_tkinter.pyd")
+    """_tkinter.pyd is beside python.exe in an embeddable Python ClipEm
+    added it to, in DLLs\\ in a python-build-standalone one."""
+    return os.path.exists(os.path.join(python_root, TCLTK_TCL_MARKER)) and any(
+        os.path.exists(os.path.join(python_root, folder, "_tkinter.pyd")) for folder in ("", "DLLs")
     )
 
 

@@ -178,15 +178,17 @@ working.
 | What | Source of truth |
 | --- | --- |
 | ClipEm version | the bump applied to the live `install-manifest.json` version |
-| Windows/macOS OBS, Windows Python | `WINDOWS_OBS_VERSION`, `MACOS_OBS_VERSION` and `WINDOWS_PYTHON_VERSION` in `setup.py` |
+| Windows/macOS OBS, Windows Python | `WINDOWS_OBS_VERSION`, `MACOS_OBS_VERSION`, `WINDOWS_PYTHON_VERSION` and `WINDOWS_PYTHON_PBS_TAG` in `setup.py` (and `Setup_Windows.bat`) |
 | pip (Windows bootstrap) | `WINDOWS_PIP_VERSION` in `release.sh` |
 | Linux OBS | the build in `Dev/obs-install` (`libobsConfigVersion.cmake`) |
 | Linux Python | `LINUX_PYTHON_VERSION` and `LINUX_PYTHON_PBS_TAG` in `release.sh` |
 
-Both Pythons stay on the same minor version (release.sh checks). Windows'
-bundled Python is also the one OBS runs ClipEm's scripts with, and OBS only
-loads Python up to 3.12, so that's the ceiling: Windows is on 3.12.10 (the
-last 3.12 with Windows binaries), Linux on the newest 3.12 PBS build.
+Both platforms run the same python-build-standalone build (release.sh
+checks). Windows' bundled Python is also the one OBS runs ClipEm's scripts
+with, and OBS only loads Python up to 3.12, so that's the ceiling - and
+python.org's last 3.12 Windows build is 3.12.10, so Windows takes PBS's too
+(`windows_python.py`). ClipEm needs Python 3.11+ (Pillow, numpy) - for
+macOS's system Python; older Windows installs get their Python replaced.
 
 ### Upstream pins (`upstream-pins.json`)
 

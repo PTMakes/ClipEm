@@ -9,8 +9,9 @@ Artifact hosting:
   - Our own builds (shared zip, from-source Linux OBS, Xft-repacked Linux
     Python, ffmpeg for Linux/Windows) are assets of the GitHub release (tag v<version>, or
     "dev" for a dev build - release.sh uploads them); their sha256 comes straight from the local files.
-  - Upstream artifacts (OBS for Windows/macOS, python.org's Windows Python
-    and installer, the pip wheel, Electron for the clip editor's window) stay at their own URLs. Their sha256 is
+  - Upstream artifacts (OBS for Windows/macOS, python-build-standalone's
+    Windows Python, python.org's Tcl/Tk and installer, the pip wheel, Electron
+    for the clip editor's window) stay at their own URLs. Their sha256 is
     pinned in upstream-pins.json the first time it's seen - taken from the
     digest the publisher itself lists (GitHub release assets, PyPI) where
     one exists, or hashed from a download (python.org) otherwise - and
@@ -37,6 +38,11 @@ from release_common import (
 PINS_PATH = SCRIPT_DIR / "upstream-pins.json"
 OBS_REPO = "obsproject/obs-studio"
 ELECTRON_REPO = "electron/electron"
+PBS_REPO = "astral-sh/python-build-standalone"
+# python.org's last 3.12 Windows build: the embeddable Python older
+# ClipEmSetupWindows.exe installers put in place. Setup still adds Tcl/Tk
+# and pip to one from these until ClipEm's updater replaces it.
+LEGACY_WINDOWS_PYTHON_VERSION = "3.12.10"
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -57,6 +63,8 @@ def parse_args(argv=None) -> argparse.Namespace:
     )
     parser.add_argument("--windows-obs-version", required=True)
     parser.add_argument("--windows-python-version", required=True)
+    parser.add_argument("--windows-python-pbs-tag", required=True,
+                        help="python-build-standalone release of --windows-python-version (setup.py's WINDOWS_PYTHON_PBS_TAG)")
     parser.add_argument("--windows-pip-version", required=True)
     parser.add_argument("--macos-obs-version", required=True)
     parser.add_argument("--electron-version", required=True, help="Installer/editor_window.py's ELECTRON_VERSION")
@@ -127,6 +135,10 @@ def pypi_wheel(pins: dict, package: str, version: str) -> dict:
     return pinned_upstream(pins, wheel["url"], wheel["digests"]["sha256"])
 
 
+def windows_python_asset_name(version: str, pbs_tag: str) -> str:
+    return f"cpython-{version}+{pbs_tag}-x86_64-pc-windows-msvc-install_only.tar.gz"
+
+
 def own_asset(args, path_arg: str) -> dict:
     path = Path(path_arg).resolve()
     if not path.is_file():
@@ -151,20 +163,23 @@ def main(argv=None) -> None:
 
     win_obs = args.windows_obs_version
     win_py = args.windows_python_version
+    legacy_py = LEGACY_WINDOWS_PYTHON_VERSION
     mac_obs = args.macos_obs_version
     electron = args.electron_version.removeprefix("v")
     windows = {
         "obs": github_obs_asset(pins, win_obs, windows_obs_asset_name(win_obs)),
-        "python": pinned_upstream(
-            pins, f"https://www.python.org/ftp/python/{win_py}/python-{win_py}-embed-amd64.zip"
+        "python": github_asset(
+            pins, PBS_REPO, args.windows_python_pbs_tag,
+            windows_python_asset_name(win_py, args.windows_python_pbs_tag),
         ),
-        # Superseded by tcltk_msi (setup.py's ensure_windows_tkinter) - kept
-        # for installs whose setup.py predates it.
+        # For embeddable Pythons (LEGACY_WINDOWS_PYTHON_VERSION).
+        # python_installer is superseded by tcltk_msi (setup.py's
+        # ensure_windows_tkinter) - kept for installs whose setup.py predates it.
         "python_installer": pinned_upstream(
-            pins, f"https://www.python.org/ftp/python/{win_py}/python-{win_py}-amd64.exe"
+            pins, f"https://www.python.org/ftp/python/{legacy_py}/python-{legacy_py}-amd64.exe"
         ),
         "tcltk_msi": pinned_upstream(
-            pins, f"https://www.python.org/ftp/python/{win_py}/amd64/tcltk.msi"
+            pins, f"https://www.python.org/ftp/python/{legacy_py}/amd64/tcltk.msi"
         ),
         "pip_wheel": pypi_wheel(pins, "pip", args.windows_pip_version),
         "ffmpeg": windows_ffmpeg,

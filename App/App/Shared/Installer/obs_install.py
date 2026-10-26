@@ -124,7 +124,19 @@ def _extract(archive, dest):
             zf.extractall(dest, members=members)
     else:
         with tarfile.open(archive) as tf:
-            tf.extractall(dest, filter="data")
+            members = [m for m in tf.getmembers() if not m.name.lower().endswith(DEBUG_FILE_SUFFIXES)]
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(dest, members=members, filter="data")
+                return
+            # Python 3.10.11 (the bundled Python of the oldest Windows
+            # installs, run once to update it) has no extraction filters:
+            # the same checks for what python-build-standalone's tars hold.
+            root = os.path.realpath(dest)
+            for member in members:
+                target = os.path.realpath(os.path.join(dest, member.name))
+                if not (member.isfile() or member.isdir()) or not target.startswith(root + os.sep):
+                    raise updater.UpdateError(f"refusing to extract {member.name} from {os.path.basename(archive)}")
+            tf.extractall(dest, members=members)
 
 
 def _merge_move(src_dir, dest_dir, last=None):
