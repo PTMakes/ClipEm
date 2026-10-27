@@ -38,7 +38,9 @@ if __name__ == "__main__" and {"-h", "--help"} & set(sys.argv[1:]):
     sys.exit(0)
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(1, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Scripts"))
 import autostart  # noqa: E402
+import clip_post  # noqa: E402 - Scripts/clip_post.py
 import editor_window  # noqa: E402
 import encoders  # noqa: E402
 import mic_filter  # noqa: E402
@@ -962,6 +964,8 @@ def save_audio_devices(output_device_id, input_device_id):
 
 
 def load_replay_buffer_seconds():
+    """The clip length: the replay buffer's (RecRBTime), less the post-clip
+    seconds it's kept longer for (obs_config.save_post_clip)."""
     defaults = 60
     if not os.path.exists(BASIC_INI):
         return defaults
@@ -974,18 +978,21 @@ def load_replay_buffer_seconds():
         key, sep, value = line.partition("=")
         if sep and key.strip() == "RecRBTime":
             try:
-                return int(value.strip())
+                seconds = int(value.strip())
             except ValueError:
                 return defaults
+            return max(REPLAY_BUFFER_MIN_SECONDS, seconds - clip_post.extra_seconds(obs_config.load_post_clip()))
     return defaults
 
 
 def save_replay_buffer_seconds(seconds):
+    """seconds: the clip length - the buffer is kept the post-clip seconds longer."""
     if not os.path.exists(BASIC_INI):
         print(f"Config file not found: {BASIC_INI}", file=sys.stderr)
         return
-    update_ini_section(BASIC_INI, "AdvOut", {"RecRBTime": int(seconds)})
-    print(f"Replay buffer length set to {int(seconds)}s.")
+    extra = clip_post.extra_seconds(obs_config.load_post_clip())
+    update_ini_section(BASIC_INI, "AdvOut", {"RecRBTime": int(seconds) + extra})
+    print(f"Replay buffer length set to {int(seconds)}s" + (f" (+{extra}s post-clip)." if extra else "."))
     _fit_replay_buffer_size()
 
 

@@ -282,6 +282,12 @@ step "Shared resources"
 # Shared/Tools is git-ignored, so the git-listed staging below skips it: it is added explicitly.
 APP_CAPTURE_EXE="$APP_DIR/App/Shared/Tools/clipem-app-capture.exe"
 [[ -s "$APP_CAPTURE_EXE" ]] || die "Shared/Tools/clipem-app-capture.exe is missing - refusing to release without the Windows app-capture helper."
+# ClipEm's OBS plugin too (see build/build-obs-plugin.sh; Linux builds against Dev/obs-install).
+"$SCRIPT_DIR/build/build-obs-plugin.sh"
+OBS_PLUGIN_FILES=(Shared/OBS-Plugin/linux/clipem-obs.so Shared/OBS-Plugin/windows/clipem-obs.dll)
+for f in "${OBS_PLUGIN_FILES[@]}"; do
+  [[ -s "$APP_DIR/App/$f" ]] || die "$f is missing - refusing to release without ClipEm's OBS plugin."
+done
 # A dev build doesn't change the source tree: VERSION and checksums.json
 # are put back once the shared zip is built.
 DEV_RESTORE_DIR="$RELEASE_DIR/restore"
@@ -298,7 +304,7 @@ STAGE_DIR="$RELEASE_DIR/stage"
 mkdir -p "$STAGE_DIR"
 git -C "$APP_DIR" ls-files -z --cached --others --exclude-standard -- App/Shared \
   | (cd "$APP_DIR/App" && sed -z 's#^App/##' | xargs -0 cp --parents -t "$STAGE_DIR")
-(cd "$APP_DIR/App" && cp --parents Shared/Tools/clipem-app-capture.exe "$STAGE_DIR")
+(cd "$APP_DIR/App" && cp --parents Shared/Tools/clipem-app-capture.exe "${OBS_PLUGIN_FILES[@]}" "$STAGE_DIR")
 SHARED_ZIP="$RELEASE_DIR/clipem-shared-$new_version.zip"
 python3 "$SCRIPT_DIR/release/release_common.py" zip-dir "$STAGE_DIR" Shared "$SHARED_ZIP"
 rm -rf "$STAGE_DIR"

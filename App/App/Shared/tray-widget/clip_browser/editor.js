@@ -100,6 +100,20 @@ function duration() {
   return (ed.info && ed.info.duration) || 0;
 }
 
+// A post-clip save's clip hotkey press (Scripts/clip_post.py), or null: the
+// clip ends there unless the seconds after it are added.
+function mark() {
+  const at = ed.info && ed.info.mark;
+  return at && at > 0 && at < duration() ? at : null;
+}
+
+// Where the clip ends before any edit: the press, or the end.
+function defaultEnd() {
+  return mark() ?? duration();
+}
+
+const MARK_SNAP_PX = 8;
+
 // A track recorded in stereo (left and right shown, and editable, apart).
 function isStereo(index) {
   const info = ed.info && ed.info.tracks.find((t) => t.index === index);
@@ -144,7 +158,7 @@ function keepRanges() {
 
 function loadKeep(keep) {
   if (!keep.length) {
-    ed.trim = [0, duration()];
+    ed.trim = [0, defaultEnd()];
     ed.cuts = [];
     return;
   }
@@ -406,12 +420,13 @@ function isUnedited(index) {
   const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
-  return start <= 0.001 && end >= duration() - 0.001 && !ed.cuts.length && !ed.crop && ed.tracks.every(plain);
+  return start <= 0.001 && Math.abs(end - defaultEnd()) <= 0.001 && !ed.cuts.length && !ed.crop &&
+    ed.tracks.every(plain);
 }
 
 function resetEdits() {
   change(() => {
-    ed.trim = [0, duration()];
+    ed.trim = [0, defaultEnd()];
     ed.cuts = [];
     ed.crop = null;
     ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, level: false,
@@ -571,10 +586,18 @@ function videoRow() {
   const row = el("div", "row video-row");
   const head = el("div", "row-head");
   head.append(el("strong", null, "Video"), el("span", "muted small", "Trim & cut"));
+  const at = mark();
+  if (at !== null) head.append(extraToggle(at));
   const lane = el("div", "lane video-lane");
   rulerTicks(lane);
   addRemoved(lane, true);
   addSelection(lane, null);
+  if (at !== null) {
+    const line = el("div", "hotkey-mark");
+    line.style.left = pct(at);
+    line.title = "Clip hotkey pressed - the seconds after it are the post-clip ones";
+    lane.append(line);
+  }
   for (const which of [0, 1]) {
     const handle = el("div", `handle ${which ? "end" : "start"}`);
     handle.title = which ? "Drag to trim the end (O)" : "Drag to trim the start (I)";
@@ -913,6 +936,22 @@ function laneDown(e, track) {
   });
 }
 
+// "Include extra Ns": the clip's end at the end of the post-clip seconds, or
+// back on the press.
+function extraToggle(at) {
+  const included = ed.trim[1] > at + 0.001;
+  const button = el("button", "toggle", `Include extra ${Math.round(duration() - at)}s`);
+  button.setAttribute("aria-pressed", String(included));
+  button.title = included ? "End the clip at the hotkey press" : "Keep the seconds recorded after the hotkey press";
+  button.addEventListener("click", () => change(() => {
+    ed.trim[1] = included ? Math.max(at, ed.trim[0] + MIN_SPAN) : duration();
+    ed.cuts = ed.cuts.filter(([start]) => start < ed.trim[1]);
+  }));
+  const line = el("div", "title-line");
+  line.append(button);
+  return line;
+}
+
 function dragTrim(e, which) {
   if (e.button !== 0) return;
   e.preventDefault();
@@ -921,7 +960,11 @@ function dragTrim(e, which) {
   trackPointer(e, (ev) => {
     const t = laneTime(ev.clientX);
     if (which === 0) ed.trim[0] = clamp(t, 0, ed.trim[1] - MIN_SPAN);
-    else ed.trim[1] = clamp(t, ed.trim[0] + MIN_SPAN, duration());
+    else {
+      const at = mark();
+      const snapped = at !== null && Math.abs(t - at) <= MARK_SNAP_PX * secondsPerPixel() ? at : t;
+      ed.trim[1] = clamp(snapped, ed.trim[0] + MIN_SPAN, duration());
+    }
     seek(ed.trim[which]);
     renderTimeline();
   }, endEdit);

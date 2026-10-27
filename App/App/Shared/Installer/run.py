@@ -67,6 +67,8 @@ from clipem_common import (  # noqa: E402
 )
 
 TRAY_WIDGET_SCRIPT = os.path.join(SHARED_DIR, "tray-widget", "tray_widget.py")
+# ClipEm's OBS plugin, per platform (Dev/build/build-obs-plugin.sh) - see _obs_env.
+OBS_PLUGIN_DIR = os.path.join(SHARED_DIR, "OBS-Plugin")
 
 # Set for the tray widget when OBS was started without --startreplaybuffer
 # because the clips folder was missing - see _obs_launch_flags.
@@ -304,11 +306,29 @@ def _obs_launch_flags():
     # A restart that closed the clip editor: the new tray widget opens it again.
     tray_env = {OPEN_EDITOR_ENV: "1"} if REOPEN_EDITOR_FLAG in sys.argv[1:] else {}
     clips_dir = obs_config.load_clip_folder()
+    # No "missing files" dialog at startup: OBS is hidden, nobody would see it.
+    flags = ["--minimize-to-tray", "--multi", "--disable-missing-files-check"]
     if os.path.isdir(clips_dir):
-        return ["--startreplaybuffer", "--minimize-to-tray", "--multi"], tray_env
+        return ["--startreplaybuffer", *flags], tray_env
     log.warning(f"Clips folder {clips_dir} isn't there - starting OBS without the replay buffer; "
                 "the tray widget starts it once the folder is.")
-    return ["--minimize-to-tray", "--multi"], {**tray_env, REPLAY_BUFFER_DEFERRED_ENV: "1"}
+    return flags, {**tray_env, REPLAY_BUFFER_DEFERRED_ENV: "1"}
+
+
+def _obs_env(platform_name):
+    """OBS's environment, with ClipEm's OBS plugin (Dev/obs-plugin/) loaded
+    from Shared/OBS-Plugin/<platform_name>: it keeps OBS hidden and passes
+    everything OBS would show on to the tray (tray-widget/obs_notices.py).
+    In portable mode these variables are the only extra plugin folder OBS
+    reads. Without the plugin OBS still runs, just with its own tray icon."""
+    env = dict(os.environ)
+    plugin_dir = os.path.join(OBS_PLUGIN_DIR, platform_name)
+    if os.path.isdir(plugin_dir):
+        env["OBS_PLUGINS_PATH"] = plugin_dir
+        env["OBS_PLUGINS_DATA_PATH"] = plugin_dir  # the plugin has no data
+    else:
+        log.warning(f"ClipEm's OBS plugin isn't at {plugin_dir} - OBS's own notifications won't reach the tray.")
+    return env
 
 
 def run_windows(config):
@@ -324,6 +344,7 @@ def run_windows(config):
         subprocess.Popen(
             [exe, "--portable", *obs_flags],
             cwd=os.path.dirname(exe),
+            env=_obs_env("windows"),
             creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
         )
         log.info("Started OBS.")
@@ -376,6 +397,7 @@ def run_linux(config):
         subprocess.Popen(
             [exe, "-p", *obs_flags],
             cwd=os.path.dirname(exe),
+            env=_obs_env("linux"),
         )
         log.info("Started OBS.")
     else:

@@ -208,6 +208,22 @@ def test_finish_clip_with_no_app_heard_still_writes_the_three_tracks(tmp_path):
     assert [t["title"] for t in info["audio"]] == ["Mix", "Mic", "Desktop"]
 
 
+@needs_ffmpeg
+def test_a_post_clip_save_puts_the_app_tracks_in_the_extra_file(tmp_path):
+    rec = Recording(shift_ms=40)
+    save = clip_with_three_tracks(tmp_path, rec)
+    duration = clip_edit.probe(SYSTEM_FFMPEG, str(save))["duration"]
+    state = {"pressed_at": 1000.0, "requested_at": 1001.0, "clip_seconds": 1, "sound": None}
+    logs = []
+    clip, extra = tray_tracks.finish_post_save(str(save), rec.snapshot, state, SYSTEM_FFMPEG, {"reexport": False},
+                                               logs.append)
+    info = clip_edit.probe(SYSTEM_FFMPEG, extra)
+    assert [t["title"] for t in info["audio"]] == ["Mix", "Mic", "Desktop", "Spotify", "Discord"], logs
+    assert abs(info["mark"] - (duration - 1)) < 0.05
+    assert len(clip_edit.probe(SYSTEM_FFMPEG, clip)["audio"]) == 1
+    assert not (tmp_path / "Replay 2026-tracks.mkv").exists()  # the extra file is the multitrack one
+
+
 def test_two_apps_with_the_same_name_get_told_apart():
     snapshot = Snapshot(0, 0, {}, {"a": "Firefox", "b": "Firefox", "c": "Mpv"})
     assert tray_tracks.track_titles(snapshot, ["a", "b", "c"]) == ["Firefox", "Firefox 2", "Mpv"]

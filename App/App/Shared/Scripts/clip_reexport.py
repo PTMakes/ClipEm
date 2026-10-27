@@ -8,7 +8,9 @@ Post-processes every saved replay-buffer clip, in a background thread:
    track 1, the full mix, so it plays the same everywhere. Where the tray
    widget records the apps too (tray_tracks_enabled), it does all of this
    itself, adding their tracks, and this script leaves the clip alone.
-2. Smaller copy (reexport_enabled): the last `crop_seconds` of the clip,
+2. Post-clip saves (see clip_post.py): split into the clip and its
+   "-extra.mkv" before anything else - the clip then gets its smaller copy.
+3. Smaller copy (reexport_enabled): the last `crop_seconds` of the clip,
    re-encoded to H.264/AAC MP4 at the bitrate that lands it near
    `target_mb` - sized for upload limits (e.g. Discord's 20 MB). The
    full-quality clip is never re-encoded.
@@ -36,6 +38,7 @@ import obspython as obs
 # on the path, but not everything that loads this one does.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clip_naming  # noqa: E402 - next to this script too
+import clip_post  # noqa: E402
 from clip_tracks import (  # noqa: F401 - the rest are this script's public names
     AUDIO_BITRATE_KBPS,
     DEFAULT_CROP_SECONDS,
@@ -114,6 +117,13 @@ def process_clip(ffmpeg, clip_path, options, log):
         reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log, naming["small_suffix"])
 
 
+def finish_post_save(ffmpeg, clip_path, state, options):
+    try:
+        clip_post.finish_post_save(ffmpeg, clip_path, state, options, _log)
+    except Exception as exc:
+        _log(f"finishing the post-clip save {clip_path} failed: {exc}")
+
+
 # ---------------------------------------------------------------------------
 # OBS script API
 # ---------------------------------------------------------------------------
@@ -180,6 +190,16 @@ def on_event(event):
         return
     # Read each time: Settings changes it while OBS runs.
     naming = clip_naming.load()
+    post_state = clip_post.read_state()
+    if post_state is not None:
+        ffmpeg = find_ffmpeg(SCRIPTS_DIR)
+        if not ffmpeg:
+            _log("no ffmpeg found (re-run ClipEm Setup to install it) - the clip keeps its post-clip seconds")
+            return
+        options = {"naming": naming, "reexport": reexport_enabled, "target_mb": target_mb,
+                   "crop_seconds": crop_seconds}
+        threading.Thread(target=finish_post_save, args=(ffmpeg, clip_path, post_state, options), daemon=True).start()
+        return
     clip_path = clip_naming.rename_clip(clip_path, naming, log=_log)
     if not (split_tracks_enabled or reexport_enabled):
         return

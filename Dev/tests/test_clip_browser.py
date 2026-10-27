@@ -78,6 +78,16 @@ def test_the_editor_gets_the_tracks_copy_when_there_is_one(tmp_path):
     assert clip_browser.file_to_edit(str(tmp_path), "../b.mp4") is None
 
 
+def test_the_editor_gets_the_post_clip_copy_first(tmp_path):
+    for name in ("a.mp4", "a-tracks.mkv", "a-extra.mkv", "a-small.mp4"):
+        _touch(tmp_path, name)
+    clip, = clip_browser.list_clips(str(tmp_path))
+    assert (clip["extra_file"], clip["tracks_file"], clip["small_file"]) == ("a-extra.mkv", "a-tracks.mkv", "a-small.mp4")
+    assert clip_browser.file_to_edit(str(tmp_path), "a.mp4").endswith("a-extra.mkv")
+    assert sorted(os.path.basename(p) for p in clip_browser.clip_files(str(tmp_path), "a.mp4")) == [
+        "a-extra.mkv", "a-small.mp4", "a-tracks.mkv", "a.mp4"]
+
+
 @pytest.mark.parametrize("header, expected", [
     (None, None),
     ("", None),

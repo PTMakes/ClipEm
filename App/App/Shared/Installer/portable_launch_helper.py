@@ -45,7 +45,7 @@ import sys
 import obs_config
 from clipem_common import write_json_atomic, write_text_atomic
 
-SCRIPT_NAMES = ("replay_buffer_save_sound.py", "stuck_output_check.py", "clip_reexport.py")
+SCRIPT_NAMES = ("replay_buffer_save_sound.py", "stuck_output_check.py", "clip_reexport.py", "post_clip.py")
 
 # Scripts added after the scene collection first shipped: registered in it on
 # launch if missing, since OBS-Config is never overwritten by updates.
@@ -54,6 +54,8 @@ ADDED_SCRIPTS = {
     "clip_reexport.py": {
         "split_tracks_enabled": False, "reexport_enabled": False, "target_mb": 10.0, "crop_seconds": 30,
     },
+    # The clip hotkey with post-clip on - no keys until Settings turns it on.
+    "post_clip.py": {"post_clip_hotkey": []},
 }
 
 

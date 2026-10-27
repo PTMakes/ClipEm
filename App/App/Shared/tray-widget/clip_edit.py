@@ -133,13 +133,17 @@ def _no_window_kwargs():
 _STREAM_RE = re.compile(r"^\s*Stream #0:(\d+)(?:\[0x[0-9a-fA-F]+\])?(?:\([^)]*\))?: (Video|Audio): (\w+)(.*)$")
 _DURATION_RE = re.compile(r"Duration: (\d+):(\d+):(\d+(?:\.\d+)?)")
 _TITLE_RE = re.compile(r"^\s*title\s*:\s*(.*?)\s*$")
+# Where the clip hotkey was pressed in a post-clip "-extra.mkv" (Scripts/clip_post.py's MARK_TAG).
+_MARK_RE = re.compile(r"^\s*clipem_mark\s*:\s*([\d.]+)\s*$", re.I)
 
 
 def parse_probe(stderr):
     """{"duration", "width", "height", "fps", "video_codec", "audio": [{"index",
-    "codec", "title", "channels"}]} from what `ffmpeg -i <file>` prints.
-    "index" counts audio streams only (ffmpeg's 0:a:N)."""
-    info = {"duration": None, "width": None, "height": None, "fps": None, "video_codec": None, "audio": []}
+    "codec", "title", "channels"}], "mark"} from what `ffmpeg -i <file>`
+    prints. "index" counts audio streams only (ffmpeg's 0:a:N); "mark": the
+    clip hotkey's press in a post-clip save, in seconds, or None."""
+    info = {"duration": None, "width": None, "height": None, "fps": None, "video_codec": None, "audio": [],
+            "mark": None}
     match = _DURATION_RE.search(stderr or "")
     if match:
         hours, minutes, seconds = match.groups()
@@ -162,6 +166,10 @@ def parse_probe(stderr):
                 current = {"index": len(info["audio"]), "codec": codec, "title": None,
                            "channels": _channel_count(rest)}
                 info["audio"].append(current)
+            continue
+        mark = _MARK_RE.match(line)
+        if mark and info["mark"] is None:
+            info["mark"] = float(mark.group(1))
             continue
         title = _TITLE_RE.match(line)
         if title and current is not None and current["title"] is None:
@@ -229,9 +237,13 @@ def track_title(info, index):
 # ---------------------------------------------------------------------------
 
 def default_project(info):
+    """Everything - up to the clip hotkey's press in a post-clip save, whose
+    seconds after it are the user's to add."""
+    mark = info.get("mark")
+    end = mark if mark and MIN_SEGMENT_SECONDS <= mark < info["duration"] else info["duration"]
     return {
         "version": PROJECT_VERSION,
-        "keep": [[0.0, round(info["duration"], 3)]],
+        "keep": [[0.0, round(end, 3)]],
         "tracks": [
             {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "level": False,
              "gate_db": None, "mono": False, "regions": []}

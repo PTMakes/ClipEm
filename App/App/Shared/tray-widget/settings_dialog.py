@@ -371,6 +371,10 @@ def open_dialog(start_tab=None):
         audio_script = pending.get("audio_script") or obs_config.load_audio_script_settings()
     except Exception:
         audio_script = dict(obs_config.DEFAULT_AUDIO_SCRIPT_SETTINGS)
+    try:
+        post_clip = obs_config.clip_post.normalize(pending.get("post_clip") or obs_config.load_post_clip())
+    except Exception:
+        post_clip = dict(obs_config.clip_post.DEFAULTS)
     initial_obs_settings = {
         "websocket": {"port": port, "password": password},
         "clip_hotkey": list(hotkey),
@@ -380,6 +384,7 @@ def open_dialog(start_tab=None):
         "split_tracks": split_tracks,
         "clip_reexport": reexport,
         "audio_script": audio_script,
+        "post_clip": post_clip,
     }
 
     run_config = load_run_config()
@@ -709,6 +714,15 @@ def open_dialog(start_tab=None):
     devices = {"displays": None, "audio": None}  # filled in by detect_devices()
 
     section("Recording", TAB_OUTPUT)
+    # Two columns: the recording settings on the left, the audio devices on
+    # the right (under their own heading, level with the card's title).
+    recording_card = frame
+    recording_card.grid_slaves(row=0, column=0)[0].grid_configure(columnspan=1)
+    recording_card.columnconfigure(1, weight=0)
+    recording_card.columnconfigure(2, weight=1)
+    frame = tk.Frame(recording_card)
+    frame.grid(row=1, column=0, sticky="nw")
+    next_row = 0
 
     def combo_row(label, width):
         nonlocal next_row
@@ -740,6 +754,43 @@ def open_dialog(start_tab=None):
     tk.Label(buffer_row, text="seconds (how far back a clip reaches)").pack(side="left", padx=(px(3), 0))
     next_row += 1
 
+    # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
+    # longer, saved as the clip's "-extra.mkv" for the editor.
+    tk.Label(frame, text="Post-clip:").grid(row=next_row, column=0, sticky="nw", pady=(px(2), 0))
+    post_box = tk.Frame(frame)
+    post_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    post_line = tk.Frame(post_box)
+    post_line.pack(anchor="w")
+    post_enabled_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["enabled"])
+    post_seconds_var = tk.StringVar(value=str(initial_obs_settings["post_clip"]["seconds"]))
+    post_sound_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["sound_after"])
+    tk.Checkbutton(post_line, text="Keep recording for", variable=post_enabled_var,
+                   command=lambda: on_post_toggle()).pack(side="left")
+    post_seconds_box = tk.Spinbox(post_line, textvariable=post_seconds_var, width=4,
+                                  from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
+    post_seconds_box.pack(side="left", padx=(px(3), 0))
+    tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
+    info_button(post_line, "Post-clip", (
+        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
+        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
+        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
+        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
+        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
+        "tracks (what your mic picked up from your speakers stays).\n\n"
+        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
+    )).pack(side="left", padx=(px(6), 0))
+    post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
+                                      variable=post_sound_var)
+    post_sound_check.pack(anchor="w")
+
+    def on_post_toggle():
+        state = "normal" if post_enabled_var.get() else "disabled"
+        post_seconds_box.config(state=state)
+        post_sound_check.config(state=state)
+
+    on_post_toggle()
+    next_row += 1
+
     tk.Label(frame, text="Recording bitrate:").grid(row=next_row, column=0, sticky="w")
     bitrate_row = tk.Frame(frame)
     bitrate_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
@@ -764,7 +815,11 @@ def open_dialog(start_tab=None):
     buffer_var.trace_add("write", update_clip_size)
     update_clip_size()
 
-    section("Audio Devices", TAB_OUTPUT)
+    tk.Label(recording_card, text="Audio Devices", font=("", 10, "bold")).grid(
+        row=0, column=1, sticky="w", padx=(px(28), 0))
+    frame = tk.Frame(recording_card)
+    frame.grid(row=1, column=1, sticky="nw", padx=(px(28), 0))
+    next_row = 0
     output_combo = combo_row("Desktop audio:", 34)
     input_combo = combo_row("Microphone:", 34)
     for combo in (output_combo, input_combo):
@@ -1718,6 +1773,14 @@ def open_dialog(start_tab=None):
         recording_bitrate = max(setup.BITRATE_MIN_KBPS, min(recording_bitrate, setup.BITRATE_MAX_KBPS))
         if buffer_seconds != recording["replay_buffer_seconds"]:
             obs_settings["replay_buffer_seconds"] = buffer_seconds
+        try:
+            post_seconds = int(float(post_seconds_var.get()))
+        except ValueError:
+            popups.showerror("Post-clip", "Enter how many seconds to keep recording after the hotkey.", parent=root)
+            return
+        obs_settings["post_clip"] = obs_config.clip_post.normalize({
+            "enabled": bool(post_enabled_var.get()), "seconds": post_seconds,
+            "sound_after": bool(post_sound_var.get())})
         if recording_bitrate != recording["bitrate"]:
             obs_settings["recording_bitrate"] = recording_bitrate
         if encoder_picked["value"] and tuple(encoder_picked["value"]) != tuple(recording["encoder"]):

@@ -1,6 +1,7 @@
 """
 "Show OBS" for the tray widget: bring this install's OBS window to the
-front. Everything is matched by process ID (obs_process.find_obs_pids - the
+front - when OBS's ClipEm plugin isn't there to do it (obs_notices.py: an
+OBS started without it, or macOS). Everything below is that fallback. Everything is matched by process ID (obs_process.find_obs_pids - the
 OBS running from this ClipEm folder), never by window title: a title match
 on "OBS" also finds e.g. a browser tab about OBS.
 

@@ -19,6 +19,9 @@ import sys
 import clipem_common
 from clipem_common import ROOT_DIR, SHARED_DIR, load_json, write_json_atomic, write_text_atomic
 
+sys.path.insert(0, os.path.join(SHARED_DIR, "Scripts"))
+import clip_post  # noqa: E402 - Scripts/clip_post.py, shared with the OBS scripts
+
 OBS_CONFIG_DIR = os.path.join(SHARED_DIR, "OBS-Config")
 OBS_LOG_DIR = os.path.join(OBS_CONFIG_DIR, "logs")  # OBS runs with this as its config dir
 BASIC_INI = os.path.join(OBS_CONFIG_DIR, "basic", "profiles", "DefaultPTM", "basic.ini")
@@ -372,10 +375,44 @@ NO_HOTKEY = "None"
 CLEARED_HOTKEY = (False, False, False, NO_HOTKEY)
 
 
+def _hotkey_from_combos(combos):
+    """(ctrl, alt, shift, key_label) for the first of OBS's saved combos -
+    CLEARED_HOTKEY for none."""
+    if not combos:
+        return CLEARED_HOTKEY
+    combo = combos[0]
+    return (
+        bool(combo.get("control", combo.get("ctrl", False))),
+        bool(combo.get("alt", False)),
+        bool(combo.get("shift", False)),
+        obs_key_to_label(combo.get("key", "OBS_KEY_ASCIITILDE")),
+    )
+
+
+def _hotkey_combos(ctrl, alt, shift, key_label):
+    combos = []
+    if key_label != NO_HOTKEY:  # NO_HOTKEY: no clip hotkey at all
+        combo = {"key": hotkey_label_to_obs_key(key_label)}
+        combo.update({mod: True for mod, on in (("control", ctrl), ("alt", alt), ("shift", shift)) if on})
+        combos.append(combo)
+    return combos
+
+
 def load_clip_hotkey():
-    """(ctrl, alt, shift, key_label) for the clip hotkey from basic.ini -
-    CLEARED_HOTKEY if it was cleared, DEFAULT_CLIP_HOTKEY if the file/key is
-    missing or unparseable."""
+    """(ctrl, alt, shift, key_label) for the clip hotkey - CLEARED_HOTKEY if
+    it was cleared, DEFAULT_CLIP_HOTKEY if the file/key is missing or
+    unparseable. With post-clip on it's post_clip.py's hotkey (in the scene
+    collection), otherwise OBS's own (basic.ini)."""
+    if load_post_clip()["enabled"]:
+        try:
+            entry = find_script_entry(load_scene_collection(), POST_CLIP_SCRIPT_NAME)
+        except (OSError, ValueError):
+            entry = None
+        combos = ((entry or {}).get("settings") or {}).get(POST_CLIP_HOTKEY_SETTING)
+        try:
+            return DEFAULT_CLIP_HOTKEY if combos is None else _hotkey_from_combos(combos)
+        except (AttributeError, TypeError):
+            return DEFAULT_CLIP_HOTKEY
     if not os.path.exists(BASIC_INI):
         return DEFAULT_CLIP_HOTKEY
     lines = read_ini_lines()
@@ -389,32 +426,33 @@ def load_clip_hotkey():
                 saved = json.loads(value.strip())
                 if CLIP_HOTKEY_ACTION not in saved:
                     return DEFAULT_CLIP_HOTKEY
-                combos = saved[CLIP_HOTKEY_ACTION]
-                if not combos:
-                    return CLEARED_HOTKEY
-                combo = combos[0]
-                return (
-                    bool(combo.get("control", combo.get("ctrl", False))),
-                    bool(combo.get("alt", False)),
-                    bool(combo.get("shift", False)),
-                    obs_key_to_label(combo.get("key", "OBS_KEY_ASCIITILDE")),
-                )
+                return _hotkey_from_combos(saved[CLIP_HOTKEY_ACTION])
             except (ValueError, AttributeError):
                 return DEFAULT_CLIP_HOTKEY
     return DEFAULT_CLIP_HOTKEY
 
 
 def save_clip_hotkey(ctrl, alt, shift, key_label):
-    """Writes the clip hotkey into basic.ini's [Hotkeys] section. Raises
-    ValueError for an unrecognized key, FileNotFoundError without basic.ini."""
+    """Writes the clip hotkey: into basic.ini's [Hotkeys] section, or with
+    post-clip on into post_clip.py's settings, OBS's own then left without
+    keys (one press, one save). Raises ValueError for an unrecognized key,
+    FileNotFoundError without basic.ini."""
     if not os.path.exists(BASIC_INI):
         raise FileNotFoundError(f"Config file not found: {BASIC_INI}")
-    combos = []
-    if key_label != NO_HOTKEY:  # NO_HOTKEY: no clip hotkey at all
-        combo = {"key": hotkey_label_to_obs_key(key_label)}
-        combo.update({mod: True for mod, on in (("control", ctrl), ("alt", alt), ("shift", shift)) if on})
-        combos.append(combo)
-    new_line = f"{CLIP_HOTKEY_INI_KEY}={json.dumps({CLIP_HOTKEY_ACTION: combos})}\n"
+    combos = _hotkey_combos(ctrl, alt, shift, key_label)
+    post_clip = load_post_clip()["enabled"]
+    try:
+        data = load_scene_collection()
+    except (OSError, ValueError):
+        if post_clip:
+            raise
+        data = None  # only clearing post_clip.py's copy, which a broken file can't have
+    if data is not None and (post_clip or find_script_entry(data, POST_CLIP_SCRIPT_NAME)):
+        _post_clip_script_entry(data).setdefault("settings", {})[POST_CLIP_HOTKEY_SETTING] = combos if post_clip else []
+        save_scene_collection(data)
+    elif post_clip:
+        raise FileNotFoundError(f"Scene collection not found: {SCENE_COLLECTION_JSON}")
+    new_line = f"{CLIP_HOTKEY_INI_KEY}={json.dumps({CLIP_HOTKEY_ACTION: [] if post_clip else combos})}\n"
 
     lines = read_ini_lines()
     start, end = find_ini_section(lines, HOTKEYS_INI_SECTION)
@@ -431,6 +469,48 @@ def save_clip_hotkey(ctrl, alt, shift, key_label):
         else:
             lines.insert(end, new_line)
     write_ini_lines(lines)
+
+
+# ---------------------------------------------------------------------------
+# Post-clip (Scripts/clip_post.py): run_config.json's "post_clip". Like the
+# other recording settings it's only written while OBS is closed (queued
+# otherwise), since it changes the replay buffer's length and which hotkey
+# saves clips: RecRBTime is the clip length plus the post-clip seconds
+# (setup.load/save_replay_buffer_seconds), and the clip hotkey's keys are
+# post_clip.py's instead of OBS's "Save Replay" (save_clip_hotkey).
+# ---------------------------------------------------------------------------
+
+POST_CLIP_SCRIPT_NAME = "post_clip.py"
+POST_CLIP_HOTKEY_SETTING = "post_clip_hotkey"  # Scripts/post_clip.py's HOTKEY_SETTING
+
+
+def load_post_clip():
+    """{"enabled", "seconds", "sound_after"}, defaults filled in."""
+    run_config = load_json(clipem_common.RUN_CONFIG_PATH)
+    return clip_post.normalize(run_config.get("post_clip") if isinstance(run_config, dict) else None)
+
+
+def _post_clip_script_entry(data):
+    """post_clip.py's scripts-tool entry, added if it isn't there yet."""
+    entry = find_script_entry(data, POST_CLIP_SCRIPT_NAME)
+    if entry is None:
+        entry = {"path": os.path.join(SHARED_DIR, "Scripts", POST_CLIP_SCRIPT_NAME), "settings": {}}
+        data.setdefault("modules", {}).setdefault("scripts-tool", []).append(entry)
+    return entry
+
+
+def save_post_clip(enabled, seconds, sound_after):
+    """Turns post-clip on/off, keeping the clip length and the clip hotkey
+    as they were. Only while OBS isn't running."""
+    import setup  # imported here: setup imports this module
+
+    hotkey = load_clip_hotkey()
+    clip_seconds = setup.load_replay_buffer_seconds()
+    config = clipem_common.load_run_config()
+    config["post_clip"] = clip_post.normalize({"enabled": enabled, "seconds": seconds, "sound_after": sound_after})
+    clipem_common.save_run_config(config)
+    setup.save_replay_buffer_seconds(clip_seconds)
+    save_clip_hotkey(*hotkey)
 
 
 # Start/stop hotkeys for recording and the replay buffer: OBS's own hotkey
@@ -874,7 +954,8 @@ def apply_obs_settings(settings):
     """Writes settings - "websocket" {"port", "password"}, "clip_hotkey"
     [ctrl, alt, shift, key], "toggle_hotkeys" {name: [ctrl, alt, shift, key] or
     None} (see TOGGLE_HOTKEYS), "clip_sound" {"enabled", "volume"},
-    "clip_folder" (a path), "split_tracks" (bool), "clip_reexport"
+    "clip_folder" (a path), "post_clip" {"enabled", "seconds", "sound_after"}
+    (see save_post_clip), "split_tracks" (bool), "clip_reexport"
     {"enabled", "target_mb", "crop_seconds"} (the "-small.mp4" copy),
     "audio_script" {"peak_guard_enabled", "peak_ceiling_db", "debug_enabled"}
     (see save_audio_script_settings), and
@@ -891,6 +972,9 @@ def apply_obs_settings(settings):
         save_obs_websocket_settings(settings["websocket"]["port"], settings["websocket"]["password"])
     if "clip_hotkey" in settings:
         save_clip_hotkey(*settings["clip_hotkey"])
+    if "post_clip" in settings:  # after the hotkey, which it moves
+        post_clip = settings["post_clip"]
+        save_post_clip(post_clip["enabled"], post_clip["seconds"], post_clip["sound_after"])
     for name, hotkey in settings.get("toggle_hotkeys", {}).items():
         save_toggle_hotkey(name, hotkey)
     if "clip_sound" in settings:

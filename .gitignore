@@ -63,10 +63,14 @@ __pycache__/
 /App/App/cache/
 # Settings changed while OBS was running, waiting to be applied (obs_config).
 /App/App/Shared/pending_obs_settings.json
+# Where the clip hotkey was pressed, for the post-clip save just made (Scripts/clip_post.py).
+/App/App/Shared/post_clip_state.json
 # Which app owns which split audio track (tray-widget/app_audio.py).
 /App/App/Shared/app_tracks.json
 # Windows app-capture helper, built by Dev/build/build-app-capture.sh at release time.
 /App/App/Shared/Tools/
+# ClipEm's OBS plugin, built by Dev/build/build-obs-plugin.sh at release time.
+/App/App/Shared/OBS-Plugin/
 # OBS's own logs, written through the linked OBS-Config when OBS runs from
 # a checkout - never ship them in the release zip.
 /App/App/Shared/OBS-Config/logs/
@@ -86,6 +90,8 @@ __pycache__/
 /Dev/installer/windows/dist/
 /Dev/installer/windows/build/
 /Dev/.ffmpeg-build/
+/Dev/.obs-plugin-work/
+/Dev/.obs-plugin-work.log
 
 # The from-source Linux OBS build (build-obs-from-source-for-linux.sh).
 # Published as a release asset by release.sh - rebuild it rather than

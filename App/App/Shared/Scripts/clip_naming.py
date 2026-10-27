@@ -6,7 +6,8 @@ OBS), the tray widget (tray-widget/tray_tracks.py) and the clip editor
 A clip is named [prefix] [number or GUID] [date], each part optional, joined
 by the separator - e.g. "Replay 2026-10-25 21-50-07" (the default, what
 OBS itself writes), "Clip 0042", or "Clip 3f2a...". Its copies add a suffix:
-"<clip>-tracks.mkv" and "<clip>-small.mp4" by default.
+"<clip>-tracks.mkv", "<clip>-small.mp4" and, with post-clip on (clip_post.py),
+"<clip>-extra.mkv" by default.
 
 OBS can only name clips by date, so a clip is renamed right after OBS saves
 it, by whichever of the OBS script and the tray finishes it (the tray when it
@@ -34,10 +35,11 @@ DEFAULTS = {
     "number_digits": 4,  # zero-padded to this many digits (0: none)
     "small_suffix": "-small",
     "tracks_suffix": "-tracks",
+    "extra_suffix": "-extra",
 }
 # The suffixes before they could be changed - still recognised, so copies
 # saved under them stay listed with their clip.
-DEFAULT_SUFFIXES = (DEFAULTS["small_suffix"], DEFAULTS["tracks_suffix"])
+DEFAULT_SUFFIXES = (DEFAULTS["small_suffix"], DEFAULTS["tracks_suffix"], DEFAULTS["extra_suffix"])
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
 # Not allowed in file names on Windows (and "/" anywhere).
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
@@ -75,10 +77,10 @@ def validate(settings):
             sample = datetime.datetime(2026, 1, 2, 3, 4, 5).strftime(settings["date_format"])
             if not sample.strip() or sample == settings["date_format"]:
                 return "The date format doesn't contain any date or time codes (like %Y or %H)."
-        small, tracks = settings["small_suffix"], settings["tracks_suffix"]
-        if not small or not tracks or small == tracks:
-            return "The two copy suffixes must both be set, and be different."
-        if clean(small) != small or clean(tracks) != tracks:
+        suffixes = (settings["small_suffix"], settings["tracks_suffix"], settings["extra_suffix"])
+        if not all(suffixes) or len(set(suffixes)) != len(suffixes):
+            return "The copy suffixes must all be set, and be different."
+        if any(clean(suffix) != suffix for suffix in suffixes):
             return 'Suffixes can\'t contain < > : " / \\ | ? *'
         if not (settings["prefix"] or settings["date"] or settings["id"] != ID_NONE):
             return "Clip names need at least a prefix, a date or a number."
@@ -168,9 +170,14 @@ def tracks_path(clip_path, settings=None):
     return copy_path(clip_path, (settings or load())["tracks_suffix"], ".mkv")
 
 
+def extra_path(clip_path, settings=None):
+    return copy_path(clip_path, (settings or load())["extra_suffix"], ".mkv")
+
+
 def copy_suffixes(settings=None):
-    """{suffix: "small_file"/"tracks_file"} for listing copies with their
-    clip: the ones in use and the defaults."""
+    """{suffix: "small_file"/"tracks_file"/"extra_file"} for listing copies
+    with their clip: the ones in use and the defaults."""
     settings = settings or load()
-    return {DEFAULT_SUFFIXES[0]: "small_file", DEFAULT_SUFFIXES[1]: "tracks_file",
-            settings["small_suffix"]: "small_file", settings["tracks_suffix"]: "tracks_file"}
+    return {DEFAULT_SUFFIXES[0]: "small_file", DEFAULT_SUFFIXES[1]: "tracks_file", DEFAULT_SUFFIXES[2]: "extra_file",
+            settings["small_suffix"]: "small_file", settings["tracks_suffix"]: "tracks_file",
+            settings["extra_suffix"]: "extra_file"}

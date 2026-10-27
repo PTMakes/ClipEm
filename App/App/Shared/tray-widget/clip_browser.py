@@ -138,9 +138,9 @@ _SYSTEM = platform.system()
 # ---------------------------------------------------------------------------
 
 def list_clips(folder):
-    """[{name, mtime, size, tracks_file, small_file}], newest first. A
-    "-small"/"-tracks" copy is listed under its clip; one whose clip is gone
-    is listed as a clip itself."""
+    """[{name, mtime, size, tracks_file, small_file, extra_file}], newest
+    first. A "-small"/"-tracks"/"-extra" copy is listed under its clip; one
+    whose clip is gone is listed as a clip itself."""
     try:
         entries = [e for e in os.scandir(folder) if e.is_file()]
     except OSError:
@@ -162,7 +162,7 @@ def list_clips(folder):
             copies.append((stems[stem[: -len(suffix)]], copy_suffixes[suffix], name))
         else:
             clips[name] = {"name": name, "mtime": stat.st_mtime, "size": stat.st_size,
-                           "tracks_file": None, "small_file": None}
+                           "tracks_file": None, "small_file": None, "extra_file": None}
     for parent, key, name in copies:
         if parent in clips:
             clips[parent][key] = name
@@ -298,10 +298,11 @@ def editors_info():
 
 
 def file_to_edit(folder, clip):
-    """The "-tracks.mkv" copy when there is one - editors get every audio
-    track - else the clip itself."""
+    """The "-extra.mkv" copy when there is one - the clip with its post-clip
+    seconds (Scripts/clip_post.py) and every audio track - else the
+    "-tracks.mkv" copy - editors get every audio track - else the clip."""
     info = next((c for c in list_clips(folder) if c["name"] == clip), None)
-    return resolve_clip(folder, (info and info["tracks_file"]) or clip)
+    return resolve_clip(folder, (info and (info["extra_file"] or info["tracks_file"])) or clip)
 
 
 # ---------------------------------------------------------------------------
@@ -572,6 +573,7 @@ def project_payload(clip, source, info, project, missing):
         "info": {
             "duration": info["duration"], "width": info["width"], "height": info["height"], "fps": info["fps"],
             "split": clip_edit.is_split_layout(info),
+            "mark": info.get("mark"),
             "tracks": [{"index": t["index"], "title": clip_edit.track_title(info, t["index"]),
                         "channels": clip_edit.channel_count(info, t["index"])} for t in info["audio"]],
         },
@@ -667,7 +669,7 @@ def clip_files(folder, name):
     clip = next((c for c in list_clips(folder) if c["name"] == name), None)
     if not clip:
         return []
-    names = [name] + [clip[key] for key in ("tracks_file", "small_file") if clip[key]]
+    names = [name] + [clip[key] for key in ("tracks_file", "small_file", "extra_file") if clip[key]]
     return [path for n in names if (path := resolve_clip(folder, n))]
 
 

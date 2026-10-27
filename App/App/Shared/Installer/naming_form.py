@@ -35,6 +35,7 @@ class NamingForm(tk.Frame):
             "number_digits": tk.StringVar(value=str(initial["number_digits"])),
             "small_suffix": tk.StringVar(value=initial["small_suffix"]),
             "tracks_suffix": tk.StringVar(value=initial["tracks_suffix"]),
+            "extra_suffix": tk.StringVar(value=initial["extra_suffix"]),
         }
         pad = {"padx": (px(6), 0), "pady": px(2)}
         row = 0
@@ -82,7 +83,9 @@ class NamingForm(tk.Frame):
         tk.Label(line, text="Multitrack:").pack(side="left")
         tk.Entry(line, textvariable=self.vars["tracks_suffix"], width=10).pack(side="left", padx=(px(4), px(8)))
         tk.Label(line, text="Smaller copy:").pack(side="left")
-        tk.Entry(line, textvariable=self.vars["small_suffix"], width=10).pack(side="left", padx=(px(4), 0))
+        tk.Entry(line, textvariable=self.vars["small_suffix"], width=10).pack(side="left", padx=(px(4), px(8)))
+        tk.Label(line, text="Post-clip:").pack(side="left")
+        tk.Entry(line, textvariable=self.vars["extra_suffix"], width=10).pack(side="left", padx=(px(4), 0))
         row += 1
 
         label("Next clip:")

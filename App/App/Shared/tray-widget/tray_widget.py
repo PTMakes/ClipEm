@@ -71,9 +71,10 @@ from clipem_common import (  # noqa: E402
 )
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from mic_check import EVENT_SUBSCRIPTIONS, MicCheck  # noqa: E402
+from obs_notices import ObsPlugin  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
 from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
-from tray_tracks import ClipFinisher  # noqa: E402
+from tray_tracks import ClipFinisher, clip_post  # noqa: E402 - clip_post: Scripts/clip_post.py
 
 log = setup_logging("tray")
 
@@ -208,6 +209,7 @@ HELPER_STDERR_TAIL_BYTES = 4000
 SETTINGS_DIALOG_SCRIPT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "settings_dialog.py"
 )
+POST_CLIP_HOTKEY = "clipem_post_clip"  # Scripts/post_clip.py's HOTKEY_NAME
 CLIP_BROWSER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clip_browser.py")
 
 
@@ -335,6 +337,8 @@ class TrayApp:
         self._children = []  # helper processes we started - see stop_children
         self._stopping_children = False  # their exit codes are ours, not errors, from then on
         self.obs_window = obs_window.ObsWindowState(log)  # for Show OBS / Hide OBS
+        # OBS's ClipEm plugin: OBS's errors and messages, and showing/hiding it.
+        self.obs_plugin = ObsPlugin(self._notify, on_window_change=self._on_obs_window_reported)
         self.stuck_screen = StuckScreenMonitor(
             self._notify,
             DisplayChoice(obs_config.load_setup_capture_display, obs_config.set_capture_display_user_changed),
@@ -451,9 +455,16 @@ class TrayApp:
         if not self.connected or self.client is None or not self.replay_active:
             return
         try:
-            self.client.call("SaveReplayBuffer")
+            post_clip = clip_post.load_settings()
+            if post_clip["enabled"]:
+                # The clip hotkey's own way, so the seconds after are kept too (Scripts/post_clip.py).
+                self.client.call("TriggerHotkeyByName", {"hotkeyName": POST_CLIP_HOTKEY})
+                message = f"Saving the clip in {post_clip['seconds']} s."
+            else:
+                self.client.call("SaveReplayBuffer")
+                message = "Clip saved."
             if load_run_config().get("clip_saved_notification", True):  # Settings > Clip Sound
-                self._notify("Clip saved.")
+                self._notify(message)
         except ObsWebSocketError as exc:
             log.warning(f"Failed to save clip: {exc}")
             self._notify(f"Failed to save clip: {exc}")
@@ -542,7 +553,11 @@ class TrayApp:
         return "Hide OBS" if self.obs_window.visible else "Show OBS"
 
     def _toggle_obs_window(self, icon, item):
-        if self.obs_window.visible:
+        if self.connected and self.client is not None and self.obs_plugin.set_window_visible(
+            self.client, not self.obs_window.visible
+        ):
+            self.obs_window.remember(not self.obs_window.visible)
+        elif self.obs_window.visible:
             if obs_window.hide_obs(log):
                 self.obs_window.remember(False)
         elif show_obs_window():
@@ -684,6 +699,7 @@ class TrayApp:
         self.client.on_event("InputVolumeMeters", self.mic_check.on_volume_meters)
         self.connected = True
         log.info(f"Connected to OBS at {url}.")
+        self.obs_plugin.attach(self.client)
         self.stuck_screen.forget()
         self.app_tracks.forget()
         self.clip_folder.forget()
@@ -764,6 +780,7 @@ class TrayApp:
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
                 self.mic_check.tick(self.client, self._mic_check_enabled, self.replay_active or self.recording_active)
+                self.obs_plugin.tick(self.client)
                 self.app_tracks.tick()
                 missing_before = self.clip_folder.missing_dir
                 self.clip_folder.tick(self.client, self.replay_active)
@@ -783,6 +800,10 @@ class TrayApp:
             time.sleep(POLL_SECONDS)
 
     def _refresh_obs_window(self):
+        if self.connected and self.obs_plugin.present:
+            # The plugin reports changes itself (_on_obs_window_reported).
+            self.obs_window.stop()
+            return
         try:
             if self.obs_window.refresh(obs_process.find_obs_pids(), getattr(self.icon, "bus_name", None)):
                 self.icon.update_menu()
@@ -792,6 +813,7 @@ class TrayApp:
     def _mark_disconnected(self, reason):
         log.warning(f"Lost connection to OBS: {reason}")
         self.connected = False
+        self.obs_plugin.forget()
         self.replay_active = self.recording_active = False
         if self.client:
             self.client.close()

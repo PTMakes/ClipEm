@@ -818,6 +818,17 @@ button.toggle.open { box-shadow: 0 0 0 2px var(--accent); }
   opacity: 0.8;
 }
 
+/* A post-clip save's clip hotkey press: the clip's default end. */
+.hotkey-mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 2px dashed var(--warn);
+  margin-left: -1px;
+  pointer-events: none;
+}
+
 .playhead {
   position: absolute;
   top: 0;

@@ -11,7 +11,12 @@ import subprocess
 
 from release_common import release_asset_url, sha256_of_file, write_json_atomic
 
-SHIPPED_IGNORED = ("Tools", "clipem-app-capture.exe")
+# Built at release time and git-ignored, but shipped (release.sh stages them by hand).
+SHIPPED_IGNORED = (
+    ("Tools", "clipem-app-capture.exe"),  # build/build-app-capture.sh
+    ("OBS-Plugin", "linux", "clipem-obs.so"),  # build/build-obs-plugin.sh
+    ("OBS-Plugin", "windows", "clipem-obs.dll"),
+)
 EXCLUDE_NAMES = {"__pycache__", ".DS_Store"}
 
 # Top-level entries under App/Shared that setup/the updater rewrite or
@@ -36,10 +41,10 @@ def git_listed_files(root_dir):
     except (OSError, subprocess.CalledProcessError):
         return None
     listed = [os.path.join(top, rel) for rel in out.decode().split("\0") if rel]
-    # Built at release time and git-ignored, but shipped (release.sh stages it by hand).
-    helper = os.path.join(root_dir, *SHIPPED_IGNORED)
-    if os.path.isfile(helper) and helper not in listed:
-        listed.append(helper)
+    for parts in SHIPPED_IGNORED:
+        built = os.path.join(root_dir, *parts)
+        if os.path.isfile(built) and built not in listed:
+            listed.append(built)
     return listed
 
 

@@ -89,9 +89,11 @@ def test_launch_helper_registers_new_script_once(tmp_path):
     portable_launch_helper._fix_script_paths(str(config), scripts)
     portable_launch_helper._fix_script_paths(str(config), scripts)
     entries = json.loads(scene.read_text())["modules"]["scripts-tool"]
-    assert [os.path.basename(e["path"]) for e in entries] == ["stuck_output_check.py", "clip_reexport.py"]
+    assert [os.path.basename(e["path"]) for e in entries] == ["stuck_output_check.py", "clip_reexport.py",
+                                                              "post_clip.py"]
     assert all(e["path"].startswith(scripts) for e in entries)
     assert entries[1]["settings"]["reexport_enabled"] is False
+    assert entries[2]["settings"]["post_clip_hotkey"] == []  # no keys until Settings turns post-clip on
 
 
 def test_validate_zip_root():

@@ -82,9 +82,15 @@ def test_unusable_settings_are_refused_and_never_used(tmp_path, changes):
 
 
 def test_copies_use_the_chosen_suffixes_and_old_ones_still_count():
-    settings = naming(small_suffix=" (discord size)", tracks_suffix="_all-tracks")
+    settings = naming(small_suffix=" (discord size)", tracks_suffix="_all-tracks", extra_suffix=" +after")
     assert clip_naming.small_path("/c/Clip.mp4", settings) == "/c/Clip (discord size).mp4"
     assert clip_naming.tracks_path("/c/Clip.mp4", settings) == "/c/Clip_all-tracks.mkv"
+    assert clip_naming.extra_path("/c/Clip.mp4", settings) == "/c/Clip +after.mkv"
     assert clip_naming.copy_suffixes(settings) == {
-        "-small": "small_file", "-tracks": "tracks_file",
-        " (discord size)": "small_file", "_all-tracks": "tracks_file"}
+        "-small": "small_file", "-tracks": "tracks_file", "-extra": "extra_file",
+        " (discord size)": "small_file", "_all-tracks": "tracks_file", " +after": "extra_file"}
+
+
+def test_the_copy_suffixes_must_differ():
+    assert clip_naming.validate(naming(extra_suffix="-tracks"))
+    assert clip_naming.validate(naming(extra_suffix=""))

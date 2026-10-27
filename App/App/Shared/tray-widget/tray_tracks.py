@@ -9,6 +9,9 @@ does inside OBS when it doesn't:
 2. The clip itself is stripped back to the mix, so it plays the same everywhere.
 3. The smaller copy, if that's on.
 
+A post-clip save (Scripts/clip_post.py) is split into the clip and its
+"-extra.mkv" instead, the app tracks going into the extra file.
+
 OBS tells the tray a clip was saved over obs-websocket (ReplayBufferSaved) -
 the snapshot of the recorded audio is taken right then, before the rings move
 on; the rest runs on a worker thread at low priority.
@@ -30,6 +33,7 @@ from clipem_common import APP_DIR
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Scripts"))
 import clip_naming  # noqa: E402 - Scripts/clip_naming.py, shared with the OBS script
+import clip_post  # noqa: E402 - Scripts/clip_post.py, shared with the OBS script
 import clip_tracks  # noqa: E402 - Scripts/clip_tracks.py, shared with the OBS script
 
 log = logging.getLogger("tray")
@@ -110,7 +114,6 @@ def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subproce
     """Everything for one saved clip. options: {"reexport", "target_mb",
     "crop_seconds", "naming"} (naming: clip_naming's settings)."""
     naming = options.get("naming") or clip_naming.DEFAULTS
-    kwargs = clip_tracks.low_priority_kwargs()
     info = clip_edit.probe(ffmpeg, clip_path)
     duration = info["duration"]
     if len(info["audio"]) < len(clip_tracks.FIXED_TRACK_TITLES):
@@ -118,19 +121,42 @@ def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subproce
             f"{len(clip_tracks.FIXED_TRACK_TITLES)} - Split audio tracks wasn't on when it was recorded; "
             "leaving it alone")
     else:
-        clip_env = None
-        try:
-            result = run(desktop_pcm_command(ffmpeg, clip_path), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                         **kwargs)
-            if result.returncode == 0:
-                clip_env = track_align.mono_envelope(result.stdout, ANALYSIS_RATE)
-        except Exception as exc:
-            log(f"couldn't read the clip's Desktop track ({exc}) - lining the app tracks up by the clock")
-        starts = align_tracks(snapshot, list(snapshot.tracks), clip_env, duration, log)
+        starts = app_track_starts(clip_path, snapshot, duration, ffmpeg, log, run)
         split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log, naming["tracks_suffix"])
     if options.get("reexport"):
         clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log,
                              naming["small_suffix"])
+
+
+def app_track_starts(clip_path, snapshot, duration, ffmpeg, log=log.info, run=subprocess.run):
+    """align_tracks() for a saved clip, from its Desktop track."""
+    clip_env = None
+    try:
+        result = run(desktop_pcm_command(ffmpeg, clip_path), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                     **clip_tracks.low_priority_kwargs())
+        if result.returncode == 0:
+            clip_env = track_align.mono_envelope(result.stdout, ANALYSIS_RATE)
+    except Exception as exc:
+        log(f"couldn't read the clip's Desktop track ({exc}) - lining the app tracks up by the clock")
+    return align_tracks(snapshot, list(snapshot.tracks), clip_env, duration, log)
+
+
+def finish_post_save(save_path, snapshot, state, ffmpeg, options, log=log.info, run=subprocess.run):
+    """A post-clip save: clip_post.finish_post_save(), with a track for every
+    app heard in the whole save in the "-extra.mkv"."""
+    info = clip_edit.probe(ffmpeg, save_path)
+    duration = info["duration"]
+    with tempfile.TemporaryDirectory(prefix="clipem-tracks-") as temp:
+        app_tracks = []
+        if len(info["audio"]) >= len(clip_tracks.FIXED_TRACK_TITLES) and snapshot.tracks:
+            starts = app_track_starts(save_path, snapshot, duration, ffmpeg, log, run)
+            heard = [key for key in snapshot.tracks if not starts[key][1]]
+            count = round(duration * RATE)
+            for number, (key, title) in enumerate(zip(heard, track_titles(snapshot, heard), strict=True)):
+                path = os.path.join(temp, f"{number}.mov")
+                clip_tracks.write_pcm_mov(path, snapshot.window(key, starts[key][0], starts[key][0] + count))
+                app_tracks.append((title, path))
+        return clip_post.finish_post_save(ffmpeg, save_path, state, options, log, app_tracks=app_tracks, run=run)
 
 
 def track_titles(snapshot, heard):
@@ -190,6 +216,7 @@ class ClipFinisher:
             if not clip_path:
                 return
             snapshot = self._recorder.snapshot()
+            post_state = clip_post.read_state()  # now: it's only good for a few seconds
             settings = obs_config.load_clip_script_settings()
         except Exception:
             log.exception("Couldn't start finishing the saved clip")
@@ -200,10 +227,10 @@ class ClipFinisher:
             "crop_seconds": int(settings.get("crop_seconds", clip_tracks.DEFAULT_CROP_SECONDS)),
             "naming": clip_naming.load(),
         }
-        threading.Thread(target=self._finish, args=(clip_path, snapshot, options), daemon=True).start()
+        threading.Thread(target=self._finish, args=(clip_path, snapshot, options, post_state), daemon=True).start()
 
     @staticmethod
-    def _finish(clip_path, snapshot, options):
+    def _finish(clip_path, snapshot, options, post_state=None):
         ffmpeg = find_ffmpeg()
         if not ffmpeg:
             log.warning("No ffmpeg found (re-run ClipEm Setup to install it) - not finishing the saved clip.")
@@ -212,6 +239,9 @@ class ClipFinisher:
             log.warning(f"Saved clip not found ({clip_path!r}) - skipping.")
             return
         try:
+            if post_state is not None:
+                finish_post_save(clip_path, snapshot, post_state, ffmpeg, options, log.info)
+                return
             # Named first - the copies are named after it.
             clip_path = clip_naming.rename_clip(clip_path, options["naming"], log=log.info)
             finish_clip(clip_path, snapshot, ffmpeg, options, log.info)

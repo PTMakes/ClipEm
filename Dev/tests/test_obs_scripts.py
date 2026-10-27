@@ -23,7 +23,7 @@ from conftest import SCRIPTS_DIR
 
 API = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "obspython_api.json")))
 # Modules the scripts import, not scripts OBS loads.
-HELPER_MODULES = {"clip_tracks.py", "clip_naming.py"}
+HELPER_MODULES = {"clip_tracks.py", "clip_naming.py", "clip_post.py"}
 SCRIPTS = sorted(p for p in glob.glob(os.path.join(SCRIPTS_DIR, "*.py")) if os.path.basename(p) not in HELPER_MODULES)
 
 
@@ -123,6 +123,8 @@ class FakeObspython(types.ModuleType):
         self.event_callbacks = []
         self.tmp_path = tmp_path
         self.last_replay = None
+        self.hotkeys = {}  # name -> callback
+        self.replay_saves = 0
         self.audio_source = Handle("source")
         self.volumes = {self.audio_source: 1.0}
         # A PipeWire screen capture the tray widget has asked to restart.
@@ -160,6 +162,10 @@ class FakeObspython(types.ModuleType):
             "obs_frontend_remove_event_callback": lambda cb: self.event_callbacks.remove(cb)
             if cb in self.event_callbacks else None,
             "obs_frontend_get_last_replay": lambda: self.last_replay,
+            "obs_hotkey_register_frontend": lambda name, description, callback: self.hotkeys.__setitem__(
+                name, callback) or name,
+            "obs_frontend_replay_buffer_save": lambda: setattr(self, "replay_saves", self.replay_saves + 1),
+            "config_get_int": lambda config, section, key: 70 if (section, key) == ("AdvOut", "RecRBTime") else 0,
             "obs_enum_sources": lambda: [Handle("source"), self.audio_source, self.capture_source],
             "obs_source_get_id": lambda source: "pipewire-screen-capture-source"
             if source is self.capture_source else "other",
@@ -193,6 +199,7 @@ class FakeObspython(types.ModuleType):
 # its interesting code paths.
 SETTINGS = {
     "clip_reexport.py": {"split_tracks_enabled": True, "reexport_enabled": True, "target_mb": 10.0, "crop_seconds": 30},
+    "post_clip.py": {},
     "replay_buffer_save_sound.py": {"sound_enabled": True},
     "stuck_output_check.py": {"debug_enabled": True, "peak_guard_enabled": True},
 }
@@ -238,6 +245,13 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
     if name == "stuck_output_check.py":
         libobs = FakeLibobs()
         monkeypatch.setattr(script, "load_libobs", lambda: libobs)
+    if name == "post_clip.py":
+        import clip_post
+
+        state_path = tmp_path / "post_clip_state.json"
+        monkeypatch.setattr(clip_post, "STATE_PATH", str(state_path))
+        monkeypatch.setattr(clip_post, "load_settings",
+                            lambda path=None: dict(clip_post.DEFAULTS, enabled=True, seconds=10))
     if name == "clip_reexport.py":
         clip = tmp_path / "Replay 2026-09-25.mkv"
         clip.write_bytes(b"clip")
@@ -263,6 +277,11 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
     for callback in list(fake.event_callbacks):
         for event in events:
             callback(fake.constant(event))
+    if name == "post_clip.py":
+        fake.hotkeys[script.HOTKEY_NAME](True)  # the clip hotkey
+        fake.hotkeys[script.HOTKEY_NAME](False)
+        assert fake.replay_saves == 0, "a press waits for the post-clip seconds"
+        assert list(fake.timers.values()) == [10_000]
     if name == "stuck_output_check.py":
         libobs.send_peak_db(3.0)  # the mic clips at +3 dB
     for _ in range(12):
@@ -278,6 +297,11 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
 
     if name == "replay_buffer_save_sound.py":
         assert played, "the clip sound should have played on REPLAY_BUFFER_SAVED"
+    if name == "post_clip.py":
+        assert fake.replay_saves == 1, "...then saves once"
+        state = json.loads(state_path.read_text())
+        assert state["clip_seconds"] == 60  # the buffer (70 s) less the post-clip seconds
+        assert 0 <= state["requested_at"] - state["pressed_at"] < 5
     if name == "clip_reexport.py":
         assert len(started) == 1 and started[0][1] == str(clip)
         assert started[0][2]["split_tracks"] and started[0][2]["reexport"]
