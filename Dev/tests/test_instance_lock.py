@@ -1,6 +1,8 @@
+import logging
 import os
 import subprocess
 import sys
+import time
 
 import clipem_common
 import pytest
@@ -80,7 +82,6 @@ def test_releasing_hands_the_lock_to_the_next_instance(tmp_path):
 
 # --- Helper windows closing with the tray widget (Linux) -------------------
 
-import time  # noqa: E402
 
 _PARENT = r"""
 import os, subprocess, sys, time
@@ -189,3 +190,33 @@ def test_stale_tray_lock_never_stops_an_unrelated_process(tmp_path, monkeypatch)
         for proc in (other, tray):
             proc.kill()
             proc.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="zombies are read from /proc")
+def test_an_uncollected_process_isnt_alive():
+    """What's left of a tray widget stopped by the run.py that started it,
+    which restarts itself in place: its lock must be free for the new one."""
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    try:
+        assert clipem_common.pid_alive(child.pid)
+        child.terminate()
+        deadline = time.monotonic() + 5
+        while clipem_common.pid_alive(child.pid) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not clipem_common.pid_alive(child.pid)
+    finally:
+        child.wait()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="zombies are read from /proc")
+def test_a_stopped_child_tray_frees_its_lock_at_once(tmp_path, monkeypatch):
+    lock = tmp_path / ".tray.lock"
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+    lock.write_text(str(child.pid))
+    monkeypatch.setattr(clipem_common, "TRAY_LOCK_PATH", str(lock))
+    monkeypatch.setattr(clipem_common, "is_tray_widget_process", lambda pid: True)
+    started = time.monotonic()
+    clipem_common.stop_tray_widget(logging.getLogger("test"))
+    assert time.monotonic() - started < 3  # not stop_tray_widget's whole 5 s wait
+    assert clipem_common.acquire_instance_lock(str(lock))
+

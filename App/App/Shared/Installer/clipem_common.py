@@ -125,6 +125,17 @@ def save_run_config(config):
     write_json_atomic(RUN_CONFIG_PATH, config)
 
 
+def _is_zombie(pid):
+    """Linux: an ended process its parent hasn't collected yet still answers
+    os.kill(pid, 0) - run.py restarting itself in place never collects the
+    tray widget it started, whose lock then looked taken."""
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8", errors="replace") as f:
+            return f.read().rpartition(")")[2].split()[0] == "Z"  # the name can hold spaces and ")"
+    except (OSError, IndexError):
+        return False
+
+
 def pid_alive(pid):
     if sys.platform == "win32":
         import ctypes
@@ -142,6 +153,7 @@ def pid_alive(pid):
         return False
     except PermissionError:
         return True  # exists, just owned by someone else
+    return not _is_zombie(pid)
     return True
 
 
@@ -331,6 +343,11 @@ def stop_tray_widget(log, timeout_seconds=5):
     deadline = time.monotonic() + timeout_seconds
     while pid_alive(pid) and time.monotonic() < deadline:
         time.sleep(0.1)
+    if sys.platform != "win32":
+        try:
+            os.waitpid(pid, os.WNOHANG)  # if it's this process's child: macOS has no /proc to tell
+        except OSError:
+            pass
 
 
 PR_SET_PDEATHSIG = 1  # linux/prctl.h

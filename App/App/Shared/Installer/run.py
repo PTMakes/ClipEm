@@ -637,8 +637,13 @@ def _show_update_finished(old, new):
     buttons.pack(anchor="e")
 
     def show_new_settings():
-        _request_settings([setting["key"] for setting in added])
         root.destroy()
+        if _tray_widget_running():
+            _request_settings([setting["key"] for setting in added])
+        else:
+            log.warning("Show New Settings: the tray widget isn't running.")
+            _show_error("Settings opens from ClipEm's tray icon, which isn't running. "
+                        "Start ClipEm again, then open Settings from the tray icon.")
 
     if added:
         tkinter.Button(buttons, text="Show New Settings", command=show_new_settings).pack(side="left", padx=(0, 8))

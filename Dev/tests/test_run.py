@@ -196,6 +196,7 @@ def test_update_finished_window_offers_the_new_settings(monkeypatch, tmp_path, n
     request = tmp_path / ".settings.request"
     monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(history))
     monkeypatch.setattr(run, "SETTINGS_REQUEST_PATH", str(request))
+    monkeypatch.setattr(run, "_tray_widget_running", lambda: True)
     found = {}
 
     def press(root, *_args):
@@ -218,6 +219,35 @@ def test_update_finished_window_offers_the_new_settings(monkeypatch, tmp_path, n
         assert "New in Settings: Post-clip." in found["labels"]
     else:
         assert not request.exists()
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+def test_show_new_settings_says_so_when_the_tray_is_gone(monkeypatch, tmp_path):
+    import tkinter
+
+    history = tmp_path / "release_notes.json"
+    history.write_text(json.dumps([{"version": "1.4.9", "date": "2026-11-01", "sections": {"Fixes": ["One."]},
+                                    "new_settings": [{"key": "post_clip", "name": "Post-clip"}]}]))
+    request = tmp_path / ".settings.request"
+    errors = []
+    monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(history))
+    monkeypatch.setattr(run, "SETTINGS_REQUEST_PATH", str(request))
+    monkeypatch.setattr(run, "_tray_widget_running", lambda: False)
+    monkeypatch.setattr(run, "_show_error", errors.append)
+
+    def press(root, *_args):
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tkinter.Button) and child.cget("text") == "Show New Settings":
+                    child.invoke()
+                    return
+                walk(child)
+
+        walk(root)
+
+    monkeypatch.setattr(tkinter.Misc, "mainloop", press)
+    run._show_update_finished("1.4.8", "1.4.9")
+    assert not request.exists() and len(errors) == 1 and "tray icon" in errors[0]
 
 
 def test_update_is_never_installed_without_asking(update_flow):
