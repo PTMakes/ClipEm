@@ -6,15 +6,16 @@ tray-widget/stuck_screen.py, disk_space.py and Scripts/stuck_output_check.py."""
 
 STUCK_SCREEN = (
     "Every 10 seconds ClipEm looks at a small copy of OBS's screen capture (in memory - nothing is saved). "
-    "If the picture hasn't changed for about 50 seconds, the capture has probably frozen, so ClipEm restarts "
-    "it and lets you know. On Linux it also notices when the screen-sharing stream stops (for example after "
-    "a display sleeps) and asks you to pick the screen again."
+    "If the picture hasn't changed for about 50 seconds while you're using the PC, the capture has probably "
+    "frozen, so ClipEm restarts it and lets you know. A screen that's just static is left alone. On Linux it also notices when ClipEm loses access to your screen (for example after "
+    "sleep or a restart), opens the screen picker and asks you to pick your screen again."
 )
 
 BLACK_SCREEN = (
     "Every 10 seconds ClipEm checks what OBS is recording. If it has been completely black for about "
     "30 seconds, ClipEm shows the screen capture again if it was hidden, points it back at your screen and "
-    "restarts it, then lets you know."
+    "restarts it, then lets you know. On Linux it opens the screen picker for you to choose your screen again, "
+    "unless the screen is locked."
 )
 
 DISK_SPACE = (

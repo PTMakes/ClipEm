@@ -7,7 +7,10 @@ separate checks, each with its own on/off setting:
 
 - Stuck screen: the screen-capture source's frame is hashed, and only the
   hash kept until the next check. STUCK_CHECKS identical frames in a row
-  (a frozen capture) triggers a recovery.
+  (a frozen capture) triggers a recovery. A screen with nothing happening
+  on it looks just the same, so identical frames only count while someone
+  is using the PC, where that can be told (input_activity.py), and a recovery
+  that changes nothing waits longer each time (STUCK_BACKOFF_SECONDS).
 - Black screen: OBS's program output (what gets recorded) is checked for
   pure black. BLACK_CHECKS black frames in a row triggers a recovery.
 
@@ -24,7 +27,23 @@ the stream going into "error" (see PipeWireStreamWatch), and then the
 source's own "Select Monitor" button is pressed PIPEWIRE_SETTLE_SECONDS
 later (rather than after STUCK_CHECKS frames) - a display waking from sleep
 or reconnecting takes a few seconds to come back, and a picker opened before
-then doesn't list it. Not over obs-websocket's PressInputPropertiesButton:
+then doesn't list it.
+
+A session can also never get going, with nothing in OBS's log to go on: KDE
+can fail to restore the saved screen choice after a restart and leave OBS
+waiting forever, with no stream at all. The source then has no picture, which
+is how that's spotted, PIPEWIRE_NO_PICTURE_SETTLE_SECONDS later - longer, as
+a picker can legitimately be open at the first launch. And black output with
+a stream running can't be fixed from here either, so that's a new session
+too. None of these open a picker while the session is locked.
+
+PipeWire only sends a new frame when something changes, so identical frames
+mean nothing there on their own. Where the mouse can be seen (KDE), they only
+count while it's moving on the captured screen, drawn into the capture, which
+proves the picture froze: that gets a new session too. Everywhere else, such
+as GNOME, the ordinary recovery runs like on other platforms.
+
+The button is not pressed over obs-websocket's PressInputPropertiesButton:
 that runs it on obs-websocket's thread, where the new portal session never
 gets going. Instead the tray sets PIPEWIRE_RELOAD_REQUEST_KEY in the
 source's settings and ClipEm's OBS script (Scripts/stuck_output_check.py)
@@ -43,6 +62,7 @@ import io
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 
@@ -70,6 +90,9 @@ PIPEWIRE_RETRY_SECONDS = 2 * 60
 # How long a stream has to stay dead before the first picker opens, so the
 # displays that just woke up / reconnected are all listed in it.
 PIPEWIRE_SETTLE_SECONDS = 8
+# How long a capture has to have no picture and no stream state to go on, so a
+# session that's just slow, or a picker the user is answering, is left alone.
+PIPEWIRE_NO_PICTURE_SETTLE_SECONDS = 30
 # Stream states (pipewire's pw_stream_state_as_string) that mean no picture
 # is coming: "error" when it died, "unconnected" after the old stream is
 # torn down and no screen has been picked for a new one yet.
@@ -78,6 +101,10 @@ PIPEWIRE_DEAD_STATES = (b"error", b"unconnected")
 CHECK_INTERVAL_SECONDS = 10
 STUCK_CHECKS = 5  # identical frames in a row before recovering the capture
 BLACK_CHECKS = 3  # black program frames in a row before recovering the capture
+# Identical frames count while the PC was used this many check intervals ago at most.
+ACTIVE_INTERVALS = 2
+# Waits after each stuck-screen recovery that didn't change the picture.
+STUCK_BACKOFF_SECONDS = (60, 2 * 60, 5 * 60, 15 * 60)
 
 # Frames are compared downscaled to this width (OBS keeps the aspect
 # ratio) - plenty to tell a live capture from a frozen one, and it keeps
@@ -241,6 +268,21 @@ class PipeWireStreamWatch:
         return last.group(2).decode()
 
 
+def session_locked():
+    """Whether the desktop is locked: a screen picker would open behind the
+    lock screen, and a black picture is expected. False if it can't be told."""
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        result = subprocess.run(
+            ["loginctl", "show-session", os.environ.get("XDG_SESSION_ID") or "auto", "-p", "LockedHint", "--value"],
+            capture_output=True, text=True, timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return result.stdout.strip() == "yes"
+
+
 def show_capture(client, capture):
     if capture.scene_name is not None and not capture.enabled:
         log.warning(f"'{capture.name}' was hidden in scene '{capture.scene_name}'; showing it again.")
@@ -276,6 +318,10 @@ def recover_capture_source(client, capture, display_choice=None):
             settings.update(wanted)
     client.call("SetInputSettings", {"inputName": capture.name, "inputSettings": settings, "overlay": True})
     fit_to_canvas(client, capture)
+
+
+def cursor_in_capture(client, capture):
+    return bool(client.call("GetInputSettings", {"inputName": capture.name})["inputSettings"].get("ShowCursor", True))
 
 
 def fit_to_canvas(client, capture):
@@ -314,12 +360,18 @@ class StuckScreenMonitor:
     each recovery, and a heartbeat every HEARTBEAT_SECONDS."""
 
     def __init__(self, notify, display_choice=None, pipewire_watch=None, interval_seconds=CHECK_INTERVAL_SECONDS,
-                 stuck_checks=STUCK_CHECKS, black_checks=BLACK_CHECKS, clock=time.monotonic):
+                 stuck_checks=STUCK_CHECKS, black_checks=BLACK_CHECKS, clock=time.monotonic,
+                 is_locked=session_locked, input_seconds=lambda: None):
         self._notify = notify
         self.display_choice = display_choice or DisplayChoice()
         self._pipewire_watch = pipewire_watch or PipeWireStreamWatch()
         self._last_pipewire_restart = None  # clock() of the last restart while the stream stays dead
         self._pipewire_dead_since = None  # clock() when the stream was first seen dead
+        self._last_picture_restart = None  # clock() of the last new session for a bad picture
+        self._is_locked = is_locked
+        self._input_seconds = input_seconds  # () -> seconds since the last input, None if unknown
+        self._stuck_recoveries = 0  # in a row, without the picture changing
+        self._stuck_quiet_until = None  # clock() until when another recovery waits
         self._interval = interval_seconds
         self._stuck_checks = stuck_checks
         self._black_checks = black_checks
@@ -398,6 +450,9 @@ class StuckScreenMonitor:
 
         if capture is not None and capture.kind in PIPEWIRE_INPUT_KINDS:
             dead = self._pipewire_watch.dead_stream()
+            settle = PIPEWIRE_SETTLE_SECONDS
+            if dead is None and self._has_no_picture(client, capture):
+                dead, settle = "no picture", PIPEWIRE_NO_PICTURE_SETTLE_SECONDS
             if dead is None:
                 self._last_pipewire_restart = None
                 self._pipewire_dead_since = None
@@ -406,14 +461,16 @@ class StuckScreenMonitor:
                 if self._last_pipewire_restart is None:
                     if self._pipewire_dead_since is None:
                         self._pipewire_dead_since = now
-                    settle_left = self._pipewire_dead_since + PIPEWIRE_SETTLE_SECONDS - now
+                    settle_left = self._pipewire_dead_since + settle - now
                     if settle_left > 0:
                         log.info(f"PipeWire capture: no stream ({dead}) - giving the displays "
                                  f"{settle_left:.0f}s to come back before opening the screen picker.")
                         # Check again as soon as that's up, not a whole interval later.
                         self._next_check = min(self._next_check, now + settle_left)
                         return
-                if self._last_pipewire_restart is None or now - self._last_pipewire_restart >= PIPEWIRE_RETRY_SECONDS:
+                if self._is_locked():
+                    log.info(f"PipeWire capture: no stream ({dead}) - waiting for the screen to be unlocked.")
+                elif self._last_pipewire_restart is None or now - self._last_pipewire_restart >= PIPEWIRE_RETRY_SECONDS:
                     retry = self._last_pipewire_restart is not None
                     self._last_pipewire_restart = now
                     self._restart_pipewire(client, capture, dead, retry)
@@ -422,10 +479,21 @@ class StuckScreenMonitor:
                 return
 
         if stuck_on and capture is not None and self._check_stuck(client, capture):
-            self._recover(client, capture, "stuck")
+            self._on_stuck(client, capture)
             return
         if black_on and scene_name and self._check_black(client, scene_name):
             self._recover(client, capture, "black")
+
+    @staticmethod
+    def _has_no_picture(client, capture):
+        """OBS can't render a source that has no picture at all (0x0)."""
+        try:
+            frame_bytes(client, capture.name)
+        except ObsWebSocketError as exc:
+            if "render" not in str(exc):
+                raise
+            return True
+        return False
 
     def _check_stuck(self, client, capture):
         """True once the capture has shown the same frame STUCK_CHECKS times
@@ -448,11 +516,44 @@ class StuckScreenMonitor:
                 log.info(f"Stuck-screen check: '{capture.name}' changed again after "
                          f"{self._duplicates} identical frame(s).")
             self._last_digest, self._duplicates = digest, 0
+            self._stuck_recoveries, self._stuck_quiet_until = 0, None
+            return False
+        if not self._being_used(client, capture):
+            self._duplicates = 0  # nothing happening on screen is no fault
             return False
         self._duplicates += 1
-        log.info(f"Stuck-screen check: '{capture.name}' unchanged "
-                 f"({self._duplicates}/{self._stuck_checks} identical frames in a row).")
+        if not self._waiting_after_recovery():
+            log.info(f"Stuck-screen check: '{capture.name}' unchanged "
+                     f"({self._duplicates}/{self._stuck_checks} identical frames in a row).")
         return self._duplicates >= self._stuck_checks
+
+    def _being_used(self, client, capture):
+        """Whether identical frames say anything about the capture. Without a
+        way to tell if the PC's in use, they have to."""
+        seconds = self._input_seconds()
+        if seconds is None:
+            return True
+        if seconds > self._interval * ACTIVE_INTERVALS:
+            return False
+        return capture.kind not in PIPEWIRE_INPUT_KINDS or cursor_in_capture(client, capture)
+
+    def _waiting_after_recovery(self):
+        return self._stuck_quiet_until is not None and self._clock() < self._stuck_quiet_until
+
+    def _on_stuck(self, client, capture):
+        if self._waiting_after_recovery():
+            self._duplicates = 0
+            return
+        wait = STUCK_BACKOFF_SECONDS[min(self._stuck_recoveries, len(STUCK_BACKOFF_SECONDS) - 1)]
+        self._stuck_recoveries += 1
+        self._stuck_quiet_until = self._clock() + wait
+        if capture.kind in PIPEWIRE_INPUT_KINDS and self._input_seconds() is not None:
+            seconds = self._stuck_checks * self._interval
+            self.forget()
+            self._new_session(client, capture, f"The screen capture hasn't changed for {seconds:.0f}s "
+                                               "with the mouse moving on it")
+        else:
+            self._recover(client, capture, "stuck")
 
     def _check_black(self, client, scene_name):
         """True once OBS's program output has been pure black BLACK_CHECKS
@@ -481,6 +582,9 @@ class StuckScreenMonitor:
             log.warning(f"{problem}, but there's no screen-capture source to restart.")
             self._notify_limited(f"{problem}. Check the sources in OBS.")
             return
+        if reason == "black" and capture.kind in PIPEWIRE_INPUT_KINDS:
+            self._new_session(client, capture, problem)
+            return
         log.warning(f"{problem}; recovering {capture.describe()}.")
         recover_capture_source(client, capture, self.display_choice)
         self._notify_limited(
@@ -488,17 +592,30 @@ class StuckScreenMonitor:
             "If clips still look wrong, check the capture source in OBS."
         )
 
+    def _new_session(self, client, capture, problem):
+        """Re-applying a PipeWire capture's settings can't bring its picture
+        back, so it's a new session or nothing."""
+        now = self._clock()
+        if self._is_locked():
+            log.info(f"{problem}, but the screen is locked - leaving the capture alone.")
+        elif self._last_picture_restart is not None and now - self._last_picture_restart < PIPEWIRE_RETRY_SECONDS:
+            log.info(f"{problem} - waiting for a screen to be picked.")
+        else:
+            self._last_picture_restart = now
+            log.warning(f"{problem}.")
+            self._restart_pipewire(client, capture, "no new picture", False)
+
     def _restart_pipewire(self, client, capture, state, retry):
         self.forget()
         if retry:
             log.warning(f"PipeWire capture of {capture.describe()} still has no stream ({state}) "
                         f"{PIPEWIRE_RETRY_SECONDS}s after restarting it; starting a new capture session again.")
         else:
-            log.warning(f"OBS's log shows the PipeWire stream of {capture.describe()} stopped ({state}), "
-                        "e.g. its display was disconnected; starting a new capture session.")
+            log.warning(f"The PipeWire capture of {capture.describe()} has lost its screen ({state}); "
+                        "starting a new capture session.")
         restart_pipewire_session(client, capture)
-        message = ("The screen capture stopped (was a display disconnected?). "
-                   "Pick your screen in the dialog that just opened so ClipEm can keep recording.")
+        message = ("ClipEm lost access to your screen, which can happen after sleep, a restart or a display "
+                   "change. Pick your screen in the window that just opened so ClipEm can keep recording.")
         # Not rate-limited, retries included: nothing is recorded until the
         # user picks a screen, and the first one may well have popped up
         # while the display was still disconnected.

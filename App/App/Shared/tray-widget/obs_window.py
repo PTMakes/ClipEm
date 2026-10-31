@@ -368,6 +368,36 @@ def _x11_visible(pids):
 KWIN_WATCH_SCRIPT_NAME = "clipem-obs-window-watch"
 
 
+def unload_kwin_script(name, path=None):
+    """Unloads a KWin script that stays loaded, and removes its file."""
+    _run(["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
+          "unloadScript", "s", name])
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def load_kwin_script(source, name):
+    """Runs JS in KWin under `name` until unload_kwin_script(). Returns its
+    file's path, or None if KWin wouldn't load it."""
+    # Also clears one left behind by a tray widget that crashed - KWin
+    # refuses to load a second script under the same name.
+    unload_kwin_script(name)
+    with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+        f.write(source)
+    code, out = _run(["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
+                      "loadScript", "ss", f.name, name])
+    parts = out.split()
+    if code == 0 and len(parts) == 2 and parts[0] == "i" and parts[1] != "-1":
+        _run(["busctl", "--user", "call", "org.kde.KWin", f"/Scripting/Script{parts[1]}",
+              "org.kde.kwin.Script", "run"])
+        return f.name
+    unload_kwin_script(name, f.name)
+    return None
+
+
 def kwin_watch_script(pids, tray_bus_name):
     """KWin script (JS) that stays loaded and tells the tray widget (via
     sni_tray's app.clipem.Tray ObsWindowVisible) whenever OBS's window
@@ -434,33 +464,14 @@ class ObsWindowState:
 
     def _start_kwin_watch(self, pids, tray_bus_name):
         self.stop()
-        # Also clears one left behind by a tray widget that crashed - KWin
-        # refuses to load a second script under the same name.
-        _run(["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
-              "unloadScript", "s", KWIN_WATCH_SCRIPT_NAME])
-        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
-            f.write(kwin_watch_script(pids, tray_bus_name))
-            self._watch_script = f.name
-        code, out = _run(["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
-                          "loadScript", "ss", self._watch_script, KWIN_WATCH_SCRIPT_NAME])
-        parts = out.split()
-        if code == 0 and len(parts) == 2 and parts[0] == "i" and parts[1] != "-1":
-            _run(["busctl", "--user", "call", "org.kde.KWin", f"/Scripting/Script{parts[1]}",
-                  "org.kde.kwin.Script", "run"])
-            self._watch_pids = pids
-        else:
+        self._watch_script = load_kwin_script(kwin_watch_script(pids, tray_bus_name), KWIN_WATCH_SCRIPT_NAME)
+        if self._watch_script is None:
             self.log.warning("Couldn't load the KWin script that tracks OBS's window.")
-            self._watch_pids = pids  # don't retry every poll
+        self._watch_pids = pids  # also when it failed: don't retry every poll
 
     def stop(self):
         """Unloads the KWin script (on tray exit, or when OBS closes)."""
         if self._watch_pids is None and self._watch_script is None:
             return
-        _run(["busctl", "--user", "call", "org.kde.KWin", "/Scripting", "org.kde.kwin.Scripting",
-              "unloadScript", "s", KWIN_WATCH_SCRIPT_NAME])
-        if self._watch_script:
-            try:
-                os.remove(self._watch_script)
-            except OSError:
-                pass
+        unload_kwin_script(KWIN_WATCH_SCRIPT_NAME, self._watch_script)
         self._watch_pids = self._watch_script = None

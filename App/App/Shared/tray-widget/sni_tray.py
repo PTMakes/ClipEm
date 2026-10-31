@@ -109,6 +109,12 @@ class _ClipEmInterface(ServiceInterface):
             # Off the D-Bus loop, like menu actions (see _run_action).
             threading.Thread(target=callback, args=(bool(visible),), daemon=True).start()
 
+    @method()
+    def MouseMoved(self, screen: "s"):
+        callback = self._icon.mouse_moved_callback
+        if callback is not None:
+            callback(screen)  # only notes the time
+
 
 class _StatusNotifierItemInterface(ServiceInterface):
     def __init__(self, icon):
@@ -357,6 +363,8 @@ class Icon:
         # bool for ObsWindowVisible reports (see _ClipEmInterface).
         self.bus_name = None
         self.obs_window_callback = None
+        # The name of the screen the mouse is moving on (input_activity.py).
+        self.mouse_moved_callback = None
         self._sni_iface = None
         self._menu_iface = None
         self._stop_event = None

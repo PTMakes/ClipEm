@@ -6,6 +6,7 @@ import base64
 import glob
 import io
 import os
+import subprocess
 import sys
 import types
 
@@ -18,7 +19,8 @@ sys.path.insert(0, TRAY_WIDGET_DIR)
 import stuck_screen  # noqa: E402
 from obsws_client import ObsWebSocketError  # noqa: E402
 
-KIND = stuck_screen.CAPTURE_INPUT_KINDS[0]
+# Not PipeWire on Linux: that has its own tests below.
+KIND = stuck_screen.CAPTURE_INPUT_KINDS[-1]
 
 
 def png(color, size=(16, 9)):
@@ -119,15 +121,18 @@ def test_resets_and_notifies_after_stuck_checks_identical_frames(monitor):
 
     run(client, b"a", b"a", b"a")
     assert len(client.requests("SetInputSettings")) == 1  # counting starts over after each recovery
-    run(client, b"a")
+    mon.clock.now += stuck_screen.STUCK_BACKOFF_SECONDS[0]
+    run(client, b"a", b"a", b"a", b"a")
     assert len(client.requests("SetInputSettings")) == 2
 
 
 def test_notifies_at_most_once_per_cooldown(monitor):
     mon, notifications, run = monitor
     client = FakeClient()
-    run(client, *[b"a"] * 12)  # three recoveries
-    assert len(client.requests("SetInputSettings")) == 3
+    run(client, *[b"a"] * 4)
+    mon.clock.now += stuck_screen.STUCK_BACKOFF_SECONDS[0]
+    run(client, *[b"a"] * 4)  # a second recovery
+    assert len(client.requests("SetInputSettings")) == 2
     assert len(notifications) == 1
     mon.clock.now += stuck_screen.NOTIFY_COOLDOWN_SECONDS
     run(client, *[b"a"] * 4)
@@ -405,22 +410,95 @@ def reload_requests(client):
             if stuck_screen.PIPEWIRE_RELOAD_REQUEST_KEY in r["inputSettings"]]
 
 
-def pipewire_monitor(tmp_path):
+def pipewire_monitor(tmp_path, black=False, is_locked=lambda: False, input_seconds=lambda: None):
     notifications = []
     clock = Clock()
     mon = stuck_screen.StuckScreenMonitor(
         notifications.append, pipewire_watch=stuck_screen.PipeWireStreamWatch(str(tmp_path)),
-        interval_seconds=10, stuck_checks=3, clock=clock)
+        interval_seconds=10, stuck_checks=3, black_checks=2, clock=clock, is_locked=is_locked,
+        input_seconds=input_seconds)
     client = FakeClient(scene_items=[
         {"inputKind": PIPEWIRE, "sourceName": "Screen Capture (PipeWire)", "sceneItemId": 2,
          "sceneItemEnabled": True},
     ])
 
     def tick():
-        mon.tick(client, lambda: True, lambda: False)
+        mon.tick(client, lambda: True, lambda: black)
         clock.now += 10
 
     return client, notifications, tick
+
+
+NO_PICTURE = ObsWebSocketError("GetSourceScreenshot failed: Failed to render screenshot.")
+
+
+def test_a_session_that_never_started_reopens_the_picker(tmp_path):
+    """KDE failing to restore the saved screen after a restart: OBS's log has
+    no stream state at all, and the source simply has no picture."""
+    (tmp_path / "obs.txt").write_text('17:27:22.100: [pipewire] Asking for monitor and window\n')
+    client, notifications, tick = pipewire_monitor(tmp_path)
+    client.frame = NO_PICTURE
+    for _ in range(stuck_screen.PIPEWIRE_NO_PICTURE_SETTLE_SECONDS // 10):
+        tick()
+    assert reload_requests(client) == []  # a picker may be open, or it's just slow
+    tick()
+    assert len(reload_requests(client)) == 1
+    assert len(notifications) == 1 and "Pick your screen" in notifications[0]
+    assert "after sleep, a restart" in notifications[0]
+    for _ in range(stuck_screen.PIPEWIRE_RETRY_SECONDS // 10):
+        tick()
+    assert len(reload_requests(client)) == 2
+
+
+def test_a_slow_session_that_starts_opens_no_picker(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path)
+    client.frame = NO_PICTURE
+    tick()
+    tick()
+    for number in range(8):
+        client.frame = b"picture %d" % number
+        tick()
+    assert reload_requests(client) == [] and notifications == []
+
+
+def test_no_picker_opens_while_the_screen_is_locked(tmp_path):
+    (tmp_path / "obs.txt").write_text("")
+    locked = {"value": True}
+    client, notifications, tick = pipewire_monitor(tmp_path, is_locked=lambda: locked["value"])
+    client.frame = NO_PICTURE
+    for _ in range(10):
+        tick()
+    assert reload_requests(client) == [] and notifications == []
+    locked["value"] = False
+    tick()  # unlocked: straight away, the wait is long over
+    assert len(reload_requests(client)) == 1
+
+
+def test_black_output_on_pipewire_opens_the_picker_not_a_useless_restart(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path, black=True)
+    client.program = BLACK
+    tick()
+    assert reload_requests(client) == []
+    tick()
+    assert len(reload_requests(client)) == 1 and len(client.requests("SetInputSettings")) == 1
+    assert len(notifications) == 1 and "Pick your screen" in notifications[0]
+    for _ in range(stuck_screen.PIPEWIRE_RETRY_SECONDS // 10 - 2):  # the picker may be open: leave it
+        tick()
+    assert len(reload_requests(client)) == 1
+    for _ in range(4):
+        tick()
+    assert len(reload_requests(client)) == 2
+
+
+def test_black_while_locked_is_left_alone(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path, black=True, is_locked=lambda: True)
+    client.program = BLACK
+    for _ in range(6):
+        tick()
+    assert client.requests("SetInputSettings") == [] and notifications == []
 
 
 def test_a_dead_pipewire_stream_is_restarted_after_settling_then_retried(tmp_path):
@@ -490,12 +568,122 @@ def test_a_capture_with_no_picture_counts_as_stuck(monitor):
     assert len(client.requests("SetInputSettings")) == 1
 
 
-def test_a_static_pipewire_screen_never_opens_the_picker(tmp_path):
+def test_pipewire_without_a_way_to_see_the_mouse_uses_the_ordinary_recovery(tmp_path):
+    """GNOME and the like: identical frames count, and no picker opens."""
     (tmp_path / "obs.txt").write_text(LOG_START)
     client, notifications, tick = pipewire_monitor(tmp_path)
     client.frame = b"same"
     for _ in range(8):
         tick()
     assert reload_requests(client) == []
-    assert len(client.requests("SetInputSettings")) == 2  # the ordinary recovery still runs
+    assert len(client.requests("SetInputSettings")) == 1 and len(notifications) == 1
+    assert "restarted the screen capture" in notifications[0]
+
+
+def test_a_frozen_pipewire_capture_opens_the_picker_when_the_mouse_proves_it(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path, input_seconds=lambda: 1.0)
+    client.frame = b"same"
+    for _ in range(4):
+        tick()
+    assert len(reload_requests(client)) == 1
+    assert len(notifications) == 1 and "Pick your screen" in notifications[0]
+
+
+def test_a_static_pipewire_screen_with_nobody_there_opens_nothing(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path, input_seconds=lambda: 60.0)
+    client.frame = b"same"
+    for _ in range(8):
+        tick()
+    assert client.requests("SetInputSettings") == [] and notifications == []
+
+
+def test_a_mouse_that_isnt_drawn_in_the_capture_proves_nothing(tmp_path):
+    (tmp_path / "obs.txt").write_text(LOG_START)
+    client, notifications, tick = pipewire_monitor(tmp_path, input_seconds=lambda: 1.0)
+    client.capture_settings = {"ShowCursor": False}
+    client.frame = b"same"
+    for _ in range(8):
+        tick()
+    assert client.requests("SetInputSettings") == [] and notifications == []
+
+
+def _backoff_monitor(input_seconds=lambda: None):
+    notifications = []
+    clock = Clock()
+    mon = stuck_screen.StuckScreenMonitor(notifications.append, interval_seconds=10, stuck_checks=3, clock=clock,
+                                          input_seconds=input_seconds)
+    client = FakeClient()
+
+    def run(seconds, frame=b"same"):
+        for _ in range(seconds // 10):
+            client.frame = frame
+            mon.tick(client, lambda: True, lambda: False)
+            clock.now += 10
+
+    return client, notifications, run
+
+
+def test_recoveries_that_change_nothing_wait_longer_each_time():
+    client, _notifications, run = _backoff_monitor()
+    times = []
+    done = 0
+    for minute_tenths in range(0, 180):
+        run(10)
+        count = len(client.requests("SetInputSettings"))
+        if count > done:
+            done = count
+            times.append(minute_tenths * 10)
+    gaps = [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
+    assert gaps[:3] == sorted(gaps[:3])
+    for gap, wait in zip(gaps, stuck_screen.STUCK_BACKOFF_SECONDS, strict=False):
+        assert gap >= wait
+
+
+def test_a_changed_picture_ends_the_wait():
+    client, _notifications, run = _backoff_monitor()
+    run(40)
+    assert len(client.requests("SetInputSettings")) == 1
+    run(10, frame=b"moved")
+    run(40)
+    assert len(client.requests("SetInputSettings")) == 2  # counted afresh, no wait
+
+
+def test_waiting_logs_nothing(caplog):
+    _client, _notifications, run = _backoff_monitor()
+    run(40)
+    caplog.clear()
+    with caplog.at_level("INFO", logger="tray"):
+        run(30)
+    assert caplog.records == []
+
+
+def test_identical_frames_dont_count_while_the_pc_is_idle():
+    client, notifications, run = _backoff_monitor(input_seconds=lambda: 120.0)
+    run(200)
+    assert client.requests("SetInputSettings") == [] and notifications == []
+
+
+def test_identical_frames_count_while_the_pc_is_in_use():
+    client, _notifications, run = _backoff_monitor(input_seconds=lambda: 1.0)
+    run(40)
+    assert len(client.requests("SetInputSettings")) == 1
     assert reload_requests(client) == []
+
+
+@pytest.mark.parametrize("output, expected", [("yes\n", True), ("no\n", False), ("", False)])
+def test_session_locked_asks_logind(monkeypatch, output, expected):
+    monkeypatch.setattr(stuck_screen.sys, "platform", "linux")
+    monkeypatch.setattr(stuck_screen.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 0, output, ""))
+    assert stuck_screen.session_locked() is expected
+
+
+def test_session_locked_is_false_without_loginctl(monkeypatch):
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError("loginctl")
+
+    monkeypatch.setattr(stuck_screen.sys, "platform", "linux")
+    monkeypatch.setattr(stuck_screen.subprocess, "run", missing)
+    assert stuck_screen.session_locked() is False
+

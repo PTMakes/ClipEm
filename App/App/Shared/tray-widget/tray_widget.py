@@ -70,6 +70,7 @@ from clipem_common import (  # noqa: E402
     stop_clip_editor,
 )
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
+from input_activity import InputActivity  # noqa: E402
 from mic_check import EVENT_SUBSCRIPTIONS, MicCheck  # noqa: E402
 from obs_notices import ObsPlugin  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
@@ -339,10 +340,12 @@ class TrayApp:
         self.obs_window = obs_window.ObsWindowState(log)  # for Show OBS / Hide OBS
         # OBS's ClipEm plugin: OBS's errors and messages, and showing/hiding it.
         self.obs_plugin = ObsPlugin(self._notify, on_window_change=self._on_obs_window_reported)
+        self.input_activity = InputActivity(log)
         self.stuck_screen = StuckScreenMonitor(
             self._notify,
             DisplayChoice(obs_config.load_setup_capture_display, obs_config.set_capture_display_user_changed),
             PipeWireStreamWatch(obs_config.OBS_LOG_DIR),
+            input_seconds=self.input_activity.seconds_since_input,
         )
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
         self.mic_check = MicCheck(self._notify)
@@ -362,6 +365,7 @@ class TrayApp:
         )
         if hasattr(self.icon, "obs_window_callback"):  # sni_tray (Linux)
             self.icon.obs_window_callback = self._on_obs_window_reported
+            self.icon.mouse_moved_callback = self.input_activity.mouse_moved
 
     def _build_menu(self):
         return pystray.Menu(
@@ -776,6 +780,7 @@ class TrayApp:
                 use_dark_menus()  # Settings > Use Dark Mode may have changed
                 self.icon.update_menu()
 
+                self.input_activity.start(getattr(self.icon, "bus_name", None))
                 self.stuck_screen.tick(self.client, self._stuck_check_enabled, self._black_check_enabled)
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
@@ -841,6 +846,7 @@ if __name__ == "__main__":
     finally:
         app.stop_children()
         app.obs_window.stop()
+        app.input_activity.stop()
         # The icon is gone: end the process now, rather than waiting on
         # whatever else is still running in it (a menu action closing OBS,
         # a stuck D-Bus or websocket call) - that left a python3 running in

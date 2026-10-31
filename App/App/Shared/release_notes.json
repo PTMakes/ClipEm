@@ -13,11 +13,13 @@
       "Improvements": [
         "On Windows and Linux, OBS now stays fully out of sight: ClipEm's tray icon is the only one, and OBS's errors and messages appear as ClipEm notifications.",
         "Settings and the clip editor have their own icons.",
-        "Settings' Clip Output/Devices tab now uses two columns, with Audio Devices beside the recording settings, so it fits without scrolling.",
-        "The ClipEm Is Already Open window can now kill a stuck ClipEm and OBS and start fresh."
+        "Settings' Clip Output/Devices tab now uses two columns, so it fits without scrolling.",
+        "The ClipEm Is Already Open window can now kill a stuck ClipEm and OBS and start fresh.",
+        "Stuck-screen detection now leaves a screen alone when nothing is happening on it, so fewer false alarms."
       ],
       "Fixes": [
-        "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden."
+        "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden.",
+        "If ClipEm loses access to your screen on Linux, it now opens the screen picker itself instead of asking you to fix it in OBS."
       ]
     }
   },
