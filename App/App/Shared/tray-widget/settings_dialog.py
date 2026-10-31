@@ -61,6 +61,7 @@ import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import popups  # noqa: E402
 import reinstall  # noqa: E402
+import release_notes  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
 from app_window import style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
@@ -1502,9 +1503,10 @@ def open_dialog(start_tab=None):
                 )
                 return
             changes = "\n".join(f"  \u2022 {line}" for line in updater.describe_update(result))
+            notes = f"Release notes:\n{result['release_notes']}\n\n" if result["release_notes"] else ""
             if popups.askyesno(
                 "Check for Updates",
-                f"An update is available:\n\n{changes}\n\nInstall it now? This closes OBS and the "
+                f"An update is available:\n\n{changes}\n\n{notes}Install it now? This closes OBS and the "
                 "tray icon, updates ClipEm and starts them again.\n\n(Choosing No offers it again the "
                 "next time ClipEm starts.)",
             ):
@@ -1527,6 +1529,22 @@ def open_dialog(start_tab=None):
 
         check_button = tk.Button(frame, text="Check for Updates", command=on_check_for_updates)
         check_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        next_row += 1
+
+        def on_release_notes():
+            dialog = tk.Toplevel(root)
+            dialog.title("Release Notes")
+            dialog.transient(root)
+            body = tk.Frame(dialog, padx=px(16), pady=px(12))
+            body.pack(fill="both", expand=True)
+            parts = release_notes.lines(release_notes.load()) or [(None, "No release notes were found.")]
+            release_notes.notes_box(body, parts, width=80, height=26).pack(fill="both", expand=True)
+            tk.Button(body, text="Close", width=10, command=dialog.destroy).pack(anchor="e", pady=(px(10), 0))
+            dialog.bind("<Escape>", lambda _event: dialog.destroy())
+            popups.place(dialog, root)
+
+        tk.Button(frame, text="Release Notes", command=on_release_notes).grid(
+            row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
         next_row += 1
 
     # --- Troubleshooting: a bug report (sent, or saved as a zip), and a clean reinstall.

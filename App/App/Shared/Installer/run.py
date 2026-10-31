@@ -45,6 +45,7 @@ import obs_install  # noqa: E402
 import obs_process  # noqa: E402
 import portable_launch_helper as helper  # noqa: E402
 import reinstall  # noqa: E402
+import release_notes  # noqa: E402
 import updater  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
@@ -526,11 +527,9 @@ UPDATE_NOW, UPDATE_NEXT_LAUNCH, UPDATE_SKIP = "now", "next_launch", "skip"
 TRAY_WATCH_MS = 2000  # how often the update prompt checks the tray widget is still running
 
 
-def _ask_about_update(changes):
-    """Shows the update prompt listing `changes` (one line each) and returns
-    UPDATE_NOW, UPDATE_NEXT_LAUNCH, UPDATE_SKIP, or None if it was closed
-    without choosing (or can't be shown) - then it's simply offered again at
-    the next launch."""
+def _prompt_window(title):
+    """A window of this launch's own, in front of whatever has focus - it's
+    launched at boot or from a shortcut - or None if it can't be shown."""
     try:
         _enable_windows_tk()
         import tkinter
@@ -538,16 +537,45 @@ def _ask_about_update(changes):
         root = tkinter.Tk(className="ClipEm")
         dark_theme.apply_theme(root)
     except Exception as exc:
-        log.info(f"(Couldn't show the update prompt: {exc})")
+        log.info(f"(Couldn't show \"{title}\": {exc})")
         return None
     app_window.set_window_icon(root)
-    root.title("ClipEm Update Available")
+    root.title(title)
     root.resizable(False, False)
-    # Launched at boot or from a shortcut - don't open hidden behind
-    # whatever window has focus.
     root.lift()
     root.attributes("-topmost", True)
     root.after(500, lambda: root.attributes("-topmost", False))
+    return root
+
+
+def _run_prompt(root):
+    """Shows root until it's closed. It belongs to this launch, not the tray
+    widget, so quitting the tray wouldn't close it: once the tray widget
+    started alongside it has quit, it's closed unanswered. The tray may not
+    be up yet when it opens, so it only counts once it's been seen running."""
+
+    def close_with_tray(seen_tray=False):
+        running = _tray_widget_running()
+        if seen_tray and not running:
+            log.info("The tray widget quit - closing the prompt.")
+            root.destroy()
+            return
+        root.after(TRAY_WATCH_MS, close_with_tray, seen_tray or running)
+
+    root.after(TRAY_WATCH_MS, close_with_tray)
+    root.mainloop()
+
+
+def _ask_about_update(changes, notes=""):
+    """Shows the update prompt listing `changes` (one line each), then the
+    new version's release notes if it has any, and returns UPDATE_NOW,
+    UPDATE_NEXT_LAUNCH, UPDATE_SKIP, or None if it was closed without
+    choosing (or can't be shown) - then it's simply offered again at the
+    next launch."""
+    root = _prompt_window("ClipEm Update Available")
+    if root is None:
+        return None
+    import tkinter
 
     choice = {}
 
@@ -559,12 +587,15 @@ def _ask_about_update(changes):
     frame.pack()
     tkinter.Label(
         frame, justify="left",
-        text=(
-            "An update for ClipEm is available:\n\n"
-            + "\n".join(f"  \u2022 {line}" for line in changes)
-            + "\n\nUpdating keeps all of your settings. Restarting closes and reopens\n"
-            "OBS and the tray icon - clips not saved yet are lost."
-        ),
+        text="An update for ClipEm is available:\n\n" + "\n".join(f"  \u2022 {line}" for line in changes),
+    ).pack(anchor="w", pady=(0, 12))
+    if notes:
+        tkinter.Label(frame, text="Release notes", font=("", 10, "bold")).pack(anchor="w")
+        release_notes.notes_box(frame, [(None, notes)]).pack(fill="x", pady=(0, 12))
+    tkinter.Label(
+        frame, justify="left",
+        text=("Updating keeps all of your settings. Restarting closes and reopens\n"
+              "OBS and the tray icon - clips not saved yet are lost."),
     ).pack(anchor="w", pady=(0, 12))
     for text, value in (
         ("Update and restart now", UPDATE_NOW),
@@ -573,23 +604,47 @@ def _ask_about_update(changes):
     ):
         tkinter.Button(frame, text=text, command=lambda v=value: choose(v)).pack(fill="x", pady=2)
     root.protocol("WM_DELETE_WINDOW", root.destroy)
-
-    def close_with_tray(seen_tray=False):
-        """The prompt belongs to this launch, not the tray widget, so quitting
-        the tray wouldn't close it: once the tray widget started alongside it
-        has quit, close it unanswered (it's offered again next launch). The
-        tray may not be up yet when the prompt opens, so it only counts once
-        it's been seen running."""
-        running = _tray_widget_running()
-        if seen_tray and not running:
-            log.info("The tray widget quit - closing the update prompt.")
-            root.destroy()
-            return
-        root.after(TRAY_WATCH_MS, close_with_tray, seen_tray or running)
-
-    root.after(TRAY_WATCH_MS, close_with_tray)
-    root.mainloop()
+    _run_prompt(root)
     return choice.get("value")
+
+
+def _show_update_finished(old, new):
+    """What an update from `old` to `new` brought. old None: it isn't known."""
+    root = _prompt_window("ClipEm Has Updated")
+    if root is None:
+        return
+    import tkinter
+
+    frame = tkinter.Frame(root, padx=20, pady=16)
+    frame.pack()
+    heading = f"ClipEm Has Updated From {old} to {new}" if old else f"ClipEm Has Updated To {new}"
+    tkinter.Label(frame, text=heading, font=("", 12, "bold")).pack(anchor="w", pady=(0, 10))
+    entries = release_notes.since(release_notes.load(), old, new)
+    # One version needs no heading of its own: the window's says it.
+    parts = release_notes.lines(entries, versions=len(entries) > 1) or [(None, release_notes.NO_NOTES)]
+    release_notes.notes_box(frame, parts, height=12).pack(fill="x", pady=(0, 12))
+    tkinter.Button(frame, text="OK", width=10, command=root.destroy).pack(anchor="e")
+    _run_prompt(root)
+
+
+def _note_version_started():
+    """Remembers this version and, if it's newer than the last one started,
+    says what changed - once: it's noted first, so a window that can't open
+    doesn't return every launch. A first launch has no last version and just
+    notes it. So does the first launch after an update from a version that
+    didn't note them, which only --post-update gives away, without the
+    version it came from."""
+    try:
+        current = updater.get_local_version()
+        last = updater.load_update_config()["last_version"]
+        if last == current:
+            return
+        updater.change_update_config(last_version=current)
+        if updater.is_newer(current, last) if last else POST_UPDATE_FLAG in sys.argv[1:]:
+            log.info(f"Updated from {last or 'an earlier version'} to {current}.")
+            _show_update_finished(last, current)
+    except Exception as exc:
+        log.warning(f"(Couldn't show what's new in this version: {exc})")
 
 
 def _offer_update():
@@ -614,7 +669,7 @@ def _offer_update():
             log.info(f"An update is available ({'; '.join(changes)}), but the user chose not to install it.")
             return
         log.info(f"An update is available ({'; '.join(changes)}) - asking the user.")
-        choice = _ask_about_update(changes)
+        choice = _ask_about_update(changes, result.get("release_notes", ""))
         log.info(f"Update prompt answer: {choice}")
         if choice == UPDATE_SKIP:
             updater.change_update_config(skipped_version=remote_version)
@@ -845,6 +900,7 @@ def main():
     else:
         sys.exit(f"Unsupported platform: {system}")
     if may_update:
+        _note_version_started()
         _offer_update()
 
 

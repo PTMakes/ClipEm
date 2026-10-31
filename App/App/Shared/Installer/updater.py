@@ -58,6 +58,7 @@ DEFAULT_UPDATE_CONFIG = {
     "check_for_updates": True,
     "install_on_next_launch": False,
     "skipped_version": None,
+    "last_version": None,  # the version last started, to tell after an update (run.py)
     "source_repo": DEFAULT_SOURCE_REPO,
     "update_channel": CHANNEL_RELEASES,
 }
@@ -322,16 +323,18 @@ def is_newer(remote_version, local_version):
 
 def check_for_update():
     """Returns {"local_version", "remote_version", "shared_update",
-    "channel_switch", "components", "update_available", "error"}:
-    shared_update is a newer ClipEm (App/Shared), components what
+    "channel_switch", "components", "update_available", "release_notes",
+    "error"}: shared_update is a newer ClipEm (App/Shared), components what
     components.check() found outdated outside it (OBS, the bundled Python,
     the tray's packages). channel_switch: a dev build on the "releases"
     channel is offered the current release even when that's older, so
-    switching back from "latest" gets off the dev build."""
+    switching back from "latest" gets off the dev build. release_notes:
+    the remote version's, or "" if this isn't an update to it."""
     local_version = get_local_version()
     result = {
         "local_version": local_version, "remote_version": None, "shared_update": False,
-        "channel_switch": False, "components": {}, "update_available": False, "error": None,
+        "channel_switch": False, "components": {}, "update_available": False, "release_notes": "",
+        "error": None,
     }
     try:
         config = load_update_config()
@@ -345,6 +348,8 @@ def check_for_update():
         and not is_dev_version(remote_version) and remote_version != local_version
     )
     result["shared_update"] = result["channel_switch"] or is_newer(remote_version, local_version)
+    if result["shared_update"]:
+        result["release_notes"] = manifest.get("release_notes", "")  # not in releases before they were added
     import components  # not at the top: components imports obs_install, which imports this module
 
     result["components"] = components.check(manifest)

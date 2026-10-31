@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import sys
@@ -53,12 +54,135 @@ def update_flow(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "_restart_self", restart_self)
     monkeypatch.setattr(run, "_show_error", lambda message: calls.append(("error", message)))
 
-    def ask(changes):
+    def ask(changes, notes=""):
         calls.append(("ask", changes))
         return answer["value"]
 
     monkeypatch.setattr(run, "_ask_about_update", ask)
     return run.updater.load_update_config, calls, lambda value: answer.update(value=value), available.update
+
+
+def test_update_prompt_gets_the_release_notes(update_flow, monkeypatch):
+    _config, _calls, _answer, available = update_flow
+    available({"release_notes": "New: post-clip."})
+    asked = []
+    monkeypatch.setattr(run, "_ask_about_update", lambda changes, notes="": asked.append(notes))
+    run._offer_update()
+    assert asked == ["New: post-clip."]
+
+
+def _prompt_text(monkeypatch, show):
+    """The real window's text, top to bottom, from its labels and notes box."""
+    import tkinter
+
+    texts = []
+
+    def read(widget):
+        if isinstance(widget, tkinter.Label):
+            texts.append(widget.cget("text"))
+        elif isinstance(widget, tkinter.Text):
+            assert widget.cget("state") == "disabled"
+            texts.append(widget.get("1.0", "end-1c"))
+        for child in widget.winfo_children():
+            read(child)
+
+    def read_and_close(root, *_args):
+        read(root)
+        root.destroy()
+
+    monkeypatch.setattr(tkinter.Misc, "mainloop", read_and_close)
+    show()
+    return texts
+
+
+def _update_prompt_text(monkeypatch, notes):
+    return _prompt_text(monkeypatch, lambda: run._ask_about_update(["ClipEm 1.0.0 -> 1.1.0"], notes))
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+def test_update_prompt_shows_the_notes_above_the_warning(monkeypatch):
+    labels = _update_prompt_text(monkeypatch, "New: post-clip.")
+    assert labels[1:3] == ["Release notes", "New: post-clip."]
+    assert labels[3].startswith("Updating keeps")
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+def test_update_prompt_without_notes_has_no_section(monkeypatch):
+    assert "Release notes" not in _update_prompt_text(monkeypatch, "")
+
+
+@pytest.fixture
+def started(tmp_path, monkeypatch):
+    """_note_version_started() on 1.5.0, returning what it showed: (old, new) or None."""
+    monkeypatch.setattr(sys, "argv", ["run.py"])
+    monkeypatch.setattr(run.updater, "UPDATE_CONFIG_PATH", str(tmp_path / "update_config.json"))
+    monkeypatch.setattr(run.updater, "get_local_version", lambda: "1.5.0")
+    shown = []
+    monkeypatch.setattr(run, "_show_update_finished", lambda old, new: shown.append((old, new)))
+
+    def start(last):
+        shown.clear()
+        run.updater.change_update_config(last_version=last)
+        run._note_version_started()
+        return shown[0] if shown else None
+
+    return start
+
+
+def test_a_newer_version_says_what_changed_once(started):
+    assert started("1.4.9") == ("1.4.9", "1.5.0")
+    run._note_version_started()
+    assert run.updater.load_update_config()["last_version"] == "1.5.0"
+    assert started("1.5.0") is None
+
+
+def test_a_first_launch_says_nothing_and_remembers(started):
+    assert started(None) is None
+    assert run.updater.load_update_config()["last_version"] == "1.5.0"
+
+
+def test_an_update_from_a_version_that_kept_no_record_has_no_from(started, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["run.py", run.POST_UPDATE_FLAG])
+    assert started(None) == (None, "1.5.0")
+
+
+def test_going_back_a_version_says_nothing(started):
+    assert started("1.6.0-dev.202610142130") is None
+
+
+def test_a_window_that_fails_doesnt_stop_the_launch_or_return(started, monkeypatch):
+    def fail(old, new):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr(run, "_show_update_finished", fail)
+    assert started("1.4.9") is None
+    assert run.updater.load_update_config()["last_version"] == "1.5.0"
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.parametrize("old, heading, shown", [
+    ("1.4.0", "ClipEm Has Updated From 1.4.0 to 1.4.2", ["Two.", "One."]),
+    ("1.4.1", "ClipEm Has Updated From 1.4.1 to 1.4.2", ["Two."]),
+    (None, "ClipEm Has Updated To 1.4.2", ["Two."]),
+])
+def test_update_finished_window(monkeypatch, tmp_path, old, heading, shown):
+    history = tmp_path / "release_notes.json"
+    history.write_text(json.dumps([{"version": "1.4.2", "date": "2026-11-01", "sections": {"Fixes": ["Two."]}},
+                                   {"version": "1.4.1", "date": "2026-10-31", "sections": {"Fixes": ["One."]}},
+                                   {"version": "1.4.0", "date": "2026-10-30", "sections": {"Fixes": ["Old."]}}]))
+    monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(history))
+    texts = _prompt_text(monkeypatch, lambda: run._show_update_finished(old, "1.4.2"))
+    assert texts[0] == heading
+    assert all(f"\u2022 {note}" in texts[1] for note in shown) and "Old." not in texts[1]
+    assert "Fixes" in texts[1]
+    assert ("1.4.2  (2026-11-01)" in texts[1]) == (len(shown) > 1)  # one version: the window's heading says it
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+def test_update_finished_window_without_notes(monkeypatch, tmp_path):
+    monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(tmp_path / "missing.json"))
+    texts = _prompt_text(monkeypatch, lambda: run._show_update_finished("1.4.0", "1.4.2"))
+    assert texts[1] == run.release_notes.NO_NOTES
 
 
 def test_update_is_never_installed_without_asking(update_flow):

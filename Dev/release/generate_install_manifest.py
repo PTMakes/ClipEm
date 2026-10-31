@@ -43,6 +43,8 @@ PBS_REPO = "astral-sh/python-build-standalone"
 # ClipEmSetupWindows.exe installers put in place. Setup still adds Tcl/Tk
 # and pip to one from these until ClipEm's updater replaces it.
 LEGACY_WINDOWS_PYTHON_VERSION = "3.12.10"
+# Settings' update popup shows them whole, and it doesn't scroll.
+MAX_RELEASE_NOTES_CHARS = 1500
 
 
 def parse_args(argv=None) -> argparse.Namespace:
@@ -68,7 +70,16 @@ def parse_args(argv=None) -> argparse.Namespace:
     parser.add_argument("--windows-pip-version", required=True)
     parser.add_argument("--macos-obs-version", required=True)
     parser.add_argument("--electron-version", required=True, help="Installer/editor_window.py's ELECTRON_VERSION")
+    parser.add_argument("--release-notes", help="Dev/releasenotes.txt - shown in the update prompts")
     return parser.parse_args(argv)
+
+
+def read_release_notes(path) -> str:
+    notes = Path(path).read_text(encoding="utf-8").strip() if path else ""
+    if len(notes) > MAX_RELEASE_NOTES_CHARS:
+        raise SystemExit(f"{path} has {len(notes)} characters - the most the update prompts show is "
+                         f"{MAX_RELEASE_NOTES_CHARS}.")
+    return notes
 
 
 def load_pins() -> dict:
@@ -209,6 +220,7 @@ def main(argv=None) -> None:
         # Corresponding source for the GPL binaries above (not downloaded by
         # any client - clipem.app links to it).
         "sources": {"ffmpeg": ffmpeg_source},
+        "release_notes": read_release_notes(args.release_notes),
     }
     write_json_atomic(args.out, manifest)
     print(f"Wrote {args.out}")

@@ -1,0 +1,612 @@
+[
+  {
+    "version": "1.4.8",
+    "date": "2026-10-26",
+    "sections": {
+      "New Features": [
+        "Missing-mic detection: ClipEm notices when your mic isn't reaching clips and fixes it, or tells you.",
+        "Choose what saved clips and their copies are called, in Setup and Settings.",
+        "Choose the video encoder, including hardware encoders, in Setup and Settings.",
+        "Start/stop hotkeys for recording and the replay buffer.",
+        "A Pick... button that sets a hotkey by pressing it.",
+        "Settings for the audio peak guard and OBS script debug messages, with \"i\" buttons explaining options."
+      ],
+      "Improvements": [
+        "Setup has new pages for clip names and hotkeys, shows a screenshot of the clip editor, and continues on its own after a step finishes.",
+        "All popups are a standard size, including file pickers on Linux.",
+        "The replay buffer's memory limit now follows its length and bitrate, so long clips aren't cut short.",
+        "Recorded audio moved from 160 to 192 kbps.",
+        "Updated the bundled Python from 3.12.10 to 3.12.16 on Windows, and from 3.12.14 to 3.12.16 on Linux.",
+        "Updated Electron, which runs the clip editor's window, from 44.5.1 to 44.9.3.",
+        "Updated Pillow from 12.3.0 to 13.0.0."
+      ]
+    }
+  },
+  {
+    "version": "1.4.7",
+    "date": "2026-10-23",
+    "sections": {
+      "New Features": [
+        "The tray widget now records each app that makes sound itself, and gives it a track in the clip's multitrack copy automatically.",
+        "New dark theme across Setup and Settings.",
+        "Settings > UI Customization, with a color picker.",
+        "Clip sound presets: Scissors, the new default, and Flash.",
+        "Clip editor: master volume, a level meter, and a button that levels out every track at once.",
+        "Choose which folder the clip editor shows clips from."
+      ],
+      "Improvements": [
+        "ClipEm now uses your system's file and folder pickers where it can.",
+        "Clip editor sliders have new controls, and volumes can be typed in dB."
+      ],
+      "Fixes": [
+        "Per-app tracks on Windows now use ClipEm's own capture helper."
+      ]
+    }
+  },
+  {
+    "version": "1.4.6",
+    "date": "2026-10-18",
+    "sections": {
+      "New Features": [
+        "Crop clips in the clip editor, with zoom controls."
+      ],
+      "Improvements": [
+        "The clip editor reopens by itself if it was open during an update or restart.",
+        "Quitting and restarting from the tray now leaves the right things running."
+      ],
+      "Fixes": [
+        "Scrolling the page no longer changes a dropdown under the pointer.",
+        "Fixed sidebar size and UI scaling."
+      ]
+    }
+  },
+  {
+    "version": "1.4.5",
+    "date": "2026-10-18",
+    "sections": {
+      "New Features": [
+        "Choose ClipEm's editor or your own external editor, or turn clip editors off.",
+        "Choose whether the tray menu shows Start Recording."
+      ],
+      "Improvements": [
+        "Exports show which clip they came from, with a link back to it.",
+        "Level Out Audio now handles track volume changes better."
+      ]
+    }
+  },
+  {
+    "version": "1.4.4",
+    "date": "2026-10-18",
+    "sections": {
+      "Improvements": [
+        "The clip editor's noise gate has a strength control, and sets itself between the noise and speech levels."
+      ]
+    }
+  },
+  {
+    "version": "1.4.3",
+    "date": "2026-10-18",
+    "sections": {
+      "New Features": [
+        "Settings can now change the replay buffer length, recording bitrate, audio devices and mic filter, as Setup can.",
+        "Settings can now change the smaller copy of each clip, and which apps own which audio tracks, with Pin and Reset."
+      ]
+    }
+  },
+  {
+    "version": "1.4.2",
+    "date": "2026-10-18",
+    "sections": {
+      "New Features": [
+        "Clip editor effects per track: Level, Noise gate and Mono.",
+        "Volume changes can apply to just the left or right channel: hold Alt while dragging on a stereo track.",
+        "Play an export, or show it in its folder, right after exporting.",
+        "Optional notification when a clip is saved from the tray menu."
+      ],
+      "Improvements": [
+        "The tray menu is dark on Windows.",
+        "Windows notifications are now named ClipEm on installs that updated."
+      ]
+    }
+  },
+  {
+    "version": "1.4.1",
+    "date": "2026-10-17",
+    "sections": {
+      "Improvements": [
+        "Settings now shows the update source as a GitHub link.",
+        "Update channel is now called Update branch, with Main and Dev."
+      ]
+    }
+  },
+  {
+    "version": "1.4.0",
+    "date": "2026-10-17",
+    "sections": {
+      "New Features": [
+        "The full clip editor, in its own window: trim, delete sections, edit per-track audio, resize the video and tracks, and export.",
+        "Send Bug Report: send logs and a description without a GitHub account.",
+        "Delete clips from the clip editor's list.",
+        "An application menu entry on Linux."
+      ],
+      "Improvements": [
+        "The tray widget is now always installed, and starts at boot alongside OBS.",
+        "The default smaller-copy target moved from 10 to 20 MB, Discord's new limit.",
+        "Linux OBS now includes per-app audio capture.",
+        "App tracks with no sound in a clip are left out of it."
+      ],
+      "Fixes": [
+        "Fixed exiting, restarting and autostart behavior."
+      ]
+    }
+  },
+  {
+    "version": "1.3.6",
+    "date": "2026-10-16",
+    "sections": {
+      "New Features": [
+        "Clip Browser: browse your clips, hover to play them with sound, and open them in an editor.",
+        "Split audio tracks: an optional \"-tracks.mkv\" copy of each clip with separate audio tracks.",
+        "Optional LosslessCut download for quick trims, or use your own editor.",
+        "Reinstall ClipEm from Settings, keeping or resetting your settings.",
+        "Create a bug report zip from Settings.",
+        "Update channel and update source settings.",
+        "Install and Uninstall Autostart buttons in Settings.",
+        "A Start Menu entry on Windows."
+      ],
+      "Improvements": [
+        "Updates now come from GitHub releases.",
+        "The tray warns when the clips folder is missing, and can create it again."
+      ]
+    }
+  },
+  {
+    "version": "1.3.5",
+    "date": "2026-10-11",
+    "sections": {
+      "New Features": [
+        "Offline installs: the bundles include everything, so installing needs no internet."
+      ]
+    }
+  },
+  {
+    "version": "1.3.4",
+    "date": "2026-10-11",
+    "sections": {
+      "New Features": [
+        "ClipEm now asks before updating, and can update OBS, the bundled Python and the tray's packages as well as itself.",
+        "Install an update now or at the next restart, or skip it."
+      ],
+      "Improvements": [
+        "Setup shows step numbers and has an Updates page.",
+        "A warning when ClipEm is already running, with Proceed Anyway."
+      ]
+    }
+  },
+  {
+    "version": "1.3.3",
+    "date": "2026-10-10",
+    "sections": {
+      "New Features": [
+        "Low disk space and large recording warnings, with a setting to turn them off."
+      ]
+    }
+  },
+  {
+    "version": "1.3.2",
+    "date": "2026-09-26",
+    "sections": {
+      "Fixes": [
+        "Fixed package installs on Windows installs made over an older Python."
+      ]
+    }
+  },
+  {
+    "version": "1.3.1",
+    "date": "2026-09-26",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.30",
+    "date": "2026-09-26",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.29",
+    "date": "2026-09-26",
+    "sections": {
+      "New Features": [
+        "Hide OBS from the tray, which now shows Show OBS or Hide OBS as needed."
+      ]
+    }
+  },
+  {
+    "version": "1.2.28",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "The Settings window closes along with the tray widget.",
+        "Clip Hotkey is now the first section in Settings."
+      ]
+    }
+  },
+  {
+    "version": "1.2.27",
+    "date": "2026-09-26",
+    "sections": {
+      "Fixes": [
+        "Quitting the tray no longer leaves a python3 process running in the background."
+      ]
+    }
+  },
+  {
+    "version": "1.2.26",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "Settings has separate Scripts and OBS Websocket sections, and a button to show the password."
+      ]
+    }
+  },
+  {
+    "version": "1.2.25",
+    "date": "2026-09-26",
+    "sections": {
+      "New Features": [
+        "Clip sound settings: turn it on or off, set its volume, choose your own .wav, and preview it."
+      ]
+    }
+  },
+  {
+    "version": "1.2.24",
+    "date": "2026-09-26",
+    "sections": {
+      "Fixes": [
+        "Restarting a PipeWire screen capture now works, by pressing Select Monitor on OBS's main thread."
+      ]
+    }
+  },
+  {
+    "version": "1.2.23",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "ClipEm retries when a PipeWire screen capture stays dead, and treats a capture with no picture as stuck."
+      ]
+    }
+  },
+  {
+    "version": "1.2.22",
+    "date": "2026-09-26",
+    "sections": {
+      "New Features": [
+        "Restart ClipEm Tray and OBS, in the tray menu.",
+        "Dead PipeWire screen captures are restarted, with a prompt to pick your screen."
+      ]
+    }
+  },
+  {
+    "version": "1.2.21",
+    "date": "2026-09-26",
+    "sections": {
+      "Fixes": [
+        "The tray reconnects properly when OBS restarts, picking up new websocket settings."
+      ]
+    }
+  },
+  {
+    "version": "1.2.20",
+    "date": "2026-09-26",
+    "sections": {
+      "New Features": [
+        "Black-screen detection, with a setting to turn it on."
+      ],
+      "Improvements": [
+        "Capture recovery points the capture back at your chosen display."
+      ]
+    }
+  },
+  {
+    "version": "1.2.19",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "Stuck-screen detection reacts sooner: 5 identical checks in a row instead of 10."
+      ],
+      "Fixes": [
+        "Fixed Linux notifications failing with some notification servers."
+      ]
+    }
+  },
+  {
+    "version": "1.2.18",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "More detailed logging from the stuck-screen check."
+      ]
+    }
+  },
+  {
+    "version": "1.2.17",
+    "date": "2026-09-26",
+    "sections": {
+      "Improvements": [
+        "Moved Settings further down the tray menu."
+      ]
+    }
+  },
+  {
+    "version": "1.2.16",
+    "date": "2026-09-26",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.15",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Stuck-screen detection moved from an OBS script to the tray widget, so its setting can change any time.",
+        "The audio peak guard reacts within 1 dB of full scale, and its ceiling can be set.",
+        "Show OBS works better on KDE."
+      ]
+    }
+  },
+  {
+    "version": "1.2.14",
+    "date": "2026-09-25",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.13",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Installs that still had the developer's clip folder from releases up to 1.2.7 now get the default folder."
+      ]
+    }
+  },
+  {
+    "version": "1.2.12",
+    "date": "2026-09-25",
+    "sections": {
+      "New Features": [
+        "Show OBS from the tray on Windows and Linux."
+      ]
+    }
+  },
+  {
+    "version": "1.2.11",
+    "date": "2026-09-25",
+    "sections": {
+      "New Features": [
+        "A Copy button for the websocket password."
+      ],
+      "Improvements": [
+        "Renamed the quit options to Quit ClipEm Tray Only and Quit ClipEm Tray and OBS."
+      ]
+    }
+  },
+  {
+    "version": "1.2.10",
+    "date": "2026-09-25",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.9",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Removing other ClipEm autostart entries in Setup is now opt-in."
+      ]
+    }
+  },
+  {
+    "version": "1.2.8",
+    "date": "2026-09-25",
+    "sections": {
+      "New Features": [
+        "Audio peak guard: turns down audio sources that are clipping.",
+        "Setup finds and offers to remove autostart entries from other ClipEm folders."
+      ]
+    }
+  },
+  {
+    "version": "1.2.7",
+    "date": "2026-09-25",
+    "sections": {
+      "New Features": [
+        "Ctrl+A, Ctrl+Z and Ctrl+Shift+Z or Ctrl+Shift+R in every text field."
+      ],
+      "Improvements": [
+        "Setup and other windows use the ClipEm logo."
+      ]
+    }
+  },
+  {
+    "version": "1.2.6",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "The Settings window uses the ClipEm logo, and groups as ClipEm in the taskbar."
+      ]
+    }
+  },
+  {
+    "version": "1.2.5",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "The Windows installer now asks you to close ClipEm or OBS and retry, when they're running from the install folder."
+      ]
+    }
+  },
+  {
+    "version": "1.2.4",
+    "date": "2026-09-25",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.2.3",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Updated OBS from 31.0.2 to 32.2.2 on Windows and macOS.",
+        "OBS's Windows debug symbols, about 76 MB, are no longer installed."
+      ]
+    }
+  },
+  {
+    "version": "1.2.2",
+    "date": "2026-09-25",
+    "sections": {
+      "New Features": [
+        "Set the clip hotkey and websocket port and password in Settings, applied the next time OBS starts.",
+        "ClipEm downloads OBS again if it's missing, instead of failing."
+      ],
+      "Improvements": [
+        "Setup closes OBS before starting, because OBS would overwrite its changes.",
+        "Only one copy of the tray widget can run.",
+        "Updated the Linux Python from 3.12.11 to 3.12.14.",
+        "Updated Tcl/Tk from 8.6.16 to 9.0.4 on Linux."
+      ]
+    }
+  },
+  {
+    "version": "1.2.1",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Setup now asks for a recording bitrate instead of a target file size, and it follows the resolution unless you've set your own."
+      ],
+      "Fixes": [
+        "ClipEm no longer leaves a console window on Windows that killed the tray widget when closed."
+      ]
+    }
+  },
+  {
+    "version": "1.2.0",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Quit ClipEm + OBS on Windows now stops OBS's outputs first and closes the right OBS window."
+      ]
+    }
+  },
+  {
+    "version": "1.1.9",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Setup now scales properly on high-DPI displays."
+      ]
+    }
+  },
+  {
+    "version": "1.1.8",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Display Capture now points at your primary display on fresh Windows installs, instead of showing \"Device not connected\"."
+      ]
+    }
+  },
+  {
+    "version": "1.1.7",
+    "date": "2026-09-25",
+    "sections": {
+      "Improvements": [
+        "Setup warns on Windows if the Visual C++ runtime OBS needs is missing."
+      ]
+    }
+  },
+  {
+    "version": "1.1.6",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "More reliable Tk install on Windows, so Setup's window appears, with detailed logging."
+      ]
+    }
+  },
+  {
+    "version": "1.1.5",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Fixed pip refusing to install on Windows."
+      ]
+    }
+  },
+  {
+    "version": "1.1.4",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Fixed update checks failing with 403 Forbidden from clipem.app."
+      ]
+    }
+  },
+  {
+    "version": "1.1.3",
+    "date": "2026-09-25",
+    "sections": {
+      "Fixes": [
+        "Fixed Setup failing to start on Windows, where its own folder wasn't on Python's path."
+      ]
+    }
+  },
+  {
+    "version": "1.1.2",
+    "date": "2026-09-24",
+    "sections": {
+      "New Features": [
+        "Save a smaller copy of each clip (\"-small.mp4\"), sized for upload limits, with ffmpeg installed for it. The original is always kept."
+      ]
+    }
+  },
+  {
+    "version": "1.1.1",
+    "date": "2026-09-24",
+    "sections": {
+      "Other": [
+        "Backend changes."
+      ]
+    }
+  },
+  {
+    "version": "1.0.26",
+    "date": "2026-09-24",
+    "sections": {
+      "New Features": [
+        "Updates are now verified with a release signature.",
+        "Autostart settings for OBS and the tray widget.",
+        "A Check for Updates button in Settings."
+      ]
+    }
+  }
+]

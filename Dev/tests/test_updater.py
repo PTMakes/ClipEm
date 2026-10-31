@@ -133,7 +133,7 @@ def test_update_config_migrates_the_old_auto_update_setting(tmp_path, monkeypatc
     updater.change_update_config(skipped_version="1.2.3")
     assert updater.load_update_config() == {
         "check_for_updates": False, "install_on_next_launch": False, "skipped_version": "1.2.3",
-        "source_repo": "PTMakes/ClipEm", "update_channel": "releases",
+        "last_version": None, "source_repo": "PTMakes/ClipEm", "update_channel": "releases",
     }
 
 
@@ -189,6 +189,21 @@ def test_check_for_update_channel_switch(tmp_path, monkeypatch, channel, local, 
     result = updater.check_for_update()
     assert result["shared_update"] is expected
     assert result["update_available"] is expected
+
+
+@pytest.mark.parametrize("local, manifest, expected", [
+    ("1.3.5", {"version": "1.3.6", "release_notes": "New things."}, "New things."),
+    ("1.3.5", {"version": "1.3.6"}, ""),                                # a release from before notes
+    ("1.3.6", {"version": "1.3.6", "release_notes": "New things."}, ""),  # e.g. only OBS is out of date
+])
+def test_check_for_update_release_notes(tmp_path, monkeypatch, local, manifest, expected):
+    import components
+
+    monkeypatch.setattr(updater, "UPDATE_CONFIG_PATH", str(tmp_path / "update_config.json"))
+    monkeypatch.setattr(updater, "get_local_version", lambda: local)
+    monkeypatch.setattr(updater, "fetch_manifest", lambda config=None: manifest)
+    monkeypatch.setattr(components, "check", lambda manifest: {})
+    assert updater.check_for_update()["release_notes"] == expected
 
 
 def test_swap_in_resets_entries_not_preserved(tmp_path):
