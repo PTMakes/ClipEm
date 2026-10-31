@@ -511,6 +511,8 @@ def save_post_clip(enabled, seconds, sound_after):
     clipem_common.save_run_config(config)
     setup.save_replay_buffer_seconds(clip_seconds)
     save_clip_hotkey(*hotkey)
+    if not config["post_clip"]["enabled"]:
+        clip_post.clear_state()  # the next save is a plain one, however soon
 
 
 # Start/stop hotkeys for recording and the replay buffer: OBS's own hotkey

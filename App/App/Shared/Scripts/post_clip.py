@@ -82,6 +82,10 @@ def on_hotkey(pressed):
     if not settings["enabled"]:
         obs.obs_frontend_replay_buffer_save()
         return
+    # Nothing will be saved, so no sound saying it was.
+    if not obs.obs_frontend_replay_buffer_active():
+        _log("the replay buffer isn't running - no clip")
+        return
     sound = clip_sound()
     played = None
     if sound is not None and sound.sound_enabled and sound.audio_file:
@@ -102,8 +106,12 @@ def save_now():
         return
     state = dict(pending, requested_at=datetime.datetime.now().timestamp())
     pending = None
+    if not obs.obs_frontend_replay_buffer_active():
+        _log("the replay buffer stopped before the post-clip seconds were up - no clip")
+        return
     try:
         clip_post.write_state(state)
     except OSError as exc:
         _log(f"couldn't note the press ({exc}) - this save is finished as a plain clip")
+        clip_post.clear_state()  # an older press mustn't be taken for this one
     obs.obs_frontend_replay_buffer_save()

@@ -7,8 +7,9 @@ Everything lives in one repo, [PTMakes/ClipEm](https://github.com/PTMakes/ClipEm
 | Folder | Contents |
 | --- | --- |
 | `App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
-| `Dev/` | Build, release and installer tooling. `Dev/obs-src` is the upstream OBS source, as a submodule. |
+| `Dev/` | Build, release and installer tooling. `Dev/obs-src` is a git-ignored clone of upstream OBS, made by `build-obs-from-source-for-linux.sh`. |
 | `Website/` | clipem.app: the landing page and a copy of the signed update manifests for old installs. |
+| `BugReportWorker/` | The Cloudflare Worker behind the tray's Send Bug Report button. See its [README](BugReportWorker/README.md). |
 
 #### How to build/run a release:
 
@@ -38,7 +39,11 @@ Back the private key up offline, for example in a password manager.
 
 ### Tools
 
-You need `git jq zip tar gzip curl openssl python3 makensis`
+You need `git jq zip tar gzip curl openssl python3 makensis`, plus what the
+builds below use: `x86_64-w64-mingw32-g++`, and for
+[the OBS plugin](#clipem-obs-plugin) `g++ pkg-config clang-cl lld-link
+llvm-dlltool llvm-readobj unzip cargo` and `qt6-base`. `release.sh` stops at
+preflight if a tool is missing.
 
 ### GitHub CLI
 
@@ -253,8 +258,38 @@ apps (macOS), `clip_reexport.py` splits the three OBS tracks itself.
 `build/build-app-capture.sh` cross-compiles the Windows helper from
 `Dev/app-capture/` into `App/Shared/Tools/` (`release.sh` runs it).
 
+**Post-clip.** With Settings > Recording's post-clip on, the clip hotkey moves
+from OBS's "Save Replay" to `Scripts/post_clip.py` and the replay buffer is kept
+N seconds longer than the clip. A press plays the clip sound, and N seconds
+later saves once. That save becomes the usual clip, ending at the press, plus
+`<clip>-extra.mkv` with every track and the N seconds after it, with the clip
+sound taken back out of its Mix and Desktop tracks. The details are at the top
+of `Scripts/clip_post.py`.
+
 To move to a newer FFmpeg, update `FFMPEG_TAG` and `FFMPEG_COMMIT` (and
 optionally `X264_COMMIT`) at the top of the script, then run it with `--force`.
+
+## ClipEm OBS plugin
+
+`Dev/obs-plugin/clipem-obs.cpp` hides OBS (its tray icon, and its window when
+there's no tray to hide to) and passes OBS's errors and messages on to the tray
+widget (`tray-widget/obs_notices.py`). `run.py` loads it through
+`OBS_PLUGINS_PATH`, so it ships in the shared zip, not inside OBS.
+
+`build/build-obs-plugin.sh` builds it into `App/Shared/OBS-Plugin/` (ignored by
+git), and `release.sh` runs it:
+
+- **Linux:** built against `Dev/obs-install` and this machine's Qt6, so it has
+  the same ABI caveat as [the Linux OBS build](#linux-obs-build).
+- **Windows:** cross-compiled with `clang-cl` against the official OBS release
+  and its own Qt. Everything needed is downloaded once into
+  `Dev/.obs-plugin-work`. Running the script accepts Microsoft's license for
+  the MSVC CRT and Windows SDK (via `xwin`).
+- **Moving to a newer OBS:** update `OBS_WINDOWS_VERSION`, its sha256 and
+  `QT_DEPS_VERSION` at the top of the script together with setup.py's
+  `WINDOWS_OBS_VERSION`. A test stops the release if the two versions differ.
+- **Requirements:** `sudo pacman -S --needed clang lld llvm qt6-base`, plus
+  rustup/cargo, curl, unzip and a built `Dev/obs-install`.
 
 ## Portable Python for Linux
 
@@ -273,10 +308,12 @@ checks that a 16pt font really renders at 16pt.
 | --- | --- |
 | `App` | `ruff check .` |
 | `Website` | `npm run lint`, `npm run typecheck`, `npm run build`, and that each manifest has a signature. |
-| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; the GUI layout test runs under `xvfb-run` in CI). `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. |
+| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; the tests that need a display run under `xvfb-run` in CI). `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. On a desktop that doesn't give the test window keyboard focus, the entry shortcut test skips itself. |
+| `BugReportWorker` | `npm test`: the upload checks against zips from Python's `zipfile`. |
 
-The workflows are in `.github/workflows/`: `app.yml` (App + Dev) and
-`website.yml`. Each runs only when its folders change.
+The workflows are in `.github/workflows/`: `app.yml` (App + Dev),
+`website.yml` and `bug-report-worker.yml`. Each runs only when its folders
+change.
 
 ### OBS script tests
 

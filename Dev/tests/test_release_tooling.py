@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import tarfile
@@ -13,7 +14,7 @@ import zipfile
 
 import ed25519_verify
 import pytest
-from conftest import APP_INSTALLER_DIR
+from conftest import APP_INSTALLER_DIR, DEV_DIR
 
 import generate_install_manifest
 import release_common
@@ -364,6 +365,15 @@ def test_release_asset_urls_point_at_github_releases():
     # Dev builds all live on the rolling "dev" prerelease.
     assert release_common.release_tag("1.4.1-dev.202610142130") == "dev"
     assert "/releases/download/dev/" in release_common.release_asset_url("1.4.1-dev.202610142130", "x.zip")
+
+
+def test_obs_plugin_is_built_for_the_obs_windows_installs_get():
+    with open(os.path.join(DEV_DIR, "build", "build-obs-plugin.sh"), encoding="utf-8") as f:
+        script = f.read()
+    with open(os.path.join(APP_INSTALLER_DIR, "setup.py"), encoding="utf-8") as f:
+        setup_py = f.read()
+    built_for = re.search(r'^OBS_WINDOWS_VERSION="([^"]+)"', script, re.M).group(1)
+    assert built_for == re.search(r'^WINDOWS_OBS_VERSION = "([^"]+)"', setup_py, re.M).group(1)
 
 
 def test_manifests_are_uploaded_last(tmp_path):

@@ -31,7 +31,8 @@ OBS_INSTALL="$DEV_DIR/obs-install"
 OUT_DIR="$(dirname "$DEV_DIR")/App/App/Shared/OBS-Plugin"
 WORK="$DEV_DIR/.obs-plugin-work"
 
-# Must match the OBS the install manifest gives Windows users (release.sh).
+# Must match setup.py's WINDOWS_OBS_VERSION, the OBS Windows users get
+# (test_release_tooling.py checks, so release.sh's preflight stops if not).
 OBS_WINDOWS_VERSION="32.2.2"
 OBS_WINDOWS_URL="https://github.com/obsproject/obs-studio/releases/download/$OBS_WINDOWS_VERSION/OBS-Studio-$OBS_WINDOWS_VERSION-Windows-x64.zip"
 OBS_WINDOWS_SHA256="4d6e40e3ab155f56b30de517380566a206d74b63cdf5ad49aa596924768f97e1"

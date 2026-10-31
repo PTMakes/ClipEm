@@ -5,7 +5,11 @@ A Cloudflare Worker behind the tray's **Send Bug Report** button. It lets users 
 - The user's description, the ClipEm version and the platform go into a **public** issue on `PTMakes/ClipEm`, labelled `bug-report` and `from-app`.
 - The log zip (ClipEm/OBS logs and the install summary, with the websocket password removed) goes to the **private** R2 bucket `clipem-bug-reports` as `reports/<id>.zip`. The issue shows only the report ID.
 
-Each IP may send 2 reports a minute, each zip may be up to 20 MB, and descriptions up to 5000 characters.
+Each IP may send 2 reports a minute, each zip may be up to 20 MB, and descriptions up to 5000 characters. The relay takes 100 reports a UTC day from everyone together, counted from the bucket's `reports/<date>-` keys.
+
+Before storing a zip, `src/report_zip.js` checks that it has the shape `bug_report.create_bug_report()` gives it, from its headers alone: `system-info.txt` plus logs in the three known folders, nothing encrypted, and nothing Python's `zipfile` doesn't write. Change the two together. This filters junk; it doesn't prove that ClipEm made the zip, because the client is open source.
+
+`npm test` runs these checks against zips from Python's `zipfile`.
 
 ## One-time setup
 

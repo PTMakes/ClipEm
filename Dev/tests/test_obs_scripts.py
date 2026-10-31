@@ -125,6 +125,7 @@ class FakeObspython(types.ModuleType):
         self.last_replay = None
         self.hotkeys = {}  # name -> callback
         self.replay_saves = 0
+        self.replay_active = True
         self.audio_source = Handle("source")
         self.volumes = {self.audio_source: 1.0}
         # A PipeWire screen capture the tray widget has asked to restart.
@@ -165,6 +166,7 @@ class FakeObspython(types.ModuleType):
             "obs_hotkey_register_frontend": lambda name, description, callback: self.hotkeys.__setitem__(
                 name, callback) or name,
             "obs_frontend_replay_buffer_save": lambda: setattr(self, "replay_saves", self.replay_saves + 1),
+            "obs_frontend_replay_buffer_active": lambda: self.replay_active,
             "config_get_int": lambda config, section, key: 70 if (section, key) == ("AdvOut", "RecRBTime") else 0,
             "obs_enum_sources": lambda: [Handle("source"), self.audio_source, self.capture_source],
             "obs_source_get_id": lambda source: "pipewire-screen-capture-source"
@@ -314,6 +316,43 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
             "the tray's restart request should press the capture's Select Monitor button"
         assert libobs.ui_tasks == 1, "...on OBS's UI thread, once"
         assert "clipem_reload_request" not in fake.capture_settings.values
+
+
+def _post_clip_script(tmp_path, monkeypatch):
+    import clip_post
+
+    fake = FakeObspython(tmp_path)
+    script = _load_script(os.path.join(SCRIPTS_DIR, "post_clip.py"), fake, monkeypatch)
+    state_path = tmp_path / "post_clip_state.json"
+    monkeypatch.setattr(clip_post, "STATE_PATH", str(state_path))
+    monkeypatch.setattr(clip_post, "load_settings", lambda path=None: dict(clip_post.DEFAULTS, enabled=True, seconds=10))
+    played = []
+    monkeypatch.setattr(script, "clip_sound", lambda: types.SimpleNamespace(
+        sound_enabled=True, audio_file="clip.wav", audio_volume=0.5, play_sound=lambda *a: played.append(a)))
+    return fake, script, state_path, played
+
+
+def test_post_clip_press_without_a_replay_buffer_does_nothing(tmp_path, monkeypatch):
+    """No sound (it would say a clip was saved) and no state for a later save to pick up."""
+    fake, script, state_path, played = _post_clip_script(tmp_path, monkeypatch)
+    fake.replay_active = False
+
+    script.on_hotkey(True)
+
+    assert played == [] and script.pending is None and not fake.timers
+    assert fake.replay_saves == 0 and not state_path.exists()
+
+
+def test_post_clip_gives_up_if_the_buffer_stops_during_the_wait(tmp_path, monkeypatch):
+    fake, script, state_path, played = _post_clip_script(tmp_path, monkeypatch)
+
+    script.on_hotkey(True)
+    assert played and script.pending is not None
+    fake.replay_active = False
+    script.save_now()
+
+    assert script.pending is None and not fake.timers
+    assert fake.replay_saves == 0 and not state_path.exists()
 
 
 def test_clip_sound_volume_scaling_matches_obs_config(tmp_path, monkeypatch):

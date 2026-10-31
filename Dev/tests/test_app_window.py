@@ -71,6 +71,10 @@ def test_shortcuts_in_a_real_entry(root, themed):
     entry.pack()
     entry.focus_force()
     root.update()
+    # Tk drops generated key events without keyboard focus, and a desktop
+    # session needn't grant it (Wayland, focus stealing prevention).
+    if root.focus_get() is None:
+        pytest.skip("this window didn't get keyboard focus (use xvfb-run)")
 
     for text in ("C:", "/Clips"):
         entry.insert("end", text)

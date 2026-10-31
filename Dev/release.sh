@@ -145,9 +145,10 @@ LINUX_PYTHON_PBS_TAG="20261026"
 
 # --- 1. Preflight ----------------------------------------------------------
 step "Preflight"
-required_tools=(git jq zip tar gzip openssl curl python3 makensis x86_64-w64-mingw32-g++)
+required_tools=(git jq zip tar gzip openssl curl python3 makensis x86_64-w64-mingw32-g++
+  g++ pkg-config clang-cl lld-link llvm-dlltool llvm-readobj unzip cargo) # second line: build-obs-plugin.sh
 for tool in "${required_tools[@]}"; do
-  command -v "$tool" >/dev/null 2>&1 || die "$tool is required (see Dev/README.md)"
+  command -v "$tool" >/dev/null 2>&1 || die "$tool is required (see README.md)"
 done
 python3 "$SCRIPT_DIR/release/release_common.py" check-key
 [[ "$LINUX_PYTHON_VERSION+$LINUX_PYTHON_PBS_TAG" == "$WINDOWS_PYTHON_VERSION+$WINDOWS_PYTHON_PBS_TAG" ]] \

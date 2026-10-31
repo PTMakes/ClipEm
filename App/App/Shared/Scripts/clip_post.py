@@ -42,8 +42,11 @@ import clip_tracks  # noqa: E402
 SHARED_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
 STATE_PATH = os.path.join(SHARED_DIR, "post_clip_state.json")
-# A save this long after post_clip.py asked for it is someone else's.
-STATE_FRESH_SECONDS = 15
+# A save this long after post_clip.py asked for it is someone else's. Generous:
+# the state is read when OBS finishes writing, and a long buffer on a slow disk
+# takes a while. Every save goes through post_clip.py while post-clip is on,
+# and turning it off clears the state, so nothing else can pick this up.
+STATE_FRESH_SECONDS = 120
 
 DEFAULTS = {"enabled": False, "seconds": 10, "sound_after": False}
 MIN_SECONDS, MAX_SECONDS = 1, 120
@@ -103,6 +106,13 @@ def write_state(state, path=None):
     with open(partial, "w", encoding="utf-8") as f:
         json.dump(state, f)
     os.replace(partial, path)
+
+
+def clear_state(path=None):
+    try:
+        os.remove(path or STATE_PATH)
+    except OSError:
+        pass
 
 
 def read_state(path=None, now=None):

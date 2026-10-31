@@ -215,7 +215,7 @@ def _http_error_message(exc):
     except Exception:
         detail = {}
     if exc.code == 429:
-        return "Too many reports were sent from this network recently - try again in a minute."
+        return detail.get("error") or "Too many reports were sent from this network recently - try again in a minute."
     if exc.code == 413:
         return "The report is too large to send. Save it to a file instead."
     if detail.get("id"):

@@ -1,0 +1,36 @@
+name: App + Dev
+
+on:
+  push:
+    branches: [main]
+    paths: ["App/**", "Dev/**", ".github/workflows/app.yml"]
+  pull_request:
+    paths: ["App/**", "Dev/**", ".github/workflows/app.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12" # what ClipEm's installs run
+      - name: Install tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          python -m pip install "ruff==0.16.*" "pytest==9.1.*" \
+            -r App/App/Shared/tray-widget/requirements.txt \
+            -r App/App/Shared/Installer/mic-filter/requirements.txt
+      - name: Ruff (App)
+        working-directory: App
+        run: ruff check .
+      - name: Ruff (Dev)
+        working-directory: Dev
+        run: ruff check .
+      - name: Tests
+        working-directory: Dev
+        run: xvfb-run -a python -m pytest -q -rs tests

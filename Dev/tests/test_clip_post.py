@@ -42,6 +42,24 @@ def test_only_a_fresh_state_marks_a_post_clip_save(tmp_path):
     assert clip_post.read_state(path, now=111.0) is None
 
 
+def test_a_slow_save_is_still_a_post_clip_save(tmp_path):
+    path = str(tmp_path / "state.json")
+    clip_post.write_state({"pressed_at": 100.0, "requested_at": 110.0, "clip_seconds": 30, "sound": None}, path)
+    assert clip_post.read_state(path, now=110.0 + 60) is not None
+
+
+def test_turning_post_clip_off_forgets_the_last_press(tmp_path, monkeypatch):
+    _post_clip_files(tmp_path, monkeypatch, {"enabled": True, "seconds": 10})
+    state = tmp_path / "state.json"
+    monkeypatch.setattr(clip_post, "STATE_PATH", str(state))
+    state.write_text("{}")
+    obs_config.save_post_clip(True, 10, False)
+    assert state.exists()
+    obs_config.save_post_clip(False, 10, False)
+    assert not state.exists()
+    clip_post.clear_state()  # nothing there: no error
+
+
 def test_the_clip_ends_at_the_press_and_is_the_chosen_length():
     state = {"pressed_at": 100.0, "requested_at": 110.0, "clip_seconds": 30}
     assert clip_post.span(40.0, state) == (30.0, 0.0)

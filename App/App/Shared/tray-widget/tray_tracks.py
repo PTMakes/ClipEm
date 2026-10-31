@@ -216,7 +216,7 @@ class ClipFinisher:
             if not clip_path:
                 return
             snapshot = self._recorder.snapshot()
-            post_state = clip_post.read_state()  # now: it's only good for a few seconds
+            post_state = clip_post.read_state()  # now: the next press replaces it
             settings = obs_config.load_clip_script_settings()
         except Exception:
             log.exception("Couldn't start finishing the saved clip")

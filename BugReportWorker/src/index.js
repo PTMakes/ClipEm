@@ -3,8 +3,13 @@
 // only the description, version and platform go in the public issue, since
 // the logs hold usernames and folder paths.
 
+import { isReportZip } from "./report_zip.js";
+
 const MAX_DESCRIPTION = 5000;
 const MAX_LOGS_BYTES = 20 * 1024 * 1024;
+// Across everyone, per UTC day: what per-IP limits can't stop. A flood takes
+// the relay out until midnight, but costs no more than this in issues to close.
+const MAX_REPORTS_PER_DAY = 100;
 const MAX_SHORT_FIELD = 100;
 const TITLE_LENGTH = 80;
 const LABELS = ["bug-report", "from-app"];
@@ -47,9 +52,19 @@ export default {
     if (logs.size > MAX_LOGS_BYTES) {
       return json({ error: "The report is too large." }, 413);
     }
+    const zip = await logs.arrayBuffer();
+    if (!isReportZip(zip)) {
+      return json({ error: "The logs aren't a ClipEm report." }, 400);
+    }
 
-    const id = reportId();
-    await env.REPORTS.put(`reports/${id}.zip`, await logs.arrayBuffer(), {
+    const day = reportDay();
+    const { truncated } = await env.REPORTS.list({ prefix: `reports/${day}-`, limit: MAX_REPORTS_PER_DAY });
+    if (truncated) {
+      return json({ error: "Too many reports were sent today - try again tomorrow." }, 429);
+    }
+
+    const id = reportId(day);
+    await env.REPORTS.put(`reports/${id}.zip`, zip, {
       httpMetadata: { contentType: "application/zip" },
       customMetadata: { version, platform },
     });
@@ -113,12 +128,15 @@ function truncate(text, length) {
   return text.length > length ? `${text.slice(0, length - 1)}…` : text;
 }
 
-function reportId() {
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+function reportDay() {
+  return new Date().toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function reportId(day) {
   const random = [...crypto.getRandomValues(new Uint8Array(4))]
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
-  return `${date}-${random}`;
+  return `${day}-${random}`;
 }
 
 function json(data, status = 200) {
