@@ -63,7 +63,7 @@ import popups  # noqa: E402
 import reinstall  # noqa: E402
 import release_notes  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
-from app_window import style_app_window, use_windows_app_id  # noqa: E402
+from app_window import ICON_DIR, SETTINGS_ICON, style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
     SHORTCUT_BROKEN,
     SHORTCUT_DESKTOP,
@@ -78,6 +78,8 @@ from autostart import (  # noqa: E402
     shortcut_path,
     shortcut_state,
     uninstall_shortcut,
+    window_desktop_entry,
+    write_window_desktop_entry,
 )
 from clipem_common import (  # noqa: E402
     OBS_RESTART_FLAG,
@@ -111,6 +113,13 @@ try:
     import updater
 except ImportError:
     updater = None
+
+
+# Its own window class, matched by DESKTOP_FILE, for its own icon on Linux
+# taskbars. Tk keeps only the first capital of what it's given, so the class
+# windows report (and StartupWMClass needs) is this, not "ClipEmSettings".
+WINDOW_CLASS = "Clipemsettings"
+DESKTOP_FILE = "clipem-settings.desktop"
 
 
 def start_run_py(extra_args=()):
@@ -284,6 +293,22 @@ def parent_pid_from_args(argv):
     return None
 
 
+def desktop_entry():
+    return window_desktop_entry("ClipEm Settings", os.path.abspath(__file__),
+                                os.path.join(ICON_DIR, SETTINGS_ICON + ".png"), WINDOW_CLASS)
+
+
+def ensure_desktop_entry(directory=None):
+    """Linux: gives this window its own entry, or taskbars would show the
+    main ClipEm one for it."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        write_window_desktop_entry(DESKTOP_FILE, desktop_entry(), directory)
+    except OSError as exc:
+        log.warning(f"Couldn't write {DESKTOP_FILE} for the Settings taskbar icon: {exc}")
+
+
 def main():
     # Close along with the tray widget that opened this, however it ends.
     exit_with_parent(parent_pid_from_args(sys.argv[1:]))
@@ -294,6 +319,7 @@ def main():
         except OSError as exc:
             log.warning(f"Couldn't ask the open Settings dialog to come to the front: {exc}")
         return
+    ensure_desktop_entry()
     try:
         os.remove(RAISE_PATH)  # left from a dialog that has since closed
     except OSError:
@@ -393,13 +419,13 @@ def open_dialog(start_tab=None):
     enable_dpi_awareness()
     use_windows_app_id("PTMakes.ClipEm.Settings")
     # className: what Linux desktops match the window to (WM_CLASS).
-    root = tk.Tk(className="ClipEm")
+    root = tk.Tk(className=WINDOW_CLASS)
     # Hidden until it's built and sized (shown at the end of main) - otherwise
     # it sits on screen as Tk's blank default-size window meanwhile.
     root.withdraw()
     dark_theme.apply_theme(root)  # before any widget: classic ones take their colors at creation
-    # ClipEm logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
-    style_app_window(root, log=log.warning)
+    # Settings' logo, and Ctrl+A / Ctrl+Z / Ctrl+Shift+Z or R in the text fields.
+    style_app_window(root, log=log.warning, icon=SETTINGS_ICON)
     # Pixel sizes below are for a 96 DPI display - see ui_scale.py.
     px = UiScale(root).px
     root.px = px  # MicFilterWizard sizes itself with its parent's px
@@ -641,28 +667,31 @@ def open_dialog(start_tab=None):
     naming.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=(px(2), px(6)))
     next_row += 1
 
+    # The two extra copies, side by side so the tab fits without scrolling.
+    copies = tk.Frame(frame)
+    copies.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
     split_tracks_var = tk.BooleanVar(value=split_tracks)
     tk.Checkbutton(
-        frame, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
+        copies, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
                     "Mix, Mic, and Desktop, and apps each on their own track, for editing",
         variable=split_tracks_var, justify="left",
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    ).grid(row=0, column=0, sticky="nw")
 
     # The "-small.mp4" copy (Scripts/clip_reexport.py) - as on Setup's
     # "Lower-Quality Re-export" page.
     reexport_var = tk.BooleanVar(value=reexport["enabled"])
+    reexport_column = tk.Frame(copies)
+    reexport_column.grid(row=0, column=1, sticky="nw", padx=(px(28), 0))
     reexport_check = tk.Checkbutton(
-        frame, text="Also save a smaller copy of each clip (\"-small.mp4\"), for sites\n"
+        reexport_column, text="Also save a smaller copy of each clip (\"-small.mp4\"), for sites\n"
                     "with a file size limit - the full-quality clip is always kept",
         variable=reexport_var, justify="left", command=lambda: on_reexport_toggle(),
     )
-    reexport_check.grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    reexport_check.grid(row=0, column=0, sticky="w")
     # Its options sit under its text, not its box - see indent_under_text().
-    reexport_box = tk.Frame(frame)
-    reexport_box.grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    reexport_box = tk.Frame(reexport_column)
+    reexport_box.grid(row=1, column=0, sticky="w")
     tk.Label(reexport_box, text="Target size:").grid(row=0, column=0, sticky="w")
     size_row = tk.Frame(reexport_box)
     size_row.grid(row=0, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
@@ -715,8 +744,8 @@ def open_dialog(start_tab=None):
     devices = {"displays": None, "audio": None}  # filled in by detect_devices()
 
     section("Recording", TAB_OUTPUT)
-    # Two columns: the recording settings on the left, the audio devices on
-    # the right (under their own heading, level with the card's title).
+    # Two columns: the recording settings on the left, the audio devices and
+    # post-clip on the right (under their own heading, level with the card's title).
     recording_card = frame
     recording_card.grid_slaves(row=0, column=0)[0].grid_configure(columnspan=1)
     recording_card.columnconfigure(1, weight=0)
@@ -753,43 +782,6 @@ def open_dialog(start_tab=None):
     tk.Spinbox(buffer_row, textvariable=buffer_var, width=6, from_=setup.REPLAY_BUFFER_MIN_SECONDS,
                to=setup.REPLAY_BUFFER_MAX_SECONDS, increment=setup.REPLAY_BUFFER_STEP_SECONDS).pack(side="left")
     tk.Label(buffer_row, text="seconds (how far back a clip reaches)").pack(side="left", padx=(px(3), 0))
-    next_row += 1
-
-    # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
-    # longer, saved as the clip's "-extra.mkv" for the editor.
-    tk.Label(frame, text="Post-clip:").grid(row=next_row, column=0, sticky="nw", pady=(px(2), 0))
-    post_box = tk.Frame(frame)
-    post_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
-    post_line = tk.Frame(post_box)
-    post_line.pack(anchor="w")
-    post_enabled_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["enabled"])
-    post_seconds_var = tk.StringVar(value=str(initial_obs_settings["post_clip"]["seconds"]))
-    post_sound_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["sound_after"])
-    tk.Checkbutton(post_line, text="Keep recording for", variable=post_enabled_var,
-                   command=lambda: on_post_toggle()).pack(side="left")
-    post_seconds_box = tk.Spinbox(post_line, textvariable=post_seconds_var, width=4,
-                                  from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
-    post_seconds_box.pack(side="left", padx=(px(3), 0))
-    tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
-    info_button(post_line, "Post-clip", (
-        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
-        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
-        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
-        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
-        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
-        "tracks (what your mic picked up from your speakers stays).\n\n"
-        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
-    )).pack(side="left", padx=(px(6), 0))
-    post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
-                                      variable=post_sound_var)
-    post_sound_check.pack(anchor="w")
-
-    def on_post_toggle():
-        state = "normal" if post_enabled_var.get() else "disabled"
-        post_seconds_box.config(state=state)
-        post_sound_check.config(state=state)
-
-    on_post_toggle()
     next_row += 1
 
     tk.Label(frame, text="Recording bitrate:").grid(row=next_row, column=0, sticky="w")
@@ -832,6 +824,43 @@ def open_dialog(start_tab=None):
         state="disabled", command=lambda: start_mic_filter(),
     )
     mic_button.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    next_row += 1
+
+    # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
+    # longer, saved as the clip's "-extra.mkv" for the editor.
+    tk.Label(frame, text="Post-clip:").grid(row=next_row, column=0, sticky="nw", pady=(px(2), 0))
+    post_box = tk.Frame(frame)
+    post_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    post_line = tk.Frame(post_box)
+    post_line.pack(anchor="w")
+    post_enabled_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["enabled"])
+    post_seconds_var = tk.StringVar(value=str(initial_obs_settings["post_clip"]["seconds"]))
+    post_sound_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["sound_after"])
+    tk.Checkbutton(post_line, text="Keep recording for", variable=post_enabled_var,
+                   command=lambda: on_post_toggle()).pack(side="left")
+    post_seconds_box = tk.Spinbox(post_line, textvariable=post_seconds_var, width=4,
+                                  from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
+    post_seconds_box.pack(side="left", padx=(px(3), 0))
+    tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
+    info_button(post_line, "Post-clip", (
+        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
+        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
+        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
+        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
+        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
+        "tracks (what your mic picked up from your speakers stays).\n\n"
+        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
+    )).pack(side="left", padx=(px(6), 0))
+    post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
+                                      variable=post_sound_var)
+    post_sound_check.pack(anchor="w")
+
+    def on_post_toggle():
+        state = "normal" if post_enabled_var.get() else "disabled"
+        post_seconds_box.config(state=state)
+        post_sound_check.config(state=state)
+
+    on_post_toggle()
     next_row += 1
 
     def start_mic_filter():
@@ -1977,7 +2006,10 @@ def open_dialog(start_tab=None):
     root.update_idletasks()
     min_width = sidebar.winfo_reqwidth() + page.winfo_reqwidth() + scrollbar.winfo_reqwidth()
     screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
-    width = min(max(px(1100), min_width), screen_width - px(40))
+    width = max(px(1100), min_width)
+    root.layout = {"show_tab": show_tab, "tabs": TABS, "canvas": canvas, "page": page,
+                   "size": (width, width * 9 // 16)}  # for test_settings_dialog's overflow check
+    width = min(width, screen_width - px(40))
     height = min(width * 9 // 16, screen_height - px(80))
     root.geometry(f"{width}x{height}")
     root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))

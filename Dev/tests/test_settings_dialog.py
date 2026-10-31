@@ -89,3 +89,65 @@ def test_a_second_launch_asks_the_first_and_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["settings_dialog.py"])
     settings_dialog.main()  # returns instead of opening a second dialog
     assert (tmp_path / ".settings.raise").exists()
+
+
+def test_window_class_is_what_tk_reports():
+    import tkinter as tk
+
+    try:
+        root = tk.Tk(className=settings_dialog.WINDOW_CLASS)
+    except tk.TclError:
+        pytest.skip("no display")
+    assert root.winfo_class() == settings_dialog.WINDOW_CLASS  # what StartupWMClass has to match
+    root.destroy()
+
+
+def test_settings_gets_its_own_taskbar_entry_and_icon(tmp_path, monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    settings_dialog.ensure_desktop_entry(str(tmp_path))
+    text = (tmp_path / settings_dialog.DESKTOP_FILE).read_text(encoding="utf-8")
+    assert f"StartupWMClass={settings_dialog.WINDOW_CLASS}\n" in text
+    assert "ClipEmSettings.png" in text and "NoDisplay=true" in text
+
+
+def _tab_overflow(monkeypatch):
+    """{tab: what doesn't fit} for every tab but "All", in the real Settings
+    window at the size it opens at on a big enough screen."""
+    import tkinter as tk
+
+    overflow = {}
+
+    def measure(root, *_args):
+        layout = root.layout
+        canvas, page = layout["canvas"], layout["page"]
+        width, height = layout["size"]
+        root.deiconify()
+        root.geometry(f"{width}x{height}")
+        root.update()
+        for tab in layout["tabs"]:
+            if tab == "All":
+                continue
+            layout["show_tab"](tab)
+            root.update()
+            over = {"down": page.winfo_reqheight() - canvas.winfo_height(),
+                    "across": page.winfo_reqwidth() - canvas.winfo_width()}
+            over = {side: f"{pixels}px" for side, pixels in over.items() if pixels > 0}
+            if over:
+                overflow[tab] = over
+        root.destroy()
+
+    monkeypatch.setattr(tk.Misc, "mainloop", measure)
+    monkeypatch.setattr(settings_dialog, "watch_for_reopen", lambda root: None)
+    monkeypatch.setattr(settings_dialog, "bring_to_front", lambda root: None)
+    settings_dialog.open_dialog()
+    return overflow
+
+
+def test_no_settings_tab_overflows_or_scrolls(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+    assert _tab_overflow(monkeypatch) == {}

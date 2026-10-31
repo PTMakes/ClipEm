@@ -92,6 +92,26 @@ def test_shortcuts_in_a_real_entry(root, themed):
     assert entry.get() == "C:/Clips"
 
 
+@pytest.mark.parametrize("name", [app_window.MAIN_ICON, app_window.SETTINGS_ICON, "ClipEmEditor"])
+def test_every_window_logo_ships_as_png_and_ico(name):
+    for extension in (".png", ".ico"):
+        assert os.path.getsize(os.path.join(app_window.ICON_DIR, name + extension)) > 0
+
+
+def test_settings_and_the_editor_have_their_own_logos():
+    def logo(name):
+        with open(os.path.join(app_window.ICON_DIR, name + ".png"), "rb") as f:
+            return f.read()
+
+    assert len({logo(app_window.MAIN_ICON), logo(app_window.SETTINGS_ICON), logo("ClipEmEditor")}) == 3
+
+
+@needs_display
+def test_a_window_can_take_another_logo(root):
+    app_window.set_window_icon(root, icon=app_window.SETTINGS_ICON)
+    assert len(root.clipem_icons) == len(app_window.ICON_SIZES)
+
+
 @needs_display
 def test_window_icon_is_the_scaled_logo(root):
     app_window.set_window_icon(root)

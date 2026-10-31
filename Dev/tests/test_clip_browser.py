@@ -185,7 +185,7 @@ def test_desktop_entry_gives_the_window_clipem_icon(tmp_path):
     assert os.path.basename(path) == "clipem-editor.desktop" and not stale.exists()
     text = open(path, encoding="utf-8").read()
     assert "StartupWMClass=clipem-editor" in text
-    assert "NoDisplay=true" in text and text.count("Icon=") == 1 and "ClipEm.png" in text
+    assert "NoDisplay=true" in text and text.count("Icon=") == 1 and "ClipEmEditor.png" in text
     mtime = os.path.getmtime(path)
     assert clip_browser.ensure_app_desktop_entry(directory=str(tmp_path)) == path
     assert os.path.getmtime(path) == mtime  # unchanged - not rewritten
@@ -462,11 +462,11 @@ def test_window_command_runs_clipems_own_window_app(monkeypatch):
     assert cmd[:3] == ["/app/editor-window/clipem-editor", clip_browser.EDITOR_APP_DIR,
                        "--clipem-url=http://127.0.0.1:1/x/#t"]
     assert f"--clipem-profile={clip_browser.EDITOR_PROFILE_DIR}" in cmd and "--no-sandbox" not in cmd
-    assert any(arg.startswith("--clipem-icon=") and arg.endswith("ClipEm.png") for arg in cmd)
+    assert any(arg.startswith("--clipem-icon=") and arg.endswith("ClipEmEditor.png") for arg in cmd)
     monkeypatch.setattr(clip_browser.editor_window, "linux_needs_no_sandbox", lambda root: True)
     assert "--no-sandbox" in clip_browser.window_command("/x/clipem-editor", "http://127.0.0.1:1/", "Linux")
     windows = clip_browser.window_command("C:/x/ClipEm Editor.exe", "http://127.0.0.1:1/", "Windows")
-    assert windows[-1].endswith("ClipEm.ico") and "--no-sandbox" not in windows
+    assert windows[-1].endswith("ClipEmEditor.ico") and "--no-sandbox" not in windows
 
 
 def test_window_runs_as_electron_not_node(monkeypatch):

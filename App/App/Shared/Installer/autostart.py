@@ -17,7 +17,15 @@ import subprocess
 import sys
 from xml.sax.saxutils import escape as xml_escape
 
-from clipem_common import APP_DIR, INSTALLER_DIR, ROOT_DIR, SHARED_DIR, load_run_config, save_run_config
+from clipem_common import (
+    APP_DIR,
+    INSTALLER_DIR,
+    ROOT_DIR,
+    SHARED_DIR,
+    load_run_config,
+    save_run_config,
+    write_text_atomic,
+)
 
 RUN_PY = os.path.join(INSTALLER_DIR, "run.py")
 MACOS_LAUNCH_AGENT_LABEL = "com.ptmakes.clipem"
@@ -729,6 +737,42 @@ def repair_linux_menu_entry():
         return None
     create_linux_menu_entry(find_linux_python_bin(), _linux_icon())
     return linux_menu_entry_path()
+
+
+def applications_dir():
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
+    return os.path.join(data_home, "applications")
+
+
+def window_desktop_entry(name, script, icon, wm_class):
+    """A hidden .desktop entry for one of ClipEm's own windows: Linux taskbars
+    take a window's icon from the entry matching its class or app id."""
+    return "\n".join([
+        "[Desktop Entry]",
+        "Type=Application",
+        f"Name={name}",
+        f"Exec={desktop_exec_arg(sys.executable)} {desktop_exec_arg(script)}",
+        f"Icon={icon}",
+        f"StartupWMClass={wm_class}",
+        "NoDisplay=true",
+        "Terminal=false",
+    ]) + "\n"
+
+
+def write_window_desktop_entry(file_name, content, directory=None):
+    """Writes the entry unless it's already there - rewritten only if this
+    install has moved. Returns its path. Raises OSError."""
+    directory = directory or applications_dir()
+    path = os.path.join(directory, file_name)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            if f.read() == content:
+                return path
+    except OSError:
+        pass
+    os.makedirs(directory, exist_ok=True)
+    write_text_atomic(path, content)
+    return path
 
 
 def _linux_icon():

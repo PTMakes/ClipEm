@@ -71,7 +71,7 @@ import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
 import ui_colors  # noqa: E402
-from autostart import desktop_exec_arg  # noqa: E402
+from autostart import applications_dir, window_desktop_entry, write_window_desktop_entry  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
     acquire_instance_lock,
@@ -109,8 +109,8 @@ EXPORTS_PATH = os.path.join(CACHE_DIR, "exports.json")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.lock")
 LAUNCH_PATH = "clipem-editor"
 # Public (no token): the launch page and the logo it and the editor use.
-LAUNCH_FILES = {"icon.png": os.path.join(SCRIPT_DIR, "ClipEm.png"),
-                "icon.ico": os.path.join(SCRIPT_DIR, "ClipEm.ico")}
+LAUNCH_FILES = {"icon.png": os.path.join(SCRIPT_DIR, "ClipEmEditor.png"),
+                "icon.ico": os.path.join(SCRIPT_DIR, "ClipEmEditor.ico")}
 LAUNCH_PAGE = b"""<!doctype html>
 <meta charset="utf-8">
 <title>ClipEm Editor</title>
@@ -1127,22 +1127,8 @@ EDITOR_PROFILE_DIR = os.path.join(CACHE_DIR, "editor-window-profile")
 DESKTOP_ID = "clipem-editor"
 
 
-def applications_dir():
-    data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
-    return os.path.join(data_home, "applications")
-
-
 def app_desktop_entry():
-    return "\n".join([
-        "[Desktop Entry]",
-        "Type=Application",
-        "Name=ClipEm Editor",
-        f"Exec={desktop_exec_arg(sys.executable)} {desktop_exec_arg(os.path.abspath(__file__))}",
-        f"Icon={os.path.join(SCRIPT_DIR, 'ClipEm.png')}",
-        f"StartupWMClass={DESKTOP_ID}",
-        "NoDisplay=true",
-        "Terminal=false",
-    ]) + "\n"
+    return window_desktop_entry("ClipEm Editor", os.path.abspath(__file__), LAUNCH_FILES["icon.png"], DESKTOP_ID)
 
 
 def ensure_app_desktop_entry(directory=None):
@@ -1158,20 +1144,11 @@ def ensure_app_desktop_entry(directory=None):
                 os.remove(os.path.join(directory, name))
     except OSError:
         pass
-    content = app_desktop_entry()
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            if f.read() == content:
-                return path
-    except OSError:
-        pass
-    try:
-        os.makedirs(directory, exist_ok=True)
-        write_text_atomic(path, content)
+        return write_window_desktop_entry(DESKTOP_ID + ".desktop", app_desktop_entry(), directory)
     except OSError as exc:
         log.warning(f"Couldn't write {path} for the editor's taskbar icon: {exc}")
         return None
-    return path
 
 
 def window_command(exe, url, system=None):

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Regenerates every derived logo asset in the repo from the two source
-files (ClipEm.png, ClipEm.webp, both 1080x1080) that live next to this
-script, then re-checksums App/Shared so setup.py's integrity check doesn't
+"""Regenerates every derived logo asset in the repo from the source files
+(ClipEm.png, ClipEm.webp, ClipEmSettings.png, ClipEmEditor.png, all 1080x1080)
+in Dev/assets, then re-checksums App/Shared so setup.py's integrity check doesn't
 flag the new files as unexpected.
 
-Run this after replacing Dev/assets/ClipEm.png / Dev/assets/ClipEm.webp with new artwork:
+Run this after replacing any of them with new artwork:
 
     python3 Dev/update_logo.py
 
@@ -12,6 +12,8 @@ Derived assets (all regenerated, none hand-edited - re-run this instead of
 touching them directly):
   - App/App/Shared/tray-widget/ClipEm.png  (tray icon source)
   - App/App/Shared/tray-widget/ClipEm.ico  (Windows shortcut icon)
+  - App/App/Shared/tray-widget/ClipEmSettings.png/.ico  (Settings window)
+  - App/App/Shared/tray-widget/ClipEmEditor.png/.ico    (clip editor window)
   - Dev/installer/windows/ClipEm.ico       (NSIS installer icon)
   - Website/app/icon.png                   (Next.js favicon)
   - Website/public/logo.webp               (hero logo)
@@ -28,6 +30,7 @@ REPO_ROOT = os.path.dirname(DEV_DIR)
 
 SOURCE_PNG = os.path.join(DEV_DIR, "assets", "ClipEm.png")
 SOURCE_WEBP = os.path.join(DEV_DIR, "assets", "ClipEm.webp")
+WINDOW_LOGOS = ("ClipEmSettings", "ClipEmEditor")
 
 APP_SHARED_DIR = os.path.join(REPO_ROOT, "App", "App", "Shared")
 TRAY_WIDGET_DIR = os.path.join(APP_SHARED_DIR, "tray-widget")
@@ -72,6 +75,10 @@ def main():
     print("Updating tray widget assets...", flush=True)
     write_png(source_img, os.path.join(TRAY_WIDGET_DIR, "ClipEm.png"))
     write_ico(source_img, os.path.join(TRAY_WIDGET_DIR, "ClipEm.ico"))
+    for name in WINDOW_LOGOS:
+        window_img = Image.open(_require(os.path.join(DEV_DIR, "assets", name + ".png"))).convert("RGBA")
+        write_png(window_img, os.path.join(TRAY_WIDGET_DIR, name + ".png"))
+        write_ico(window_img, os.path.join(TRAY_WIDGET_DIR, name + ".ico"))
 
     print("Updating Windows NSIS installer icon...", flush=True)
     write_ico(source_img, os.path.join(NSIS_DIR, "ClipEm.ico"))

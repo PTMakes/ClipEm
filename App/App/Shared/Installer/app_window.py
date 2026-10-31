@@ -1,6 +1,6 @@
 """
 What every ClipEm Tk window shares - the setup wizard (gui.py), the tray's
-settings dialog and run.py's "downloading OBS" notice: the ClipEm logo as
+settings dialog and run.py's "downloading OBS" notice: a ClipEm logo as
 the window icon (for the window's own dialogs too, e.g. Tk's folder picker
 and message boxes), and the usual text-field shortcuts:
 
@@ -19,8 +19,10 @@ import sys
 
 from clipem_common import SHARED_DIR
 
-ICON_PNG = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.png")
-ICON_ICO = os.path.join(SHARED_DIR, "tray-widget", "ClipEm.ico")
+# Logos in tray-widget/, as .png and .ico (Dev/update_logo.py).
+ICON_DIR = os.path.join(SHARED_DIR, "tray-widget")
+MAIN_ICON = "ClipEm"
+SETTINGS_ICON = "ClipEmSettings"
 ICON_SIZES = (64, 32, 16)
 
 # Tk widget classes the shortcuts apply to: classic and themed entries,
@@ -43,7 +45,7 @@ def use_windows_app_id(app_id):
         pass
 
 
-def _icon_images(tk):
+def _icon_images(tk, icon_png):
     """The logo at ICON_SIZES - it's 1080px, far bigger than any window icon
     (on X11 the full size would be a ~4.6 MB window property). Scaled with
     Pillow when it's there (it comes with the tray widget), else with Tk's
@@ -51,11 +53,11 @@ def _icon_images(tk):
     try:
         from PIL import Image
     except ImportError:
-        full = tk.PhotoImage(file=ICON_PNG)
+        full = tk.PhotoImage(file=icon_png)
         return [full.subsample(max(1, full.width() // size)) for size in ICON_SIZES]
 
     images = []
-    with Image.open(ICON_PNG) as logo:
+    with Image.open(icon_png) as logo:
         logo = logo.convert("RGBA")
         for size in ICON_SIZES:
             buf = io.BytesIO()
@@ -64,29 +66,30 @@ def _icon_images(tk):
     return images
 
 
-def set_window_icon(root, log=None):
-    """The ClipEm logo as root's icon and the default for every window it
+def set_window_icon(root, log=None, icon=MAIN_ICON):
+    """The logo `icon` as root's icon and the default for every window it
     opens later. Best effort - a missing icon just leaves Tk's default."""
     import tkinter as tk
 
+    icon_ico = os.path.join(ICON_DIR, icon + ".ico")
     try:
-        if sys.platform == "win32" and os.path.exists(ICON_ICO):
-            root.iconbitmap(default=ICON_ICO)  # crisp at every taskbar/title-bar size
+        if sys.platform == "win32" and os.path.exists(icon_ico):
+            root.iconbitmap(default=icon_ico)  # crisp at every taskbar/title-bar size
         # Kept on root: Tk drops an image once nothing references it.
-        root.clipem_icons = _icon_images(tk)
+        root.clipem_icons = _icon_images(tk, os.path.join(ICON_DIR, icon + ".png"))
         root.iconphoto(True, *root.clipem_icons)
     except (tk.TclError, OSError) as exc:
         if log:
             log(f"Couldn't set the window icon: {exc}")
-    if sys.platform == "win32" and os.path.exists(ICON_ICO):
-        _set_native_icons_when_mapped(root, log)
+    if sys.platform == "win32" and os.path.exists(icon_ico):
+        _set_native_icons_when_mapped(root, icon_ico, log)
 
 
-def _set_native_icons_when_mapped(root, log=None):
+def _set_native_icons_when_mapped(root, icon_ico, log=None):
     """Tk only ever gives Windows a 16 and a 32 px icon (tkWinWm.c's
     GetIcon), so on a scaled display the taskbar stretches the 32 px one
     into a blur. Once the window has its frame (it's mapped), this loads
-    ClipEm.ico at the sizes Windows uses at this DPI and sets those on it
+    icon_ico at the sizes Windows uses at this DPI and sets those on it
     instead. Tk keeps them if it later rebuilds the frame."""
     import ctypes
 
@@ -109,7 +112,7 @@ def _set_native_icons_when_mapped(root, log=None):
             # the process is DPI aware (ui_scale.enable_dpi_awareness).
             for which, metric in ((1, 11), (0, 49)):
                 size = user32.GetSystemMetrics(metric)
-                icon = user32.LoadImageW(None, ICON_ICO, image_icon, size, size, lr_loadfromfile)
+                icon = user32.LoadImageW(None, icon_ico, image_icon, size, size, lr_loadfromfile)
                 if icon:
                     user32.SendMessageW(hwnd, wm_seticon, which, icon)
         except Exception as exc:  # best effort, like set_window_icon
@@ -215,8 +218,8 @@ def install_entry_shortcuts(root):
             root.bind_class(cls, sequence, redo)
 
 
-def style_app_window(root, log=None):
+def style_app_window(root, log=None, icon=MAIN_ICON):
     """Icon + text shortcuts for a ClipEm Tk app's root window. Call
     use_windows_app_id() before creating root."""
-    set_window_icon(root, log=log)
+    set_window_icon(root, log=log, icon=icon)
     install_entry_shortcuts(root)
