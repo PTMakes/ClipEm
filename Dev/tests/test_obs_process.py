@@ -118,3 +118,25 @@ def test_is_ours_rejects_non_obs_executables_inside_the_install(tmp_path, monkey
     assert not obs_process._is_ours(str(tmp_path / "App" / "Linux" / "python" / "bin" / "python3"))
     assert not obs_process._is_ours(None)
     assert obs_process._is_ours(os.path.join(str(tmp_path), "App", "Windows", "bin", "64bit", "obs64.exe"))
+
+
+def test_kill_obs_forces_each_process(monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("POSIX signals")
+    killed = []
+    pids = [111, 222]
+    monkeypatch.setattr(obs_process, "find_obs_pids", lambda: list(pids))
+    monkeypatch.setattr(obs_process.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    monkeypatch.setattr(obs_process, "wait_for_obs_exit", lambda timeout: True)
+    assert obs_process.kill_obs(log) is True
+    assert killed == [(111, obs_process.signal.SIGKILL), (222, obs_process.signal.SIGKILL)]
+
+
+def test_kill_obs_says_if_it_survives(monkeypatch):
+    def refuse(pid, sig):
+        raise PermissionError("not allowed")
+
+    monkeypatch.setattr(obs_process, "find_obs_pids", lambda: [111])
+    monkeypatch.setattr(obs_process.os, "kill", refuse)
+    monkeypatch.setattr(obs_process, "wait_for_obs_exit", lambda timeout: False)
+    assert obs_process.kill_obs(log) is False

@@ -404,14 +404,21 @@ def launch_gate(tmp_path, monkeypatch):
     monkeypatch.setattr(run, "TRAY_LOCK_PATH", str(tmp_path / ".tray.lock"))
     monkeypatch.setattr(run.obs_process, "obs_running", lambda: False)
     asked = []
-    answer = {"proceed": False}
+    answer = {"value": None}
 
-    def ask(reason):
+    def ask(reason, can_kill=True):
         asked.append(reason)
-        return answer["proceed"]
+        answer["can_kill"] = can_kill
+        return answer["value"]
 
     monkeypatch.setattr(run, "_ask_already_open", ask)
-    return tmp_path, asked, lambda proceed: answer.update(proceed=proceed)
+    monkeypatch.setattr(run, "_run_with_notice", lambda _text, work: work())
+
+    def set_answer(value):
+        answer["value"] = value
+        return answer
+
+    return tmp_path, asked, set_answer
 
 
 def _other_process():
@@ -440,7 +447,7 @@ def test_cancel_when_another_launch_is_running(launch_gate):
 
 def test_proceed_anyway_next_to_another_launch_leaves_updates_to_it(launch_gate):
     tmp_path, asked, answer = launch_gate
-    answer(True)
+    answer(run.ALREADY_OPEN_PROCEED)
     other = _other_process()
     try:
         (tmp_path / ".run.lock").write_text(str(other.pid))
@@ -453,9 +460,94 @@ def test_proceed_anyway_next_to_another_launch_leaves_updates_to_it(launch_gate)
 def test_running_obs_counts_as_already_open(launch_gate, monkeypatch):
     _tmp_path, asked, answer = launch_gate
     monkeypatch.setattr(run.obs_process, "obs_running", lambda: True)
-    answer(True)
+    answer(run.ALREADY_OPEN_PROCEED)
     assert run._claim_launch() is True
     assert asked == ["ClipEm's OBS is already running."]
+
+
+def _existing_clipem(monkeypatch, closes=True):
+    """OBS "running" until closed (politely if `closes`, else only killed); returns the calls."""
+    calls, state = [], {"obs": True}
+
+    def close(log, timeout_seconds=15):
+        calls.append("close")
+        state["obs"] = not closes
+        return closes
+
+    def kill(log):
+        calls.append("kill")
+        state["obs"] = False
+        return True
+
+    monkeypatch.setattr(run.obs_process, "obs_running", lambda: state["obs"])
+    monkeypatch.setattr(run.obs_process, "close_obs_stopping_outputs", close)
+    monkeypatch.setattr(run.obs_process, "kill_obs", kill)
+    monkeypatch.setattr(run, "stop_clip_editor", lambda log: calls.append("editor"))
+    monkeypatch.setattr(run, "stop_tray_widget", lambda log: calls.append("tray"))
+    return calls
+
+
+def test_kill_existing_closes_everything_and_carries_on(launch_gate, monkeypatch):
+    _tmp_path, _asked, answer = launch_gate
+    calls = _existing_clipem(monkeypatch)
+    state = answer(run.ALREADY_OPEN_KILL)
+    assert run._claim_launch() is True  # this launch goes ahead as the only copy
+    assert calls == ["close", "editor", "tray"] and state["can_kill"] is True
+
+
+def test_kill_existing_forces_an_obs_that_wont_close(launch_gate, monkeypatch):
+    _tmp_path, _asked, answer = launch_gate
+    calls = _existing_clipem(monkeypatch, closes=False)
+    answer(run.ALREADY_OPEN_KILL)
+    assert run._claim_launch() is True
+    assert calls == ["close", "kill", "editor", "tray"]
+
+
+def test_kill_existing_stops_if_something_survives(launch_gate, monkeypatch):
+    _tmp_path, _asked, answer = launch_gate
+    _existing_clipem(monkeypatch)
+    monkeypatch.setattr(run, "_tray_widget_running", lambda: True)
+    monkeypatch.setattr(run, "_show_error", lambda message: None)
+    answer(run.ALREADY_OPEN_KILL)
+    with pytest.raises(SystemExit):
+        run._claim_launch()
+
+
+def test_another_launch_cant_be_killed(launch_gate):
+    tmp_path, _asked, answer = launch_gate
+    state = answer(None)
+    other = _other_process()
+    try:
+        (tmp_path / ".run.lock").write_text(str(other.pid))
+        with pytest.raises(SystemExit):
+            run._claim_launch()
+        assert state["can_kill"] is False  # it may be installing an update
+    finally:
+        other.kill()
+        other.wait()
+
+
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.parametrize("can_kill, shown", [(True, True), (False, False)])
+def test_already_open_dialog_offers_the_kill_button(monkeypatch, can_kill, shown):
+    import tkinter
+
+    labels = []
+
+    def read_and_close(root, *_args):
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tkinter.Button):
+                    labels.append(child)
+                walk(child)
+
+        walk(root)
+        kill = [b for b in labels if b.cget("text") == "Kill Existing ClipEm and OBS"]
+        assert bool(kill) is shown
+        (kill or [b for b in labels if b.cget("text") == "Cancel"])[0].invoke()
+
+    monkeypatch.setattr(tkinter.Misc, "mainloop", read_and_close)
+    assert run._ask_already_open("Reason.", can_kill=can_kill) == (run.ALREADY_OPEN_KILL if shown else None)
 
 
 def test_a_restart_waits_for_the_launch_it_replaces(launch_gate, monkeypatch):
@@ -504,7 +596,7 @@ def test_obs_skips_replay_buffer_while_clips_folder_is_missing(app, monkeypatch,
 
 def test_a_running_tray_counts_as_already_open_except_for_an_obs_restart(launch_gate, monkeypatch):
     tmp_path, asked, answer = launch_gate
-    answer(True)
+    answer(run.ALREADY_OPEN_PROCEED)
     tray = _other_process()
     monkeypatch.setattr(run, "is_tray_widget_process", lambda pid: pid == tray.pid)
     try:

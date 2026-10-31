@@ -8,13 +8,13 @@
         "In the clip editor, a clip with a post-clip copy opens ending at the hotkey press. Use Include extra, or drag the end handle, to keep the extra seconds.",
         "Clip naming lets you choose the post-clip copy's suffix.",
         "Release notes: update prompts show what's new, ClipEm shows them after it updates, and Settings has a Release Notes button with the notes for every version.",
-        "Read every ClipEm log, OBS log and OBS crash report in Settings, with View Logs in Troubleshooting.",
-        "Log viewer for troubleshooting."
+        "Read every ClipEm log, OBS log and OBS crash report in Settings, with View Logs in Troubleshooting."
       ],
       "Improvements": [
         "On Windows and Linux, OBS now stays fully out of sight: ClipEm's tray icon is the only one, and OBS's errors and messages appear as ClipEm notifications.",
         "Settings and the clip editor have their own icons.",
-        "Settings' Clip Output/Devices tab now uses two columns, with Audio Devices beside the recording settings, so it fits without scrolling."
+        "Settings' Clip Output/Devices tab now uses two columns, with Audio Devices beside the recording settings, so it fits without scrolling.",
+        "The ClipEm Is Already Open window can now kill a stuck ClipEm and OBS and start fresh."
       ],
       "Fixes": [
         "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden."

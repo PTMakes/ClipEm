@@ -696,6 +696,10 @@ def _restart_clipem_to_update():
     _restart_self([REOPEN_EDITOR_FLAG] if editor_was_open else [])
 
 
+ALREADY_OPEN_PROCEED, ALREADY_OPEN_KILL = "proceed", "kill"
+KILL_WAIT_SECONDS = 10  # how long OBS gets to close before it's forced
+
+
 def _read_pid(path):
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -733,9 +737,9 @@ def _tray_widget_running():
     return bool(tray_pid and tray_pid != os.getpid() and pid_alive(tray_pid) and is_tray_widget_process(tray_pid))
 
 
-def _ask_already_open(reason):
-    """True for Proceed Anyway; False for Cancel, closing the window, or
-    when no window can be shown."""
+def _ask_already_open(reason, can_kill=True):
+    """ALREADY_OPEN_KILL or ALREADY_OPEN_PROCEED for those buttons; None for
+    Cancel, closing the window, or when no window can be shown."""
     try:
         _enable_windows_tk()
         import tkinter
@@ -744,17 +748,17 @@ def _ask_already_open(reason):
         dark_theme.apply_theme(root)
     except Exception as exc:
         log.info(f"(Couldn't ask whether to start a second copy: {exc})")
-        return False
+        return None
     app_window.set_window_icon(root)
     root.title("ClipEm Is Already Open")
     root.resizable(False, False)
     root.lift()
     root.attributes("-topmost", True)
     root.after(500, lambda: root.attributes("-topmost", False))
-    choice = {"proceed": False}
+    choice = {}
 
-    def proceed():
-        choice["proceed"] = True
+    def choose(value):
+        choice["value"] = value
         root.destroy()
 
     frame = tkinter.Frame(root, padx=20, pady=16)
@@ -765,33 +769,60 @@ def _ask_already_open(reason):
             f"ClipEm is already open. {reason}\n\n"
             "Starting it again opens a second OBS, which records the same\n"
             "screen and audio twice. Use the tray icon to show OBS instead."
+            + ("\n\nIf it's stuck, kill it and start ClipEm again. OBS gets the chance to\n"
+               "finish saving first, and is forced to close if it doesn't."
+               if can_kill else "")
         ),
     ).pack(anchor="w", pady=(0, 12))
     buttons = tkinter.Frame(frame)
     buttons.pack(fill="x")
-    tkinter.Button(buttons, text="Proceed Anyway", command=proceed).pack(side="right")
+    tkinter.Button(buttons, text="Proceed Anyway", command=lambda: choose(ALREADY_OPEN_PROCEED)).pack(side="right")
+    if can_kill:
+        tkinter.Button(buttons, text="Kill Existing ClipEm and OBS",
+                       command=lambda: choose(ALREADY_OPEN_KILL)).pack(side="right", padx=(0, 8))
     cancel = tkinter.Button(buttons, text="Cancel", command=root.destroy)
     cancel.pack(side="right", padx=(0, 8))
     cancel.focus_set()
     root.bind("<Escape>", lambda _event: root.destroy())
     root.protocol("WM_DELETE_WINDOW", root.destroy)
     root.mainloop()
-    return choice["proceed"]
+    return choice.get("value")
+
+
+def _kill_existing():
+    """Ends this install's OBS, clip editor and tray widget (Settings closes
+    with the tray). OBS is asked first, so a recording gets finished, and
+    forced if that doesn't work. Returns whether they're gone."""
+    if not obs_process.close_obs_stopping_outputs(log, timeout_seconds=KILL_WAIT_SECONDS):
+        log.warning("OBS didn't close - forcing it.")
+        obs_process.kill_obs(log)
+    stop_clip_editor(log)
+    stop_tray_widget(log)
+    return not obs_process.obs_running() and not _tray_widget_running()
 
 
 def _claim_launch():
     """Asks before starting a second copy of ClipEm (Cancel exits). Returns
     whether this launch may install or offer updates - not while another
-    launch is running, which could be doing the same."""
+    launch is running, which could be doing the same. Another launch can't
+    be killed from here: it may be installing an update."""
     reason = _what_is_already_open()
     if reason is None:
         return True
     log.info(f"Already open: {reason} Asking the user.")
-    if not _ask_already_open(reason):
+    another_launch = reason.startswith("ClipEm is still starting")
+    choice = _ask_already_open(reason, can_kill=not another_launch)
+    if choice == ALREADY_OPEN_KILL:
+        log.info("Killing the existing ClipEm and OBS.")
+        if not _run_with_notice("Closing ClipEm and OBS...", _kill_existing):
+            _fatal("ClipEm or OBS wouldn't close. Close them from your system's task manager, "
+                   "then start ClipEm again.")
+        return True
+    if choice != ALREADY_OPEN_PROCEED:
         log.info("Not starting a second copy of ClipEm.")
         sys.exit(0)
     log.info("Starting another copy anyway (Proceed Anyway).")
-    return not reason.startswith("ClipEm is still starting")
+    return not another_launch
 
 
 def _restart_self(extra_args):

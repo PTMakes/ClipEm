@@ -211,6 +211,27 @@ def connect_to_obs(log, timeout=5):
         return None
 
 
+def kill_obs(log, timeout_seconds=5):
+    """Ends this distribution's OBS by force, for one that won't close: what
+    it hadn't saved is lost. Returns True once none is running."""
+    for pid in find_obs_pids():
+        log.warning(f"Kill OBS: ending pid {pid}.")
+        try:
+            if sys.platform == "win32":
+                import ctypes
+
+                PROCESS_TERMINATE = 0x0001
+                handle = ctypes.windll.kernel32.OpenProcess(PROCESS_TERMINATE, False, pid)
+                if handle:
+                    ctypes.windll.kernel32.TerminateProcess(handle, 1)
+                    ctypes.windll.kernel32.CloseHandle(handle)
+            else:
+                os.kill(pid, signal.SIGKILL)
+        except OSError as exc:
+            log.warning(f"Kill OBS: couldn't end pid {pid}: {exc}")
+    return wait_for_obs_exit(timeout_seconds)
+
+
 def close_obs_stopping_outputs(log, timeout_seconds=15):
     """close_obs() with its own obs-websocket connection, for callers that
     don't already have one (Setup, the settings dialog)."""
