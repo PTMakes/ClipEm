@@ -370,7 +370,7 @@ def describe_hotkey(ctrl, alt, shift, key_label):
     return f"{mods}+{key_label}" if mods else key_label
 
 
-# The key "label" of a hotkey that's been cleared (Reset in Setup/Settings).
+# The key "label" of a hotkey that's been cleared (Clear in Setup/Settings).
 NO_HOTKEY = "None"
 CLEARED_HOTKEY = (False, False, False, NO_HOTKEY)
 

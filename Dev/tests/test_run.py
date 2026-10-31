@@ -185,6 +185,41 @@ def test_update_finished_window_without_notes(monkeypatch, tmp_path):
     assert texts[1] == run.release_notes.NO_NOTES
 
 
+@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.parametrize("new_settings", [[{"key": "post_clip", "name": "Post-clip"}], []])
+def test_update_finished_window_offers_the_new_settings(monkeypatch, tmp_path, new_settings):
+    import tkinter
+
+    history = tmp_path / "release_notes.json"
+    history.write_text(json.dumps([{"version": "1.4.9", "date": "2026-11-01", "sections": {"Fixes": ["One."]},
+                                    "new_settings": new_settings}]))
+    request = tmp_path / ".settings.request"
+    monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(history))
+    monkeypatch.setattr(run, "SETTINGS_REQUEST_PATH", str(request))
+    found = {}
+
+    def press(root, *_args):
+        def walk(widget):
+            for child in widget.winfo_children():
+                if isinstance(child, tkinter.Button):
+                    found[child.cget("text")] = child
+                elif isinstance(child, tkinter.Label):
+                    found.setdefault("labels", []).append(child.cget("text"))
+                walk(child)
+
+        walk(root)
+        found.get("Show New Settings", found["OK"]).invoke()
+
+    monkeypatch.setattr(tkinter.Misc, "mainloop", press)
+    run._show_update_finished("1.4.8", "1.4.9")
+    assert ("Show New Settings" in found) == bool(new_settings)
+    if new_settings:
+        assert request.read_text() == "post_clip"
+        assert "New in Settings: Post-clip." in found["labels"]
+    else:
+        assert not request.exists()
+
+
 def test_update_is_never_installed_without_asking(update_flow):
     config, calls, _answer, _available = update_flow
     run._offer_update()  # prompt closed without choosing

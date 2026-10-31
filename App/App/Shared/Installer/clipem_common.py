@@ -52,6 +52,9 @@ SIGNING_PUBLIC_KEY_PATH = os.path.join(INSTALLER_DIR, "signing_public_key.txt")
 
 # The running tray widget's single-instance lock (its pid) - see tray_widget.LOCK_PATH.
 TRAY_LOCK_PATH = os.path.join(SHARED_DIR, "tray-widget", ".tray.lock")
+# Asks the tray widget to open Settings on these (comma-separated) settings:
+# only it has what Settings needs to run, on every platform.
+SETTINGS_REQUEST_PATH = os.path.join(SHARED_DIR, "tray-widget", ".settings.request")
 TRAY_WIDGET_SCRIPT_NAME = "tray_widget.py"
 
 LOG_DIR = os.path.join(APP_DIR, "logs")

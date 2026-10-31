@@ -1,8 +1,9 @@
 """Every popup window ClipEm opens over the setup wizard or Settings - message
-boxes, prompts, file pickers and its own dialogs - shares one standard
-rectangular size, POPUP_SIZE (96 DPI pixels, scaled like the windows
-themselves - see ui_scale.py). place() gives a Toplevel that size, centred on
-its parent; a popup only grows past it when its contents wouldn't fit.
+boxes, prompts and its own dialogs - shares one standard width, POPUP_SIZE's
+(96 DPI pixels, scaled like the windows themselves - see ui_scale.py), and is
+as tall as its contents, following them if they change. place() does that to a
+Toplevel, centred on its parent; a popup only gets wider when its contents
+wouldn't fit. File pickers, which have no natural height, get all of POPUP_SIZE.
 
 Tk's own message boxes size themselves to their text (tall and narrow for a
 long message), so this module also has drop-in replacements for the
@@ -37,12 +38,9 @@ def size(parent=None):
     return px(POPUP_SIZE[0]), px(POPUP_SIZE[1])
 
 
-def geometry(parent, min_width=0, min_height=0):
-    """A "WxH+X+Y" geometry for a popup over parent: the standard size (or
-    min_width/min_height, if bigger) centred on parent's window - or the
+def _centred(parent, width, height):
+    """"+X+Y" for a popup of that size, centred on parent's window - or the
     screen, when that isn't showing."""
-    width, height = size(parent)
-    width, height = max(width, min_width), max(height, min_height)
     owner = _root(parent)
     if owner.winfo_viewable():
         x = owner.winfo_rootx() + (owner.winfo_width() - width) // 2
@@ -50,14 +48,24 @@ def geometry(parent, min_width=0, min_height=0):
     else:
         x = (owner.winfo_screenwidth() - width) // 2
         y = (owner.winfo_screenheight() - height) // 2
-    return f"{width}x{height}+{max(x, 0)}+{max(y, 0)}"
+    return f"+{max(x, 0)}+{max(y, 0)}"
+
+
+def geometry(parent):
+    """A "WxH+X+Y" geometry for a file picker over parent: the standard size."""
+    width, height = size(parent)
+    return f"{width}x{height}{_centred(parent, width, height)}"
 
 
 def place(window, parent=None):
-    """Sizes window to the standard popup size (or bigger, if its contents
-    need it) and centres it on parent (window's master by default)."""
+    """Gives window the standard popup width (or more, if its contents need
+    it) and centres it on parent (window's master by default). Its height is
+    left to Tk, which follows the contents - the mic filter's pages differ."""
+    parent = parent or window.master
+    # Holds the width: setting a size in geometry() would fix the height too.
+    tk.Frame(window, width=size(parent)[0], height=0).pack(side="top")
     window.update_idletasks()
-    window.geometry(geometry(parent or window.master, window.winfo_reqwidth(), window.winfo_reqheight()))
+    window.geometry(_centred(parent, window.winfo_reqwidth(), window.winfo_reqheight()))
 
 
 def _dialog(title, message, buttons, parent, default, cancel, entry_value=None):
@@ -76,7 +84,8 @@ def _dialog(title, message, buttons, parent, default, cancel, entry_value=None):
     body.pack(fill="both", expand=True)
     row = tk.Frame(body)
     row.pack(side="bottom", anchor="e", pady=(px(12), 0))
-    tk.Label(body, text=message, justify="left", anchor="nw", wraplength=width - 2 * px(PAD)).pack(
+    # Less the label's own padding, or a full line widens the popup.
+    tk.Label(body, text=message, justify="left", anchor="nw", wraplength=width - 2 * px(PAD) - px(6)).pack(
         side="top", anchor="w", fill="x")
     entry = None
     if entry_value is not None:

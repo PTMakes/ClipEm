@@ -4,7 +4,7 @@
     "date": "2026-10-30",
     "sections": {
       "New Features": [
-        "Post-clip: ClipEm can keep recording for a few seconds after you press the clip hotkey, so you catch what's said right after. Turn it on in Settings > Recording. Your clip saves as usual, along with a \"-extra.mkv\" copy that has the extra seconds.",
+        "Post-clip: ClipEm can keep recording for a few seconds after you press the clip hotkey, so you catch what's said right after. Turn it on in Settings > Clip Output. Your clip saves as usual, along with a \"-extra.mkv\" copy that has the extra seconds.",
         "In the clip editor, a clip with a post-clip copy opens ending at the hotkey press. Use Include extra, or drag the end handle, to keep the extra seconds.",
         "Clip naming lets you choose the post-clip copy's suffix.",
         "Release notes: update prompts show what's new, ClipEm shows them after it updates, and Settings has a Release Notes button with the notes for every version.",
@@ -13,7 +13,7 @@
       "Improvements": [
         "On Windows and Linux, OBS now stays fully out of sight: ClipEm's tray icon is the only one, and OBS's errors and messages appear as ClipEm notifications.",
         "Settings and the clip editor have their own icons.",
-        "Settings' Clip Output/Devices tab now uses two columns, so it fits without scrolling.",
+        "Settings has a new Recording/Devices tab, plus Clip Names and Clipping Add-Ons boxes.",
         "The ClipEm Is Already Open window can now kill a stuck ClipEm and OBS and start fresh.",
         "Stuck-screen detection now leaves a screen alone when nothing is happening on it, so fewer false alarms."
       ],
@@ -21,7 +21,25 @@
         "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden.",
         "If ClipEm loses access to your screen on Linux, it now opens the screen picker itself instead of asking you to fix it in OBS."
       ]
-    }
+    },
+    "new_settings": [
+      {
+        "key": "post_clip",
+        "name": "Post-clip"
+      },
+      {
+        "key": "clip_names",
+        "name": "the post-clip copy's name"
+      },
+      {
+        "key": "view_logs",
+        "name": "View Logs"
+      },
+      {
+        "key": "release_notes",
+        "name": "Release Notes"
+      }
+    ]
   },
   {
     "version": "1.4.8",

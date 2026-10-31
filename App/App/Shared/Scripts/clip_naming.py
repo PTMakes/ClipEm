@@ -79,7 +79,7 @@ def validate(settings):
                 return "The date format doesn't contain any date or time codes (like %Y or %H)."
         suffixes = (settings["small_suffix"], settings["tracks_suffix"], settings["extra_suffix"])
         if not all(suffixes) or len(set(suffixes)) != len(suffixes):
-            return "The copy suffixes must all be set, and be different."
+            return "The addon suffixes must all be set, and be different."
         if any(clean(suffix) != suffix for suffix in suffixes):
             return 'Suffixes can\'t contain < > : " / \\ | ? *'
         if not (settings["prefix"] or settings["date"] or settings["id"] != ID_NONE):

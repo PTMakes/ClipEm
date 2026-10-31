@@ -55,6 +55,7 @@ from clipem_common import (  # noqa: E402
     OPEN_EDITOR_ENV,
     REOPEN_EDITOR_FLAG,
     ROOT_DIR,
+    SETTINGS_REQUEST_PATH,
     SHARED_DIR,
     TRAY_LOCK_PATH,
     TRAY_PYTHON_PIN_FILENAME,
@@ -65,6 +66,7 @@ from clipem_common import (  # noqa: E402
     setup_logging,
     stop_clip_editor,
     stop_tray_widget,
+    write_text_atomic,
 )
 
 TRAY_WIDGET_SCRIPT = os.path.join(SHARED_DIR, "tray-widget", "tray_widget.py")
@@ -608,6 +610,9 @@ def _ask_about_update(changes, notes=""):
     return choice.get("value")
 
 
+NEW_SETTINGS_WRAP = 480  # 96 DPI pixels
+
+
 def _show_update_finished(old, new):
     """What an update from `old` to `new` brought. old None: it isn't known."""
     root = _prompt_window("ClipEm Has Updated")
@@ -623,8 +628,30 @@ def _show_update_finished(old, new):
     # One version needs no heading of its own: the window's says it.
     parts = release_notes.lines(entries, versions=len(entries) > 1) or [(None, release_notes.NO_NOTES)]
     release_notes.notes_box(frame, parts, height=12).pack(fill="x", pady=(0, 12))
-    tkinter.Button(frame, text="OK", width=10, command=root.destroy).pack(anchor="e")
+    added = release_notes.new_settings(entries)
+    if added:
+        names = ", ".join(setting["name"] for setting in added)
+        tkinter.Label(frame, justify="left", wraplength=NEW_SETTINGS_WRAP * root.winfo_fpixels("1i") / 96,
+                      text=f"New in Settings: {names}.").pack(anchor="w", pady=(0, 12))
+    buttons = tkinter.Frame(frame)
+    buttons.pack(anchor="e")
+
+    def show_new_settings():
+        _request_settings([setting["key"] for setting in added])
+        root.destroy()
+
+    if added:
+        tkinter.Button(buttons, text="Show New Settings", command=show_new_settings).pack(side="left", padx=(0, 8))
+    tkinter.Button(buttons, text="OK", width=10, command=root.destroy).pack(side="left")
     _run_prompt(root)
+
+
+def _request_settings(keys):
+    """Has the tray widget open Settings with these settings outlined."""
+    try:
+        write_text_atomic(SETTINGS_REQUEST_PATH, ",".join(keys))
+    except OSError as exc:
+        log.warning(f"Couldn't ask the tray widget to open Settings: {exc}")
 
 
 def _note_version_started():

@@ -1,7 +1,9 @@
 """
 The release notes of every version, shipped in Shared/release_notes.json:
-[{"version", "date", "sections": {heading: [note, ...]}}], newest first.
-Written by hand: add the coming version's entry at the top, before releasing it.
+[{"version", "date", "sections": {heading: [note, ...]}, "new_settings": [{"key",
+"name"}]}], newest first. Written by hand: add the coming version's entry at the
+top, before releasing it. new_settings is optional: each key is one Settings can
+outline (settings_dialog's highlightable()), and name what the update window calls it.
 
 Shown after an update (run.py) and from Settings > Check for Updates' Release
 Notes button.
@@ -33,6 +35,15 @@ def since(entries, old, new):
         return [e for e in entries if e["version"] == new]
     return [e for e in entries
             if updater.is_newer(e["version"], old) and not updater.is_newer(e["version"], new)]
+
+
+def new_settings(entries):
+    """[{"key", "name"}] of the settings entries added, without repeats."""
+    found = {}
+    for entry in entries:
+        for setting in entry.get("new_settings") or ():
+            found.setdefault(setting["key"], setting)
+    return list(found.values())
 
 
 def lines(entries, versions=True):

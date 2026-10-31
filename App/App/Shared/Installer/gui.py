@@ -767,7 +767,7 @@ class Wizard(tk.Tk):
         ttk.Label(self.container, text="Clip names", font=("", 13, "bold")).pack(anchor="w")
         ttk.Label(
             self.container,
-            text="What saved clips and their copies are called. Settings > Clip Output/Devices changes this any time.",
+            text="What saved clips and their copies are called. Settings > Clip Output changes this any time.",
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
         form = naming_form.NamingForm(
@@ -1267,7 +1267,7 @@ class Wizard(tk.Tk):
             text=(
                 "Keyboard shortcuts that work in games. Save Clip saves the replay buffer length you set "
                 "earlier (Alt+~ by default). The others start, or stop when pressed again. Pick... records "
-                "the next keys you press; Reset clears a shortcut."
+                "the next keys you press; Clear removes a shortcut."
             ),
             justify="left", wraplength=self.px(WRAP_WIDTH),
         ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
@@ -1301,7 +1301,7 @@ class Wizard(tk.Tk):
                     glyph.configure(text="☐")
                 key.set(NO_HOTKEY)
 
-            ttk.Button(row, text="Reset", command=reset).pack(side="left", padx=(self.px(4), 0))
+            ttk.Button(row, text="Clear", command=reset).pack(side="left", padx=(self.px(4), 0))
 
         hotkey_row("Save Clip", self.hotkey_ctrl_var, self.hotkey_alt_var, self.hotkey_shift_var,
                    self.hotkey_key_var, [NO_HOTKEY, *HOTKEY_KEY_CHOICES])

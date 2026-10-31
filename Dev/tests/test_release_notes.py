@@ -44,3 +44,12 @@ def test_lines_lay_out_each_version():
     assert release_notes.lines([entry]) == [("version", "1.4.10  (2026-10-30)"), *body]
     assert release_notes.lines([entry], versions=False) == body
     assert release_notes.lines([]) == []
+
+
+def test_new_settings_are_gathered_without_repeats():
+    one = {"key": "post_clip", "name": "Post-clip"}
+    two = {"key": "view_logs", "name": "View Logs"}
+    entries = [{"version": "1.5.0", "new_settings": [one]}, {"version": "1.4.9", "new_settings": [one, two]},
+               {"version": "1.4.8"}]
+    assert release_notes.new_settings(entries) == [one, two]
+    assert release_notes.new_settings([]) == []

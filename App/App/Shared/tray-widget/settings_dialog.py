@@ -276,10 +276,14 @@ def watch_for_reopen(root):
     def check():
         if os.path.exists(RAISE_PATH):
             try:
+                with open(RAISE_PATH, "r", encoding="utf-8") as f:
+                    request = f.read()
                 os.remove(RAISE_PATH)
             except OSError:
-                pass
+                request = ""
             bring_to_front(root)
+            if hasattr(root, "highlight_settings"):
+                root.highlight_settings(request.split(","))  # "raise" names no setting
         root.after(RAISE_POLL_MS, check)
 
     root.after(RAISE_POLL_MS, check)
@@ -292,6 +296,16 @@ def parent_pid_from_args(argv):
         if index + 1 < len(argv) and argv[index + 1].isdigit():
             return int(argv[index + 1])
     return None
+
+
+def highlight_from_args(argv):
+    """The settings to outline: --highlight key,key (the update window's
+    Show New Settings, through the tray widget)."""
+    if "--highlight" in argv:
+        index = argv.index("--highlight")
+        if index + 1 < len(argv):
+            return [key for key in argv[index + 1].split(",") if key]
+    return []
 
 
 def desktop_entry():
@@ -313,10 +327,11 @@ def ensure_desktop_entry(directory=None):
 def main():
     # Close along with the tray widget that opened this, however it ends.
     exit_with_parent(parent_pid_from_args(sys.argv[1:]))
+    highlight = highlight_from_args(sys.argv[1:])
     if not acquire_instance_lock(LOCK_PATH):
         log.info("Settings dialog already open; asking it to come to the front.")
         try:
-            write_text_atomic(RAISE_PATH, "raise")
+            write_text_atomic(RAISE_PATH, ",".join(highlight) or "raise")
         except OSError as exc:
             log.warning(f"Couldn't ask the open Settings dialog to come to the front: {exc}")
         return
@@ -326,16 +341,14 @@ def main():
     except OSError:
         pass
     # Saving new colors (or Dark Mode) reopens the window, built with them.
-    tab = None
-    while True:
+    tab = open_dialog(None, highlight)
+    while tab is not None:
         tab = open_dialog(tab)
-        if tab is None:
-            break
 
 
-def open_dialog(start_tab=None):
+def open_dialog(start_tab=None, highlight=()):
     """Builds and runs the Settings window, on start_tab (Basic Settings by
-    default). Returns the tab to reopen it on when its Save changed the
+    default), outlining the settings `highlight` names. Returns the tab to reopen it on when its Save changed the
     colors, which only a newly built window shows - else None."""
     reopen_on = {"tab": None}
     ws_load_error = None
@@ -498,10 +511,16 @@ def open_dialog(start_tab=None):
     # Each settings group is a rounded card in the page; the sidebar's tabs
     # choose which cards are shown. The code below adds rows to the current
     # card ("frame") - section() starts the next one.
-    TAB_BASIC, TAB_OUTPUT, TAB_EDITOR = "Basic Settings", "Clip Output/Devices", "Clip Editor"
+    TAB_BASIC, TAB_OUTPUT, TAB_RECORDING = "Basic Settings", "Clip Output", "Recording/Devices"
+    TAB_EDITOR = "Clip Editor"
     TAB_TRAY, TAB_SCRIPTS, TAB_WEBSOCKET = "UI Customization", "Scripts/Troubleshooting", "OBS Websocket"
-    TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_EDITOR, TAB_TRAY, TAB_WEBSOCKET, TAB_SCRIPTS)
+    TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_RECORDING, TAB_EDITOR, TAB_TRAY, TAB_WEBSOCKET, TAB_SCRIPTS)
     cards = []  # (card, its tab), in page order
+    highlights = {}  # release_notes.json's new_settings keys -> (widget, its tab)
+    highlighted_tabs = set()
+
+    def highlightable(key, widget, tab):
+        highlights[key] = (widget, tab)
     frame = None
     next_row = 0
 
@@ -522,7 +541,7 @@ def open_dialog(start_tab=None):
     def info_button(parent, title, explanation):
         """The "i" next to an option, opening its explanation."""
         # An image, even this blank one, makes width and height pixels - characters aren't square.
-        return tk.Button(parent, text="i", image=info_button_image, compound="center", width=px(20), height=px(20),
+        return tk.Button(parent, text="i", image=info_button_image, compound="center", width=px(17), height=px(17),
                          padx=0, pady=0, font=("", 9, "bold"), cursor="hand2",
                          command=lambda: popups.showinfo(title, explanation, parent=root))
 
@@ -551,7 +570,7 @@ def open_dialog(start_tab=None):
                     var.set(value)
 
         tk.Button(row, text="Pick...", command=pick).pack(side="left", padx=(px(6), 0))
-        tk.Button(row, text="Reset", command=lambda: [var.set(value) for var, value in zip(
+        tk.Button(row, text="Clear", command=lambda: [var.set(value) for var, value in zip(
             hotkey_vars, obs_config.CLEARED_HOTKEY, strict=True)]).pack(side="left", padx=(px(4), 0))
         next_row += 1
         return hotkey_vars
@@ -666,27 +685,65 @@ def open_dialog(start_tab=None):
 
     # What clips and their copies are called (Scripts/clip_naming.py) - read
     # when each clip is saved, so it applies straight away.
-    tk.Label(frame, text="Clip names:").grid(row=next_row, column=0, sticky="nw", pady=(px(4), 0))
+    section("Clip Names", TAB_OUTPUT)
     naming = naming_form.NamingForm(frame, run_config.get("clip_naming"), px=px,
                                     folder=lambda: clip_folder_var.get())
-    naming.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=(px(2), px(6)))
-    next_row += 1
+    naming.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(2), 0))
+    highlightable("clip_names", naming, TAB_OUTPUT)
 
-    # The two extra copies, side by side so the tab fits without scrolling.
-    copies = tk.Frame(frame)
-    copies.grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    # What's saved besides the clip, in two columns so the tab fits without scrolling.
+    section("Clipping Add-Ons", TAB_OUTPUT)
+    add_ons = tk.Frame(frame)
+    add_ons.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    add_ons_left = tk.Frame(add_ons)
+    add_ons_left.grid(row=0, column=0, sticky="nw")
     split_tracks_var = tk.BooleanVar(value=split_tracks)
     tk.Checkbutton(
-        copies, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
+        add_ons_left, text="Multitrack audio: also save a copy (\"-tracks.mkv\") with the OBS tracks,\n"
                     "Mix, Mic, and Desktop, and apps each on their own track, for editing",
         variable=split_tracks_var, justify="left",
-    ).grid(row=0, column=0, sticky="nw")
+    ).pack(anchor="w")
+
+    # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
+    # longer, saved as the clip's "-extra.mkv" for the editor.
+    post_box = tk.Frame(add_ons_left)
+    post_box.pack(anchor="w", pady=(px(6), 0))
+    highlightable("post_clip", post_box, TAB_OUTPUT)
+    post_line = tk.Frame(post_box)
+    post_line.pack(anchor="w")
+    post_enabled_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["enabled"])
+    post_seconds_var = tk.StringVar(value=str(initial_obs_settings["post_clip"]["seconds"]))
+    post_sound_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["sound_after"])
+    tk.Checkbutton(post_line, text="Post-clip: keep recording for", variable=post_enabled_var,
+                   command=lambda: on_post_toggle()).pack(side="left")
+    post_seconds_box = tk.Spinbox(post_line, textvariable=post_seconds_var, width=4,
+                                  from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
+    post_seconds_box.pack(side="left", padx=(px(3), 0))
+    tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
+    info_button(post_line, "Post-clip", (
+        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
+        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
+        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
+        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
+        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
+        "tracks (what your mic picked up from your speakers stays).\n\n"
+        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
+    )).pack(side="left", padx=(px(6), 0))
+    post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
+                                      variable=post_sound_var)
+    post_sound_check.pack(anchor="w", padx=(px(22), 0))
+
+    def on_post_toggle():
+        state = "normal" if post_enabled_var.get() else "disabled"
+        post_seconds_box.config(state=state)
+        post_sound_check.config(state=state)
+
+    on_post_toggle()
 
     # The "-small.mp4" copy (Scripts/clip_reexport.py) - as on Setup's
     # "Lower-Quality Re-export" page.
     reexport_var = tk.BooleanVar(value=reexport["enabled"])
-    reexport_column = tk.Frame(copies)
+    reexport_column = tk.Frame(add_ons)
     reexport_column.grid(row=0, column=1, sticky="nw", padx=(px(28), 0))
     reexport_check = tk.Checkbutton(
         reexport_column, text="Also save a smaller copy of each clip (\"-small.mp4\"), for sites\n"
@@ -748,9 +805,9 @@ def open_dialog(start_tab=None):
     recording = load_recording_settings(pending)
     devices = {"displays": None, "audio": None}  # filled in by detect_devices()
 
-    section("Recording", TAB_OUTPUT)
-    # Two columns: the recording settings on the left, the audio devices and
-    # post-clip on the right (under their own heading, level with the card's title).
+    section("Recording", TAB_RECORDING)
+    # Two columns: the recording settings on the left, the audio devices on
+    # the right (under their own heading, level with the card's title).
     recording_card = frame
     recording_card.grid_slaves(row=0, column=0)[0].grid_configure(columnspan=1)
     recording_card.columnconfigure(1, weight=0)
@@ -829,43 +886,6 @@ def open_dialog(start_tab=None):
         state="disabled", command=lambda: start_mic_filter(),
     )
     mic_button.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
-    next_row += 1
-
-    # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
-    # longer, saved as the clip's "-extra.mkv" for the editor.
-    tk.Label(frame, text="Post-clip:").grid(row=next_row, column=0, sticky="nw", pady=(px(2), 0))
-    post_box = tk.Frame(frame)
-    post_box.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
-    post_line = tk.Frame(post_box)
-    post_line.pack(anchor="w")
-    post_enabled_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["enabled"])
-    post_seconds_var = tk.StringVar(value=str(initial_obs_settings["post_clip"]["seconds"]))
-    post_sound_var = tk.BooleanVar(value=initial_obs_settings["post_clip"]["sound_after"])
-    tk.Checkbutton(post_line, text="Keep recording for", variable=post_enabled_var,
-                   command=lambda: on_post_toggle()).pack(side="left")
-    post_seconds_box = tk.Spinbox(post_line, textvariable=post_seconds_var, width=4,
-                                  from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
-    post_seconds_box.pack(side="left", padx=(px(3), 0))
-    tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
-    info_button(post_line, "Post-clip", (
-        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
-        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
-        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
-        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
-        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
-        "tracks (what your mic picked up from your speakers stays).\n\n"
-        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
-    )).pack(side="left", padx=(px(6), 0))
-    post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
-                                      variable=post_sound_var)
-    post_sound_check.pack(anchor="w")
-
-    def on_post_toggle():
-        state = "normal" if post_enabled_var.get() else "disabled"
-        post_seconds_box.config(state=state)
-        post_sound_check.config(state=state)
-
-    on_post_toggle()
     next_row += 1
 
     def start_mic_filter():
@@ -1577,8 +1597,9 @@ def open_dialog(start_tab=None):
             dialog.bind("<Escape>", lambda _event: dialog.destroy())
             popups.place(dialog, root)
 
-        tk.Button(frame, text="Release Notes", command=on_release_notes).grid(
-            row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        release_notes_button = tk.Button(frame, text="Release Notes", command=on_release_notes)
+        release_notes_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        highlightable("release_notes", release_notes_button, TAB_SCRIPTS)
         next_row += 1
 
     # --- Troubleshooting: a bug report (sent, or saved as a zip), and a clean reinstall.
@@ -1765,8 +1786,10 @@ def open_dialog(start_tab=None):
     troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
     bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...", command=on_bug_report)
     bug_button.pack(side="left")
-    tk.Button(troubleshooting_row, text="View Logs...",
-              command=lambda: log_viewer.open_log_viewer(root, px, reveal_file)).pack(side="left", padx=(px(4), 0))
+    view_logs_button = tk.Button(troubleshooting_row, text="View Logs...",
+                                 command=lambda: log_viewer.open_log_viewer(root, px, reveal_file))
+    view_logs_button.pack(side="left", padx=(px(4), 0))
+    highlightable("view_logs", view_logs_button, TAB_SCRIPTS)
     reinstall_button = tk.Button(troubleshooting_row, text="Reinstall ClipEm...", command=on_reinstall)
     reinstall_button.pack(side="left", padx=(px(4), 0))
     next_row += 1
@@ -1787,7 +1810,7 @@ def open_dialog(start_tab=None):
             return
         hotkey_val = [hotkey_ctrl_var.get(), hotkey_alt_var.get(), hotkey_shift_var.get(), hotkey_key_var.get()]
         if hotkey_val[3] == NO_HOTKEY:
-            hotkey_val = list(obs_config.CLEARED_HOTKEY)  # Reset: no clip hotkey
+            hotkey_val = list(obs_config.CLEARED_HOTKEY)  # Clear: no clip hotkey
         else:
             try:
                 obs_config.hotkey_label_to_obs_key(hotkey_val[3])
@@ -1987,8 +2010,21 @@ def open_dialog(start_tab=None):
         for label_name, label in tab_labels.items():
             selected = label_name == name
             label.config(background=dark_theme.SELECTED if selected else dark_theme.PANEL,
-                         foreground=dark_theme.TEXT if selected else dark_theme.MUTED)
+                         foreground=dark_theme.TEXT if selected else
+                         dark_theme.ACCENT if label_name in highlighted_tabs else dark_theme.MUTED)
         canvas.yview_moveto(0)
+
+    def highlight_settings(keys):
+        """Outlines the settings `keys` name, opens the first one's tab and
+        colors the others' in the sidebar. Keys it doesn't know are ignored."""
+        found = [highlights[key] for key in keys if key in highlights]
+        if not found:
+            return
+        highlighted_tabs.update(tab for _widget, tab in found)
+        for widget, _tab in found:
+            widget.config(highlightthickness=px(2), highlightbackground=dark_theme.ACCENT,
+                          highlightcolor=dark_theme.ACCENT)
+        show_tab(found[0][1])
 
     def style_hover(label, entering):
         if label_name_of(label) != current_tab["name"]:
@@ -2014,13 +2050,15 @@ def open_dialog(start_tab=None):
     min_width = sidebar.winfo_reqwidth() + page.winfo_reqwidth() + scrollbar.winfo_reqwidth()
     screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
     width = max(px(1100), min_width)
-    root.layout = {"show_tab": show_tab, "tabs": TABS, "canvas": canvas, "page": page,
+    root.highlight_settings = highlight_settings
+    root.layout = {"show_tab": show_tab, "tabs": TABS, "canvas": canvas, "page": page, "highlights": highlights,
                    "size": (width, width * 9 // 16)}  # for test_settings_dialog's overflow check
     width = min(width, screen_width - px(40))
     height = min(width * 9 // 16, screen_height - px(80))
     root.geometry(f"{width}x{height}")
     root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))
     show_tab(start_tab if start_tab in TABS else TAB_BASIC)
+    highlight_settings(highlight)
 
     guard_combobox_wheel(page)
     # Opened from the tray menu - make sure it isn't hidden behind whatever

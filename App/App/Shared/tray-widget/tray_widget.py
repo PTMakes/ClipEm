@@ -62,6 +62,7 @@ from clipem_common import (  # noqa: E402
     LOG_DIR,
     OPEN_EDITOR_ENV,
     REOPEN_EDITOR_FLAG,
+    SETTINGS_REQUEST_PATH,
     acquire_instance_lock,
     load_run_config,
     release_instance_lock,
@@ -579,7 +580,17 @@ class TrayApp:
     def _open_settings(self, icon, item):
         self._start_helper(SETTINGS_DIALOG_SCRIPT, "settings")
 
-    def _start_helper(self, script, what):
+    def _open_requested_settings(self):
+        """The update window's Show New Settings (run.py's _request_settings)."""
+        try:
+            with open(SETTINGS_REQUEST_PATH, "r", encoding="utf-8") as f:
+                keys = f.read().strip()
+            os.remove(SETTINGS_REQUEST_PATH)
+        except OSError:
+            return
+        self._start_helper(SETTINGS_DIALOG_SCRIPT, "settings", ["--highlight", keys])
+
+    def _start_helper(self, script, what, extra_args=()):
         """Runs a helper window's script (the clip editor, the settings
         dialog) and tells the user if it exits with an error. Its stderr goes
         to logs/<script>.stderr.log for that: under pythonw, a crash before it
@@ -593,7 +604,7 @@ class TrayApp:
             os.makedirs(LOG_DIR, exist_ok=True)
             with open(stderr_path, "wb") as stderr_file:
                 proc = subprocess.Popen(
-                    [sys.executable, script, "--parent-pid", str(os.getpid())], stderr=stderr_file
+                    [sys.executable, script, "--parent-pid", str(os.getpid()), *extra_args], stderr=stderr_file
                 )
         except Exception as exc:
             log.warning(f"Failed to open {what}: {exc}")
@@ -764,6 +775,7 @@ class TrayApp:
                     self._shutdown(f"could not reach OBS ({exc})")
                     return
 
+            self._open_requested_settings()
             try:
                 status = self.client.call("GetReplayBufferStatus")
                 self.replay_active = status.get("outputActive", False)

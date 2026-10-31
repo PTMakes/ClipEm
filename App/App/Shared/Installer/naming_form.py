@@ -47,8 +47,6 @@ class NamingForm(tk.Frame):
         line = tk.Frame(self)
         line.grid(row=row, column=1, sticky="w", **pad)
         tk.Entry(line, textvariable=self.vars["prefix"], width=18).pack(side="left")
-        tk.Label(line, text="then, between parts:").pack(side="left", padx=(px(8), px(4)))
-        tk.Entry(line, textvariable=self.vars["separator"], width=3).pack(side="left")
         row += 1
 
         label("Number:")
@@ -77,7 +75,7 @@ class NamingForm(tk.Frame):
         tk.Label(line, text=DATE_CODES, fg=dark_theme.MUTED).pack(side="left", padx=(px(6), 0))
         row += 1
 
-        label("Copy suffixes:")
+        label("Addon Suffixes:")
         line = tk.Frame(self)
         line.grid(row=row, column=1, sticky="w", **pad)
         tk.Label(line, text="Multitrack:").pack(side="left")
@@ -86,6 +84,10 @@ class NamingForm(tk.Frame):
         tk.Entry(line, textvariable=self.vars["small_suffix"], width=10).pack(side="left", padx=(px(4), px(8)))
         tk.Label(line, text="Post-clip:").pack(side="left")
         tk.Entry(line, textvariable=self.vars["extra_suffix"], width=10).pack(side="left", padx=(px(4), 0))
+        row += 1
+
+        label("Between Parts:")
+        tk.Entry(self, textvariable=self.vars["separator"], width=3).grid(row=row, column=1, sticky="w", **pad)
         row += 1
 
         label("Next clip:")
@@ -121,5 +123,5 @@ class NamingForm(tk.Frame):
         number = clip_naming.next_number(folder, settings) if folder else settings["number_start"]
         stem = clip_naming.stem(settings, datetime.datetime.now(), number)
         self._preview.configure(
-            text=f"{stem}.mp4  (copies: {stem}{settings['tracks_suffix']}.mkv, {stem}{settings['small_suffix']}.mp4)",
+            text=f"{stem}.mp4  (addons: {stem}{settings['tracks_suffix']}.mkv, {stem}{settings['small_suffix']}.mp4)",
             fg=dark_theme.MUTED)

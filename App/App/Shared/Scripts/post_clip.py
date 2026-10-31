@@ -1,5 +1,5 @@
 """
-The clip hotkey with post-clip on (Settings > Recording - see clip_post.py):
+The clip hotkey with post-clip on (Settings > Clip Output - see clip_post.py):
 Settings moves the clip hotkey's keys here from OBS's own "Save Replay"
 hotkey. A press plays the clip sound and, `seconds` later, saves the replay
 buffer once - telling whoever finishes the save (clip_reexport.py or the tray)

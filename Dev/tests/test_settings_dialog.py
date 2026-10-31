@@ -137,6 +137,66 @@ def _widgets(widget):
         yield from _widgets(child)
 
 
+def test_clip_output_has_its_three_boxes_and_recording_its_own_tab(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def titles(root, tab):
+        root.layout["show_tab"](tab)
+        root.update()
+        cards = [card for card in root.layout["page"].winfo_children() if card.winfo_ismapped()]
+        return [next(w.cget("text") for w in _widgets(card) if isinstance(w, tk.Label)) for card in cards]
+
+    def look(root):
+        seen["output"] = titles(root, "Clip Output")
+        seen["recording"] = titles(root, "Recording/Devices")
+
+    _in_settings(monkeypatch, look)
+    assert seen == {"output": ["Clip Output", "Clip Names", "Clipping Add-Ons"], "recording": ["Recording"]}
+
+
+def test_every_new_setting_in_the_release_notes_can_be_highlighted(fake_obs_config, monkeypatch):
+    import json
+
+    from conftest import APP_SHARED_DIR
+
+    with open(os.path.join(APP_SHARED_DIR, "release_notes.json"), encoding="utf-8") as f:
+        keys = [item["key"] for entry in json.load(f) for item in entry.get("new_settings", ())]
+    known = []
+    _in_settings(monkeypatch, lambda root: known.extend(root.layout["highlights"]))
+    assert keys and set(keys) <= set(known)
+
+
+def test_highlighting_opens_the_tab_and_outlines_the_settings(fake_obs_config, monkeypatch):
+    seen = {}
+
+    def look(root):
+        widget, _tab = root.layout["highlights"]["post_clip"]
+        other, _other_tab = root.layout["highlights"]["view_logs"]
+        root.highlight_settings(["post_clip", "view_logs", "no_such_setting"])
+        root.update()
+        seen.update(shown=widget.winfo_ismapped(), border=int(widget.cget("highlightthickness")),
+                    other_border=int(other.cget("highlightthickness")))
+
+    _in_settings(monkeypatch, look)
+    assert seen["shown"] and seen["border"] > 0 and seen["other_border"] > 0
+
+
+def test_highlight_argument(tmp_path):
+    assert settings_dialog.highlight_from_args(["--parent-pid", "1", "--highlight", "a,b"]) == ["a", "b"]
+    assert settings_dialog.highlight_from_args(["--parent-pid", "1"]) == []
+
+
+def test_a_second_launch_hands_over_what_to_highlight(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "RAISE_PATH", str(tmp_path / ".settings.raise"))
+    monkeypatch.setattr(settings_dialog, "acquire_instance_lock", lambda path: False)
+    monkeypatch.setattr(settings_dialog, "exit_with_parent", lambda pid: None)
+    monkeypatch.setattr(sys, "argv", ["settings_dialog.py", "--highlight", "post_clip,view_logs"])
+    settings_dialog.main()
+    assert (tmp_path / ".settings.raise").read_text() == "post_clip,view_logs"
+
+
 def test_info_buttons_are_square(fake_obs_config, monkeypatch):
     import tkinter as tk
 
