@@ -183,6 +183,202 @@ def test_highlighting_opens_the_tab_and_outlines_the_settings(fake_obs_config, m
     assert seen["shown"] and seen["border"] > 0 and seen["other_border"] > 0
 
 
+def test_highlighted_settings_get_a_new_badge_only_on_their_own_tab(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def look(root):
+        root.highlight_settings(["post_clip", "view_logs"])
+        root.highlight_settings(["post_clip"])  # asked again: not a second badge
+        root.update()
+        badge = root.layout["highlighted"]["post_clip"]["badge"]
+        widget = root.layout["highlights"]["post_clip"][0]
+        other = root.layout["highlighted"]["view_logs"]["badge"]
+        seen.update(badges=len([w for w in _widgets(root) if isinstance(w, tk.Label) and hasattr(w, "picture")]),
+                    shown=badge.winfo_viewable(), other_shown=other.winfo_viewable(),
+                    right=badge.winfo_rootx() >= widget.winfo_rootx() + widget.winfo_width(),
+                    middle_off=abs(2 * badge.winfo_rooty() + badge.winfo_height()
+                                   - 2 * widget.winfo_rooty() - widget.winfo_height()))
+        root.layout["show_tab"]("Scripts/Troubleshooting")
+        root.update()
+        seen.update(switched=(badge.winfo_viewable(), other.winfo_viewable()))
+
+    _in_settings(monkeypatch, look)
+    assert seen["badges"] == 2 and seen["shown"] and not seen["other_shown"] and seen["right"]
+    assert seen["middle_off"] <= 2  # doubled, so 1 pixel off: odd sizes can't center exactly
+    assert seen["switched"] == (0, 1)
+
+
+def test_a_badge_moves_what_is_beside_it_over_and_back(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def look(root):
+        root.layout["show_tab"]("Scripts/Troubleshooting")
+        root.update()
+        neighbor = next(w for w in _widgets(root) if isinstance(w, tk.Button) and w.cget("text") == "Reinstall ClipEm...")
+        before = neighbor.winfo_rootx()
+        root.highlight_settings(["view_logs"])
+        root.update()
+        badge = root.layout["highlighted"]["view_logs"]["badge"]
+        seen.update(moved=neighbor.winfo_rootx() - before, clear=neighbor.winfo_rootx() >= badge.winfo_rootx() + badge.winfo_width())
+        monkeypatch.setattr(settings_dialog.new_badge, "burst", lambda *args: None)
+        badge.event_generate("<Button-1>")
+        root.update()
+        seen.update(back=neighbor.winfo_rootx() - before)
+
+    _in_settings(monkeypatch, look)
+    assert seen["moved"] > 0 and seen["clear"] and seen["back"] == 0
+
+
+def test_badges_push_no_setting_out_of_the_window(fake_obs_config, monkeypatch):
+    over = {}
+
+    def look(root):
+        layout = root.layout
+        root.geometry(f"{layout['size'][0]}x{layout['size'][1]}")
+        root.update()
+        root.highlight_settings(list(layout["highlights"]))
+        for tab in layout["tabs"]:
+            layout["show_tab"](tab)
+            root.update()
+            root.update()
+            for card in layout["page"].winfo_children():
+                if card.winfo_ismapped() and card.body.winfo_reqwidth() > card.body.winfo_width():
+                    over[tab] = card.body.winfo_reqwidth() - card.body.winfo_width()
+
+    _in_settings(monkeypatch, look)
+    assert over == {}
+
+
+def test_clicking_a_badge_bursts_confetti_and_clears_only_that_highlight(fake_obs_config, monkeypatch):
+    import time
+
+    seen = {}
+    bursts = []
+    real_burst = settings_dialog.new_badge.burst
+
+    def counted_burst(root, *args):
+        before = len(root.winfo_children())
+        real_burst(root, *args)
+        bursts.append(len(root.winfo_children()) - before)
+
+    monkeypatch.setattr(settings_dialog.new_badge, "burst", counted_burst)
+    monkeypatch.setattr(settings_dialog.new_badge, "FRAME_MS", 1)
+
+    def look(root):
+        widget = root.layout["highlights"]["post_clip"][0]
+        before = int(widget.cget("highlightthickness"))
+        root.highlight_settings(["post_clip", "view_logs"])
+        root.update()
+        badge = root.layout["highlighted"]["post_clip"]["badge"]
+        frames = len(root.winfo_children())
+        badge.event_generate("<Button-1>")
+        root.update()
+        seen.update(left=set(root.layout["highlighted"]), border=int(widget.cget("highlightthickness")), before=before,
+                    gone=not badge.winfo_exists())
+        deadline = time.time() + 5
+        while len(root.winfo_children()) > frames and time.time() < deadline:
+            root.update()
+        seen.update(cleaned_up=len(root.winfo_children()) == frames)
+
+    _in_settings(monkeypatch, look)
+    assert bursts == [settings_dialog.new_badge.PIECES] and seen["gone"] and seen["left"] == {"view_logs"}
+    assert seen["border"] == seen["before"]
+    assert seen["cleaned_up"]
+
+
+def _text_box(widget):
+    """(left, top, right, bottom) on screen of what a widget says, or None if
+    it says nothing. A field's whole box counts: what's typed can fill it."""
+    import tkinter as tk
+    import tkinter.font as tkfont
+    from tkinter import ttk
+
+    left, top = widget.winfo_rootx(), widget.winfo_rooty()
+    right, bottom = left + widget.winfo_width(), top + widget.winfo_height()
+    if isinstance(widget, (tk.Entry, tk.Text, tk.Spinbox, ttk.Entry)):  # ttk's Combobox and Spinbox are Entries
+        return left, top, right, bottom
+    if not isinstance(widget, (tk.Label, tk.Button, tk.Checkbutton, tk.Radiobutton)) or not widget.cget("text"):
+        return None
+    font = tkfont.Font(root=widget, font=widget.cget("font"))
+    lines = widget.cget("text").split("\n")
+    wide, tall = max(font.measure(line) for line in lines), font.metrics("linespace") * len(lines)
+    anchor = str(widget.cget("anchor")).replace("center", "")
+    if "w" in anchor:
+        text_left = left
+    elif "e" in anchor:
+        text_left = right - wide
+    else:
+        text_left = (left + right - wide) // 2
+    text_top = top if "n" in anchor else bottom - tall if "s" in anchor else (top + bottom - tall) // 2
+    if widget.cget("wraplength") and int(str(widget.cget("wraplength"))):
+        return left, top, right, bottom  # wrapped: can't tell where its lines end
+    if isinstance(widget, (tk.Checkbutton, tk.Radiobutton)):
+        return text_left, text_top, right, text_top + tall  # after the box it draws
+    return text_left, text_top, text_left + wide, text_top + tall
+
+
+def test_new_badges_cover_no_text(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    covered = []
+    checked = []
+
+    def look(root):
+        layout = root.layout
+        root.geometry(f"{layout['size'][0]}x{layout['size'][1]}")
+        root.highlight_settings(list(layout["highlights"]))
+        badges = {item["badge"]: key for key, item in layout["highlighted"].items()}
+        for tab in layout["tabs"]:
+            layout["show_tab"](tab)
+            root.update()
+            for badge, key in badges.items():
+                if not badge.winfo_viewable():
+                    continue
+                checked.append(key)
+                left, top = badge.winfo_rootx(), badge.winfo_rooty()
+                right, bottom = left + badge.winfo_width(), top + badge.winfo_height()
+                for widget in _widgets(root):
+                    if widget in badges or not isinstance(widget, tk.Widget) or not widget.winfo_viewable():
+                        continue
+                    box = _text_box(widget)
+                    if box and left < box[2] and box[0] < right and top < box[3] and box[1] < bottom:
+                        covered.append((tab, key, str(widget), box, (left, top, right, bottom)))
+
+    _in_settings(monkeypatch, look)
+    assert set(checked) == {"post_clip", "clip_names", "view_logs", "release_notes"}
+    assert not covered, "\n".join(str(item) for item in covered)
+
+
+def test_the_badge_ships_as_the_asset_itself(fake_obs_config):
+    import filecmp
+
+    from conftest import APP_SHARED_DIR
+
+    asset = os.path.join(APP_SHARED_DIR, "..", "..", "..", "Dev", "assets", "NewIcon.png")
+    assert filecmp.cmp(settings_dialog.new_badge.ICON_PATH, asset, shallow=False)
+
+
+def test_release_notes_window_can_show_the_new_settings(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def look(root):
+        next(w for w in _widgets(root) if isinstance(w, tk.Button) and w.cget("text") == "Release Notes").invoke()
+        root.update()
+        next(w for w in _widgets(root) if isinstance(w, tk.Button) and w.cget("text") == "Show New Settings").invoke()
+        root.update()
+        seen.update(lit=set(root.layout["highlighted"]), windows=[w for w in root.winfo_children()
+                                                                  if isinstance(w, tk.Toplevel) and w.winfo_viewable()])
+
+    _in_settings(monkeypatch, look)
+    assert seen["lit"] == {"clip_names"} and not seen["windows"]
+
+
 def test_highlight_argument(tmp_path):
     assert settings_dialog.highlight_from_args(["--parent-pid", "1", "--highlight", "a,b"]) == ["a", "b"]
     assert settings_dialog.highlight_from_args(["--parent-pid", "1"]) == []

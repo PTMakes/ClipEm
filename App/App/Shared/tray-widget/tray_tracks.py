@@ -122,10 +122,10 @@ def finish_clip(clip_path, snapshot, ffmpeg, options, log=log.info, run=subproce
             "leaving it alone")
     else:
         starts = app_track_starts(clip_path, snapshot, duration, ffmpeg, log, run)
-        split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log, naming["tracks_suffix"])
+        split_tracks(clip_path, snapshot, starts, duration, ffmpeg, log, clip_naming.suffix(naming, "tracks"))
     if options.get("reexport"):
         clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log,
-                             naming["small_suffix"])
+                             clip_naming.suffix(naming, "small"))
 
 
 def app_track_starts(clip_path, snapshot, duration, ffmpeg, log=log.info, run=subprocess.run):

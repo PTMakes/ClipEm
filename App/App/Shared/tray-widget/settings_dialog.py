@@ -58,6 +58,7 @@ import key_picker  # noqa: E402
 import log_viewer  # noqa: E402
 import mic_filter  # noqa: E402
 import naming_form  # noqa: E402
+import new_badge  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import popups  # noqa: E402
@@ -517,9 +518,11 @@ def open_dialog(start_tab=None, highlight=()):
     TABS = ("All", TAB_BASIC, TAB_OUTPUT, TAB_RECORDING, TAB_EDITOR, TAB_TRAY, TAB_WEBSOCKET, TAB_SCRIPTS)
     cards = []  # (card, its tab), in page order
     highlights = {}  # release_notes.json's new_settings keys -> (widget, its tab)
-    highlighted_tabs = set()
+    highlighted = {}  # those keys while outlined -> their tab, outline options to restore and "New" badge
+
 
     def highlightable(key, widget, tab):
+        """widget has to be packed side="left", for its badge - see new_badge.add_badge()."""
         highlights[key] = (widget, tab)
     frame = None
     next_row = 0
@@ -686,9 +689,11 @@ def open_dialog(start_tab=None, highlight=()):
     # What clips and their copies are called (Scripts/clip_naming.py) - read
     # when each clip is saved, so it applies straight away.
     section("Clip Names", TAB_OUTPUT)
-    naming = naming_form.NamingForm(frame, run_config.get("clip_naming"), px=px,
+    naming_row = tk.Frame(frame)
+    naming_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(2), 0))
+    naming = naming_form.NamingForm(naming_row, run_config.get("clip_naming"), px=px,
                                     folder=lambda: clip_folder_var.get())
-    naming.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(2), 0))
+    naming.pack(side="left")
     highlightable("clip_names", naming, TAB_OUTPUT)
 
     # What's saved besides the clip, in two columns so the tab fits without scrolling.
@@ -706,8 +711,10 @@ def open_dialog(start_tab=None, highlight=()):
 
     # Post-clip (Scripts/clip_post.py): the hotkey keeps recording a little
     # longer, saved as the clip's "-extra.mkv" for the editor.
-    post_box = tk.Frame(add_ons_left)
-    post_box.pack(anchor="w", pady=(px(6), 0))
+    post_row = tk.Frame(add_ons_left)
+    post_row.pack(anchor="w", pady=(px(6), 0))
+    post_box = tk.Frame(post_row)
+    post_box.pack(side="left")
     highlightable("post_clip", post_box, TAB_OUTPUT)
     post_line = tk.Frame(post_box)
     post_line.pack(anchor="w")
@@ -1585,12 +1592,25 @@ def open_dialog(start_tab=None, highlight=()):
             body.pack(fill="both", expand=True)
             parts = release_notes.lines(release_notes.load()) or [(None, "No release notes were found.")]
             release_notes.notes_box(body, parts, width=80, height=26).pack(fill="both", expand=True)
-            tk.Button(body, text="Close", width=10, command=dialog.destroy).pack(anchor="e", pady=(px(10), 0))
+            buttons = tk.Frame(body)
+            buttons.pack(anchor="e", pady=(px(10), 0))
+            # The newest version's, as every older one has been out for a while.
+            added = [setting["key"] for setting in release_notes.new_settings(release_notes.load()[:1])]
+
+            def show_new_settings():
+                dialog.destroy()
+                highlight_settings(added)
+
+            if added:
+                tk.Button(buttons, text="Show New Settings", command=show_new_settings).pack(side="left", padx=(0, px(8)))
+            tk.Button(buttons, text="Close", width=10, command=dialog.destroy).pack(side="left")
             dialog.bind("<Escape>", lambda _event: dialog.destroy())
             popups.place(dialog, root)
 
-        release_notes_button = tk.Button(frame, text="Release Notes", command=on_release_notes)
-        release_notes_button.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        release_notes_row = tk.Frame(frame)
+        release_notes_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+        release_notes_button = tk.Button(release_notes_row, text="Release Notes", command=on_release_notes)
+        release_notes_button.pack(side="left")
         highlightable("release_notes", release_notes_button, TAB_SCRIPTS)
         next_row += 1
 
@@ -1991,6 +2011,7 @@ def open_dialog(start_tab=None, highlight=()):
     # (All shows every card); nothing is rebuilt.
     tab_labels = {}
     current_tab = {"name": None}
+    window_size = {"width": 0, "height": 0}  # what it opened at, until it's shown and can be asked
 
     def show_tab(name):
         current_tab["name"] = name
@@ -1999,24 +2020,60 @@ def open_dialog(start_tab=None, highlight=()):
         for card, tab in cards:
             if name == "All" or tab == name:
                 card.pack(fill="x", pady=(0, px(10)))
+        color_tabs()
+        canvas.yview_moveto(0)
+        if highlighted:
+            fit_badges()
+
+    def fit_badges():
+        """Widens the window if badges pushed a tab's settings past its edge."""
+        root.update_idletasks()
+        for card, _tab in cards:
+            card.fit()
+        root.update_idletasks()
+        needed = sidebar.winfo_reqwidth() + page.winfo_reqwidth() + scrollbar.winfo_reqwidth()
+        now = max(root.winfo_width(), window_size["width"])
+        if needed > now:
+            window_size["width"] = min(needed, root.winfo_screenwidth() - px(40))
+            root.geometry(f"{window_size['width']}x{max(root.winfo_height(), window_size['height'])}")
+
+    def color_tabs():
+        highlighted_tabs = {item["tab"] for item in highlighted.values()}
         for label_name, label in tab_labels.items():
-            selected = label_name == name
+            selected = label_name == current_tab["name"]
             label.config(background=dark_theme.SELECTED if selected else dark_theme.PANEL,
                          foreground=dark_theme.TEXT if selected else
                          dark_theme.ACCENT if label_name in highlighted_tabs else dark_theme.MUTED)
-        canvas.yview_moveto(0)
 
     def highlight_settings(keys):
-        """Outlines the settings `keys` name, opens the first one's tab and
-        colors the others' in the sidebar. Keys it doesn't know are ignored."""
-        found = [highlights[key] for key in keys if key in highlights]
+        """Outlines the settings `keys` name and badges them "New", opens the
+        first one's tab and colors the others' in the sidebar. Keys it doesn't
+        know are ignored."""
+        found = [key for key in keys if key in highlights]
         if not found:
             return
-        highlighted_tabs.update(tab for _widget, tab in found)
-        for widget, _tab in found:
+        for key in found:
+            if key in highlighted:
+                continue  # asked again while still outlined
+            widget, tab = highlights[key]
+            outline = {option: widget.cget(option)
+                       for option in ("highlightthickness", "highlightbackground", "highlightcolor")}
+            badge = new_badge.add_badge(widget, px, lambda k=key: pop_highlight(k))
+            highlighted[key] = {"tab": tab, "outline": outline, "badge": badge}
             widget.config(highlightthickness=px(2), highlightbackground=dark_theme.ACCENT,
                           highlightcolor=dark_theme.ACCENT)
-        show_tab(found[0][1])
+        show_tab(highlights[found[0]][1])
+
+    def pop_highlight(key):
+        """A "New" badge clicked: confetti, and that setting is plain again."""
+        item = highlighted.pop(key)
+        badge = item["badge"]
+        x = badge.winfo_rootx() - root.winfo_rootx() + badge.winfo_width() // 2
+        y = badge.winfo_rooty() - root.winfo_rooty() + badge.winfo_height() // 2
+        badge.destroy()
+        highlights[key][0].config(**item["outline"])
+        color_tabs()
+        new_badge.burst(root, x, y, px)
 
     def style_hover(label, entering):
         if label_name_of(label) != current_tab["name"]:
@@ -2044,9 +2101,10 @@ def open_dialog(start_tab=None, highlight=()):
     width = max(px(1100), min_width)
     root.highlight_settings = highlight_settings
     root.layout = {"show_tab": show_tab, "tabs": TABS, "canvas": canvas, "page": page, "highlights": highlights,
-                   "size": (width, width * 9 // 16)}  # for test_settings_dialog's overflow check
+                   "highlighted": highlighted, "size": (width, width * 9 // 16)}  # for test_settings_dialog's overflow check
     width = min(width, screen_width - px(40))
     height = min(width * 9 // 16, screen_height - px(80))
+    window_size.update(width=width, height=height)
     root.geometry(f"{width}x{height}")
     root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))
     show_tab(start_tab if start_tab in TABS else TAB_BASIC)

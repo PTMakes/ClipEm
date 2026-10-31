@@ -422,5 +422,5 @@ def finish_post_save(ffmpeg, save_path, state, options, log, app_tracks=(), run=
         log(f"{clip_path} still has the extra seconds")
     if options.get("reexport"):
         clip_tracks.reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log,
-                             naming["small_suffix"])
+                             clip_naming.suffix(naming, "small"))
     return clip_path, extra_path

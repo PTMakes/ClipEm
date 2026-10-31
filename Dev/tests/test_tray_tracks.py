@@ -262,7 +262,8 @@ def test_clip_finisher_takes_the_snapshot_at_once_and_finishes_on_a_worker(monke
         if thread is not threading.current_thread() and thread.daemon:
             thread.join(5)
     (path, snapshot, ffmpeg, options, _log), = done
-    assert (path, snapshot, ffmpeg) == (str(clip), "snapshot", "ffmpeg")
+    assert os.path.basename(path).startswith("Replay-") and not clip.exists()
+    assert (snapshot, ffmpeg) == ("snapshot", "ffmpeg")
     naming = options.pop("naming")
     assert options == {"reexport": True, "target_mb": 20.0, "crop_seconds": 30}
     assert set(naming) == set(tray_tracks.clip_naming.DEFAULTS)

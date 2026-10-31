@@ -13,14 +13,39 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
                  "level": false,      # auto-level: loudnorm to LEVEL_TARGET_LUFS
                  "gate_db": null,     # noise gate threshold (dBFS), null: off
                  "mono": false,       # left and right combined, on both sides
+                 "fade_in": 0.0,      # seconds, from the kept part's start
+                 "fade_out": 0.0,     # seconds, up to the kept part's end
                  "regions": [{"start": s, "end": e, "db": g,
                               "channel": null}]}],  # 0 left / 1 right only, null both
      "master_db": 0,                  # gain on the mix (the first audio track) only
-     "crop": null}                    # or {"x", "y", "w", "h"}: the part of the frame
+     "crop": null,                    # or {"x", "y", "w", "h"}: the part of the frame
                                       # to keep, in source pixels (even numbers)
+     "clip_start": 0.0,               # where the clip sits on the timeline
+     "fade_in": 0.0,                  # the whole picture, from and to black
+     "fade_out": 0.0,
+     "layers": [{"id": "l1",          # tracks added in the editor, bottom to top
+                 "kind": "video",     # or "audio"
+                 "title": "Video 2",
+                 "muted": false,      # its sound
+                 "hidden": false,     # its picture
+                 "volume_db": 0,
+                 "items": [{"id": "i1",
+                            "asset": "<id>",   # an imported file (import_asset)
+                            "start": s,        # where on the timeline
+                            "in": a, "out": b, # the part of the file used
+                            "fade_in": 0.0, "fade_out": 0.0,
+                            "transition": null,  # how it comes in: a TRANSITIONS
+                            "transition_s": 0.0, # over this long, over what's under it
+                            "volume_db": 0,
+                            "x": 0.5, "y": 0.5,  # its centre, in frame widths/heights
+                            "scale": 1.0,        # 1: as big as fits the frame
+                            "opacity": 1.0}]}]}
 
-Trims and cuts both just shorten `keep`. Gain regions are in the clip's own
-timeline (before cuts), so a region keeps its place when a cut is added.
+Trims and cuts both just shorten `keep`. keep, gain regions and added items
+are on the timeline (before cuts), so they keep their place when a cut is
+added. The timeline is the clip's own unless clip_start moves the clip along
+it (the page moves its cuts and regions too), and it runs on past the clip, or
+starts before it, over black.
 
 With "Split audio tracks" on, the source is the clip's "-tracks.mkv": track
 1 is the full mix, which OBS records as exactly Mic (2) + Desktop (3), and
@@ -28,6 +53,8 @@ With "Split audio tracks" on, the source is the clip's "-tracks.mkv": track
 what the editor plays: every unmuted track whose containing tracks are all
 muted (see mix_inputs()) - Mix; or with Mix muted, Mic + Desktop; or with
 Desktop muted too, Mic + each app. Every track is also its own MKV track.
+Added tracks with sound are always in the mix (unless tracks are soloed), and
+are MKV tracks too, after the recorded ones.
 """
 
 import array
@@ -58,6 +85,8 @@ CROP_FILTERS = ("crop",)
 MIN_CROP_PIXELS = 64
 # Only for the noise gate, likewise.
 GATE_FILTERS = ("agate",)
+# Only for added video tracks and fades of the picture, likewise.
+LAYER_FILTERS = ("overlay", "fade", "tpad", "colorchannelmixer")
 # Noise gate: below the threshold, sound is turned down by GATE_RANGE_DB -
 # the hiss and hum between words. Before Level: leveling boosts quiet parts
 # (by ~40 dB on a quiet mic), lifting the noise far above any fixed gate
@@ -114,6 +143,23 @@ MUTE_DB = -60.0  # at or below: silent
 MAX_OFFSET_SECONDS = 30.0
 MIN_MASTER_DB = -30.0  # the master slider's range
 MAX_MASTER_DB = 12.0
+TRANSITIONS = ("crossfade", "slide-left", "slide-right", "slide-up", "slide-down")
+MAX_LAYERS = 16
+MAX_LAYER_ITEMS = 200
+MAX_ITEM_SCALE = 4.0
+MIN_ITEM_SCALE = 0.05
+MAX_TIMELINE_SECONDS = 4 * 3600
+MAX_IMAGE_SECONDS = 3600.0  # how long a picture can stay up
+IMAGE_RATE = 30
+IMAGE_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp", ".bmp")
+# What the editor's window can play as it is; anything else gets a preview
+# copy (asset_preview). Exports always use the imported file.
+PREVIEW_EXTENSIONS = (".mp4", ".mkv", ".mov", ".webm")
+PREVIEW_CODECS = ("h264", "vp8", "vp9", "av1")
+PREVIEW_HEIGHT = 720
+PREVIEW_CRF = 28
+ASSET_EXTENSIONS = IMAGE_EXTENSIONS + (".gif", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".m4a", ".aac", ".mp3",
+                                       ".wav", ".flac", ".ogg", ".opus")
 
 PEAK_SAMPLE_RATE = 2000
 PEAKS_PER_SECOND = 50
@@ -203,6 +249,23 @@ def probe(ffmpeg, path, run=subprocess.run):
     return info
 
 
+def probe_asset(ffmpeg, path, name, run=subprocess.run):
+    """What the editor needs of an imported file: {"name", "kind" ("video",
+    "audio" or "image"), "duration" (None for a picture), "width", "height",
+    "has_audio"}. Raises ValueError if it can't be used."""
+    result = run([ffmpeg, "-hide_banner", "-nostdin", "-i", path], capture_output=True, text=True,
+                 errors="replace", **_no_window_kwargs())
+    info = parse_probe(result.stderr)
+    picture = os.path.splitext(path)[1].lower() in IMAGE_EXTENSIONS
+    kind = "image" if picture else "video" if info["video_codec"] else "audio"
+    usable = (info["width"] and info["height"]) if kind != "audio" else info["audio"]
+    if not usable or (not picture and not info["duration"]):
+        raise ValueError(f"Couldn't read {name} as a video, a picture or sound.")
+    return {"name": name, "kind": kind, "duration": None if picture else info["duration"],
+            "width": info["width"], "height": info["height"], "has_audio": bool(info["audio"]) and not picture,
+            "video_codec": info["video_codec"]}
+
+
 def ffmpeg_features(ffmpeg, run=subprocess.run):
     """The names of every filter and muxer this ffmpeg has."""
     found = set()
@@ -246,11 +309,16 @@ def default_project(info):
         "keep": [[0.0, round(end, 3)]],
         "tracks": [
             {"index": track["index"], "volume_db": 0.0, "offset": 0.0, "muted": False, "level": False,
-             "gate_db": None, "mono": False, "regions": []}
+             "gate_db": None, "mono": False, "fade_in": 0.0, "fade_out": 0.0, "regions": []}
             for track in info["audio"]
         ],
         "master_db": 0.0,
         "crop": None,
+        "clip_start": 0.0,
+        "fade_in": 0.0,
+        "fade_out": 0.0,
+        "layers": [],
+        "assets": {},
     }
 
 
@@ -289,13 +357,101 @@ def merge_ranges(ranges, duration, min_length=MIN_SEGMENT_SECONDS):
     return [[round(s, 3), round(e, 3)] for s, e in merged]
 
 
-def normalize_project(project, info):
+_ID_RE = re.compile(r"^[\w-]{1,32}$")
+
+
+def _clean_id(value, used, prefix):
+    """value if it's a usable id not used yet, else a new one."""
+    number = len(used) + 1
+    while not isinstance(value, str) or not _ID_RE.match(value) or value in used:
+        value = f"{prefix}{number}"
+        number += 1
+    used.add(value)
+    return value
+
+
+def _normalize_item(item, asset, used):
+    """A clean copy of an added item, or None if nothing of it is left."""
+    length = asset["duration"] or MAX_IMAGE_SECONDS
+    start = round(_clamp(_number(item.get("start")), 0.0, MAX_TIMELINE_SECONDS), 3)
+    first = _clamp(_number(item.get("in")), 0.0, 0.0 if asset["kind"] == "image" else length)
+    last = _clamp(_number(item.get("out"), default=length), 0.0, length)
+    if last - first < MIN_SEGMENT_SECONDS:
+        return None
+    span = last - first
+    fade_in = round(_clamp(_number(item.get("fade_in")), 0.0, span), 3)
+    transition = item.get("transition") if item.get("transition") in TRANSITIONS else None
+    return {
+        "id": _clean_id(item.get("id"), used, "i"), "asset": item["asset"], "start": start,
+        "in": round(first, 3), "out": round(last, 3), "fade_in": fade_in,
+        "fade_out": round(_clamp(_number(item.get("fade_out")), 0.0, span - fade_in), 3),
+        "transition": transition,
+        "transition_s": round(_clamp(_number(item.get("transition_s")), 0.0, span), 3) if transition else 0.0,
+        "volume_db": round(_clamp(_number(item.get("volume_db")), MUTE_DB, MAX_GAIN_DB), 2),
+        "x": round(_clamp(_number(item.get("x"), 0.5), -1.0, 2.0), 4),
+        "y": round(_clamp(_number(item.get("y"), 0.5), -1.0, 2.0), 4),
+        "scale": round(_clamp(_number(item.get("scale"), 1.0), MIN_ITEM_SCALE, MAX_ITEM_SCALE), 3),
+        "opacity": round(_clamp(_number(item.get("opacity"), 1.0), 0.0, 1.0), 3),
+    }
+
+
+def normalize_layers(layers, assets):
+    """The added tracks, with only items whose file is in assets ({id: what
+    probe_asset() said}), and only on a track of their kind."""
+    cleaned, layer_ids, item_ids = [], set(), set()
+    for layer in (layers if isinstance(layers, list) else [])[:MAX_LAYERS]:
+        if not isinstance(layer, dict) or layer.get("kind") not in ("video", "audio"):
+            continue
+        items = []
+        for item in (layer.get("items") if isinstance(layer.get("items"), list) else [])[:MAX_LAYER_ITEMS]:
+            asset = assets.get(item.get("asset")) if isinstance(item, dict) else None
+            if asset and (asset["kind"] == "audio") == (layer["kind"] == "audio"):
+                normalized = _normalize_item(item, asset, item_ids)
+                if normalized:
+                    items.append(normalized)
+        items.sort(key=lambda item: item["start"])
+        title = re.sub(r"[\x00-\x1f]", "", str(layer.get("title") or "")).strip()[:60]
+        cleaned.append({
+            "id": _clean_id(layer.get("id"), layer_ids, "l"), "kind": layer["kind"],
+            "title": title or f"{layer['kind'].title()} {len(cleaned) + 1}", "muted": bool(layer.get("muted", False)),
+            "hidden": bool(layer.get("hidden", False)),
+            "volume_db": round(_clamp(_number(layer.get("volume_db")), MUTE_DB, MAX_GAIN_DB), 2), "items": items,
+        })
+    return cleaned
+
+
+def item_end(item):
+    return item["start"] + item["out"] - item["in"]
+
+
+def timeline_end(project, info):
+    """The timeline's length: to the clip's end, or the last added item's."""
+    return max([project.get("clip_start", 0.0) + info["duration"]]
+               + [item_end(item) for layer in project.get("layers") or [] for item in layer["items"]])
+
+
+def used_assets(layers, assets):
+    """{id: asset} for the files these tracks use."""
+    return {item["asset"]: assets[item["asset"]] for layer in layers for item in layer["items"]}
+
+
+def _fades(given, length):
+    """(fade in, fade out) that fit in `length` seconds together."""
+    fade_in = _clamp(_number(given.get("fade_in")), 0.0, length)
+    return round(fade_in, 3), round(_clamp(_number(given.get("fade_out")), 0.0, length - fade_in), 3)
+
+
+def normalize_project(project, info, assets=None):
     """A clean copy of `project` for this clip: only real tracks, numbers
     clamped, ranges merged. Anything unreadable falls back to the defaults
-    (the page saves whatever it has, so this is what keeps exports sane)."""
-    duration = info["duration"]
+    (the page saves whatever it has, so this is what keeps exports sane).
+    assets: {id: what probe_asset() said, plus "path"} - added items need
+    theirs; the result's "assets" has the ones it uses."""
     project = project if isinstance(project, dict) else {}
     base = default_project(info)
+    layers = normalize_layers(project.get("layers"), assets or {})
+    clip_start = round(_clamp(_number(project.get("clip_start")), 0.0, MAX_TIMELINE_SECONDS), 3)
+    duration = timeline_end({"layers": layers, "clip_start": clip_start}, info)
     keep = merge_ranges(project.get("keep", base["keep"]), duration)
     by_index = {}
     for track in project.get("tracks") or []:
@@ -316,6 +472,7 @@ def normalize_project(project, info):
                 channel = channel if stereo and channel in (0, 1) and not isinstance(channel, bool) else None
                 regions.append({"start": span[0][0], "end": span[0][1], "db": round(db, 2), "channel": channel})
         regions.sort(key=lambda r: r["start"])
+        fade_in, fade_out = _fades(given, duration)
         tracks.append({
             "index": default["index"],
             "volume_db": round(_clamp(_number(given.get("volume_db")), MUTE_DB, MAX_GAIN_DB), 2),
@@ -324,6 +481,8 @@ def normalize_project(project, info):
             "level": bool(given.get("level", False)),
             "gate_db": _gate_db(given.get("gate_db")),
             "mono": stereo and bool(given.get("mono", False)),
+            "fade_in": fade_in,
+            "fade_out": fade_out,
             "regions": regions,
         })
     if _number(project.get("version"), PROJECT_VERSION) < 2 and is_split_layout(info):
@@ -334,8 +493,10 @@ def normalize_project(project, info):
         if source == "tracks" or (source is None and any(_is_edited(t) for t in tracks if t["index"] in SUB_MIX)):
             tracks[0]["muted"] = True
     master_db = round(_clamp(_number(project.get("master_db")), MIN_MASTER_DB, MAX_MASTER_DB), 2)
+    fade_in, fade_out = _fades(project, duration)
     return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks, "master_db": master_db,
-            "crop": normalize_crop(project.get("crop"), info)}
+            "crop": normalize_crop(project.get("crop"), info), "clip_start": clip_start, "fade_in": fade_in,
+            "fade_out": fade_out, "layers": layers, "assets": used_assets(layers, assets or {})}
 
 
 def _even(value):
@@ -405,13 +566,22 @@ def mix_inputs(project, info):
 
 def _is_edited(track):
     return bool(track["volume_db"] or track["offset"] or track["muted"] or track.get("level") or track.get("mono")
-                or track.get("gate_db") is not None or track["regions"])
+                or track.get("gate_db") is not None or track["regions"] or track.get("fade_in")
+                or track.get("fade_out"))
 
 
 def uses_channels(project):
     """Whether the project needs CHANNEL_FILTERS (Mono, one-channel changes)."""
     return any(track.get("mono") or any(r.get("channel") is not None for r in track["regions"])
                for track in project["tracks"])
+
+
+def uses_layers(project, info):
+    """Whether the project needs LAYER_FILTERS: pictures on added tracks,
+    fades of the picture, or a timeline longer than the clip."""
+    return bool(project.get("fade_in") or project.get("fade_out") or timeline_end(project, info) > info["duration"]
+                or project.get("clip_start")
+                or any(layer["kind"] == "video" and layer["items"] for layer in project.get("layers") or []))
 
 
 def kept_duration(project):
@@ -508,9 +678,16 @@ def gate_presets(noise_db, speech_db):
     return presets
 
 
-def _track_chain(track, duration):
+def _fade_filters(fade_in, fade_out, start, end):
+    """Audio fades of the stretch from start to end, in the stream's time."""
+    filters = [f"afade=t=in:st={start:g}:d={fade_in:g}"] if fade_in else []
+    return filters + ([f"afade=t=out:st={max(start, end - fade_out):g}:d={fade_out:g}"] if fade_out else [])
+
+
+def _track_chain(track, duration, span=None, clip_start=0.0):
     """Filters for one track in the clip's own timeline: level, noise gate,
-    mono, shift, gain, mute (one-channel changes are added by _add_track).
+    mono, shift, gain, mute, fades at the ends of span, the first and last
+    moment kept (one-channel changes are added by _add_track).
     The effects come first, on the whole recorded track - what the editor
     previews - then it's made mono the way the editor does."""
     filters = ["aformat=sample_rates=48000:channel_layouts=stereo"]
@@ -519,13 +696,16 @@ def _track_chain(track, duration):
     if track.get("mono") and not track["muted"]:
         filters.append(MONO_PAN)
     offset = track["offset"]
-    if offset > 0:
-        filters.append(f"adelay=delays={round(offset * 1000)}:all=1")
-    elif offset < 0:
+    if offset < 0:
         filters += [f"atrim=start={-offset:g}", "asetpts=PTS-STARTPTS"]
+    delay = max(offset, 0.0) + clip_start
+    if delay > 0:
+        filters.append(f"adelay=delays={round(delay * 1000)}:all=1")
     filters.append(f"apad=whole_dur={duration:g}")
     filters.append(f"atrim=end={duration:g}")
     filters += _gain_filters(track)
+    if span and not track["muted"]:
+        filters += _fade_filters(track.get("fade_in"), track.get("fade_out"), *span)
     return filters
 
 
@@ -546,11 +726,11 @@ def _region_filters(track, channel):
     ]
 
 
-def _add_track(graph, track, duration):
+def _add_track(graph, track, duration, span=None, clip_start=0.0):
     """Adds one track's chain to graph; returns its output label. One-channel
     volume changes split it into left and right, change each, and join them."""
     label = graph.label("t")
-    chain = _track_chain(track, duration)
+    chain = _track_chain(track, duration, span, clip_start)
     sides = [] if track["muted"] else [_region_filters(track, channel) for channel in (0, 1)]
     if not any(sides):
         graph.add([f"0:a:{track['index']}"], chain, [label])
@@ -614,6 +794,131 @@ def _cut(graph, label, keep, audio):
     return out
 
 
+def layer_inputs(project):
+    """[(layer, item, asset)] - one ffmpeg input each, after the clip's -
+    in the order the graph numbers them."""
+    return [(layer, item, project["assets"][item["asset"]])
+            for layer in project.get("layers") or [] for item in layer["items"]]
+
+
+def input_args(source, project):
+    """The -i arguments for an export: the clip, then each added item."""
+    args = ["-i", source]
+    for _layer, item, asset in layer_inputs(project):
+        if asset["kind"] == "image":
+            args += ["-loop", "1", "-framerate", str(IMAGE_RATE), "-t", f"{item['out'] - item['in']:g}"]
+        args += ["-i", asset["path"]]
+    return args
+
+
+def item_box(item, asset, width, height):
+    """(width, height, left, top) of a picture item in a width x height
+    frame, in whole pixels: as big as fits at scale 1 - as the editor shows it."""
+    fit = min(width / asset["width"], height / asset["height"]) * item["scale"]
+    out_w = max(2, _even(asset["width"] * fit))
+    out_h = max(2, _even(asset["height"] * fit))
+    return out_w, out_h, round(width * item["x"] - out_w / 2), round(height * item["y"] - out_h / 2)
+
+
+def _slide(start, seconds, begin, end):
+    """An overlay position running from begin to end over the transition."""
+    return f"if(lt(t,{start + seconds:g}),{end}+({begin}-({end}))*(1-(t-{start:g})/{seconds:g}),{end})"
+
+
+def _item_position(item, left, top, out_w, out_h, width, height):
+    """overlay's x and y for an item, sliding in if that's its transition."""
+    seconds, kind = item["transition_s"], item["transition"]
+    if not seconds or kind not in TRANSITIONS[1:]:
+        return str(left), str(top)
+    begin_x, begin_y = {"slide-left": (width, top), "slide-right": (-out_w, top), "slide-up": (left, height),
+                        "slide-down": (left, -out_h)}[kind]
+    return (f"'{_slide(item['start'], seconds, begin_x, left)}'", f"'{_slide(item['start'], seconds, begin_y, top)}'")
+
+
+def _sound_fades(layer, item):
+    """(fade in, fade out) of an item's sound: its own fades, or the length of
+    its transition and of the next item's over it - a crossfade, whichever
+    the picture does."""
+    length = item["out"] - item["in"]
+    fade_in = max(item["fade_in"], item["transition_s"])
+    fade_out = item["fade_out"]
+    for other in layer["items"]:
+        if other is not item and other["transition"] and item["start"] < other["start"] < item_end(item):
+            fade_out = max(fade_out, item_end(item) - other["start"])
+    return fade_in, min(fade_out, length)
+
+
+def _add_overlays(graph, label, project, info):
+    """`label` with every shown picture on the added tracks over it, bottom
+    track first."""
+    for number, (layer, item, asset) in enumerate(layer_inputs(project), start=1):
+        if layer["kind"] != "video" or layer["hidden"]:
+            continue
+        start, end = item["start"], item_end(item)
+        out_w, out_h, left, top = item_box(item, asset, info["width"], info["height"])
+        filters = [] if asset["kind"] == "image" else [f"trim=start={item['in']:g}:end={item['out']:g}"]
+        filters += [f"setpts=PTS-STARTPTS+{start:g}/TB", f"scale={out_w}:{out_h}:flags=lanczos", "format=yuva420p"]
+        fade_in = max(item["fade_in"], item["transition_s"] if item["transition"] == "crossfade" else 0.0)
+        if fade_in:
+            filters.append(f"fade=t=in:st={start:g}:d={fade_in:g}:alpha=1")
+        if item["fade_out"]:
+            filters.append(f"fade=t=out:st={end - item['fade_out']:g}:d={item['fade_out']:g}:alpha=1")
+        if item["opacity"] < 1:
+            filters.append(f"colorchannelmixer=aa={item['opacity']:g}")
+        picture = graph.label("o")
+        graph.add([f"{number}:v:0"], filters, [picture])
+        out = graph.label("v")
+        x, y = _item_position(item, left, top, out_w, out_h, info["width"], info["height"])
+        graph.add([label, picture], [f"overlay=x={x}:y={y}:eof_action=pass:enable='between(t,{start:g},{end:g})'"],
+                  [out])
+        label = out
+    return label
+
+
+def _add_layer_sound(graph, project, duration):
+    """[(layer, output label)] for the added tracks with sound, each as long
+    as the timeline."""
+    pieces = {}
+    for number, (layer, item, asset) in enumerate(layer_inputs(project), start=1):
+        if layer["muted"] or not (asset["has_audio"] or asset["kind"] == "audio"):
+            continue
+        filters = ["aformat=sample_rates=48000:channel_layouts=stereo",
+                   f"atrim=start={item['in']:g}:end={item['out']:g}", "asetpts=PTS-STARTPTS"]
+        if item["volume_db"]:
+            filters.append(f"volume={_gain(item['volume_db'])}")
+        filters += _fade_filters(*_sound_fades(layer, item), 0.0, item["out"] - item["in"])
+        if item["start"]:
+            filters.append(f"adelay=delays={round(item['start'] * 1000)}:all=1")
+        filters += [f"apad=whole_dur={duration:g}", f"atrim=end={duration:g}"]
+        piece = graph.label("a")
+        graph.add([f"{number}:a:0"], filters, [piece])
+        pieces.setdefault(layer["id"], (layer, []))[1].append(piece)
+    outputs = []
+    for layer, labels in pieces.values():
+        filters = [f"amix=inputs={len(labels)}:normalize=0:duration=longest:dropout_transition=0"] \
+            if len(labels) > 1 else ["anull"]
+        if layer["volume_db"]:
+            filters.append(f"volume={_gain(layer['volume_db'])}")
+        out = graph.label("y")
+        graph.add(labels, filters, [out])
+        outputs.append((layer, out))
+    return outputs
+
+
+def sound_layers(project):
+    """The added tracks with sound in the export, in build_graph's order."""
+    layers = {}
+    for layer, _item, asset in layer_inputs(project):
+        if not layer["muted"] and (asset["has_audio"] or asset["kind"] == "audio"):
+            layers[layer["id"]] = layer
+    return list(layers.values())
+
+
+def is_multitrack(project, info):
+    """Whether a full-quality export needs an MKV: more than one track."""
+    return len(info["audio"]) + len(sound_layers(project)) > 1
+
+
 def build_graph(project, info, video_height=None, fps=None, audio="tracks", with_video=True):
     """(filter_complex, video label, [audio labels]) for an export.
 
@@ -621,16 +926,29 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
            "mix" - the rebuilt mix only (MP4); None - no audio (pass 1).
     with_video=False leaves the video out (vout is None): for measuring audio."""
     graph = _Graph()
-    duration = info["duration"]
+    duration = timeline_end(project, info)
     keep = project["keep"]
 
     vout = None
     if with_video:
-        video = _cut(graph, "0:v:0", keep, audio=False)
+        base = "0:v:0"
+        clip_start = project.get("clip_start") or 0.0
+        after = round(duration - clip_start - info["duration"], 3)
+        if clip_start or after > 0:  # black where the timeline has no clip
+            base = graph.label("b")
+            pad = [f"start_mode=add:start_duration={clip_start:g}"] if clip_start else []
+            pad += [f"stop_mode=add:stop_duration={after:g}"] if after > 0 else []
+            graph.add(["0:v:0"], [f"tpad=color=black:{':'.join(pad)}"], [base])
+        video = _cut(graph, _add_overlays(graph, base, project, info), keep, audio=False)
         post = []
         crop = project.get("crop")
         if crop:
             post.append(f"crop={crop['w']}:{crop['h']}:{crop['x']}:{crop['y']}")
+        if project.get("fade_in"):
+            post.append(f"fade=t=in:st=0:d={project['fade_in']:g}")
+        if project.get("fade_out"):
+            post.append(f"fade=t=out:st={max(0.0, kept_duration(project) - project['fade_out']):g}"
+                        f":d={project['fade_out']:g}")
         if video_height:
             post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
         if fps:
@@ -639,13 +957,16 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
         vout = graph.label("vout")
         graph.add([video], post, [vout])
 
-    if not audio or not info["audio"]:
+    layers = _add_layer_sound(graph, project, duration) if audio else []
+    if not audio or not (info["audio"] or layers):
         return graph.text(), vout, []
 
     tracks = project["tracks"]
-    inputs = mix_inputs(project, info)
-    rebuild = inputs != [0]
+    inputs = mix_inputs(project, info) if info["audio"] else []
     want_tracks = audio == "tracks"
+    # What's soloed is all that's heard, added tracks too.
+    mixed_layers = [] if project.get("solo") and info["audio"] else [label for _layer, label in layers]
+    rebuild = inputs != [0] or bool(mixed_layers)
     # How often each edited track is used: in the mix, and as its own track.
     uses = {}
     for track in tracks:
@@ -654,23 +975,33 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
     edited = {}
     for track in tracks:
         if uses[track["index"]]:  # never for a rebuilt clip's Mix - it isn't used
-            label = _add_track(graph, track, duration)
+            label = _add_track(graph, track, duration, (keep[0][0], keep[-1][1]), project.get("clip_start") or 0.0)
             edited[track["index"]] = graph.split(label, uses[track["index"]], audio=True)
+
+    own_layers = {}
+    if want_tracks:
+        for number, (_layer, label) in enumerate(layers):
+            parts = graph.split(label, 2 if label in mixed_layers else 1, audio=True)
+            own_layers[number] = parts.pop()
+            if label in mixed_layers:
+                mixed_layers[mixed_layers.index(label)] = parts.pop()
 
     outputs = []
     if rebuild:
-        sources = [edited[index].pop() for index in inputs]
+        sources = [edited[index].pop() for index in inputs] + mixed_layers
         mixed = sources[0]
         if len(sources) > 1:
             mixed = graph.label("m")
             mix = [f"amix=inputs={len(sources)}:normalize=0:duration=longest:dropout_transition=0"]
-            if any(track.get("level") for track in tracks if track["index"] in inputs):
+            if mixed_layers or any(track.get("level") for track in tracks if track["index"] in inputs):
                 mix.append(f"alimiter=limit={MIX_LIMIT:.4f}:level=false:latency=1")  # no lookahead delay
             graph.add(sources, mix, [mixed])
         outputs.append(_cut(graph, mixed, keep, audio=True))
     for track in tracks:
         if edited.get(track["index"]):
             outputs.append(_cut(graph, edited[track["index"]].pop(), keep, audio=True))
+    for number in sorted(own_layers):
+        outputs.append(_cut(graph, own_layers[number], keep, audio=True))
     master_db = project.get("master_db") or 0.0
     if outputs and master_db:
         # The master slider is the gain on the mix, which is the first output.
@@ -694,7 +1025,7 @@ def mix_loudness_command(ffmpeg, source, project, info):
     unmastered = dict(project, master_db=0.0)
     graph, _, outputs = build_graph(unmastered, info, audio="mix", with_video=False)
     graph += f";[{outputs[0]}]loudnorm=print_format=json[measured]"
-    return [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", "-i", source,
+    return [ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info", *input_args(source, project),
             "-filter_complex", graph, "-map", "[measured]", "-f", "null", "-"]
 
 
@@ -711,12 +1042,13 @@ def auto_master_db(lufs):
     return round(_clamp(LEVEL_TARGET_LUFS - lufs, MIN_MASTER_DB, MAX_MASTER_DB), 1)
 
 
-def output_track_titles(info):
+def output_track_titles(info, project=None):
     """MKV track names, in build_graph(audio="tracks")'s order."""
     titles = [track_title(info, track["index"]) for track in info["audio"]]
     if titles and is_split_layout(info):
         titles[0] = "Mix"
-    return titles
+    layers = sound_layers(project) if project else []
+    return (titles or ["Mix"] if layers else titles) + [layer["title"] for layer in layers]
 
 
 def _base(ffmpeg):
@@ -727,21 +1059,22 @@ def full_quality_commands(ffmpeg, source, project, info, out_mkv, out_mp4):
     """Commands for a full-quality export: near-lossless H.264 into an MKV
     with every track (when there's more than one), then the MP4 with just
     the mix, copied out of it. Returns [(command, label, weight)]."""
-    multi = len(info["audio"]) > 1
+    multi = is_multitrack(project, info)
+    inputs = input_args(source, project)
     graph, vout, audio_outs = build_graph(project, info, audio="tracks" if multi else "mix")
     video_args = ["-c:v", "libx264", "-preset", FULL_PRESET, "-crf", str(FULL_CRF)]
     if not multi:
-        cmd = _base(ffmpeg) + ["-i", source, "-filter_complex", graph, "-map", f"[{vout}]"]
+        cmd = _base(ffmpeg) + [*inputs, "-filter_complex", graph, "-map", f"[{vout}]"]
         for label in audio_outs:
             cmd += ["-map", f"[{label}]"]
         cmd += video_args + ["-c:a", "aac", "-b:a", f"{FULL_AUDIO_KBPS}k", "-movflags", "+faststart",
                              "-f", "mp4", out_mp4]
         return [(cmd, "Encoding", 1.0)]
-    cmd = _base(ffmpeg) + ["-i", source, "-filter_complex", graph, "-map", f"[{vout}]"]
+    cmd = _base(ffmpeg) + [*inputs, "-filter_complex", graph, "-map", f"[{vout}]"]
     for label in audio_outs:
         cmd += ["-map", f"[{label}]"]
     cmd += video_args + ["-c:a", "aac", "-b:a", f"{TRACK_AUDIO_KBPS}k", "-b:a:0", f"{FULL_AUDIO_KBPS}k"]
-    for number, title in enumerate(output_track_titles(info)):
+    for number, title in enumerate(output_track_titles(info, project)):
         cmd += [f"-metadata:s:a:{number}", f"title={title}"]
     cmd += ["-disposition:a:0", "default", "-f", "matroska", out_mkv]
     remux = _base(ffmpeg) + ["-i", out_mkv, "-map", "0:v:0", "-map", "0:a:0", "-c", "copy",
@@ -803,16 +1136,17 @@ def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
     video_args = ["-c:v", "libx264", "-preset", "medium", "-b:v", f"{settings['video_kbps']}k",
                   "-maxrate", f"{int(settings['video_kbps'] * 1.5)}k",
                   "-bufsize", f"{settings['video_kbps'] * 2}k", "-passlogfile", passlog]
+    inputs = input_args(source, project)
     graph1, vout1, _ = build_graph(project, info, video_height=height, fps=fps, audio=None)
-    pass1 = _base(ffmpeg) + ["-i", source, "-filter_complex", graph1, "-map", f"[{vout1}]"] + video_args + [
+    pass1 = _base(ffmpeg) + [*inputs, "-filter_complex", graph1, "-map", f"[{vout1}]"] + video_args + [
         "-pass", "1", "-an", "-f", "null", os.devnull]
     graph2, vout2, audio_outs = build_graph(project, info, video_height=height, fps=fps, audio="mix")
-    pass2 = _base(ffmpeg) + ["-i", source, "-filter_complex", graph2, "-map", f"[{vout2}]"]
+    pass2 = _base(ffmpeg) + [*inputs, "-filter_complex", graph2, "-map", f"[{vout2}]"]
     for label in audio_outs:
         pass2 += ["-map", f"[{label}]"]
     pass2 += video_args + ["-pass", "2"]
     if audio_outs:
-        pass2 += ["-c:a", "aac", "-b:a", f"{settings['audio_kbps']}k"]
+        pass2 += ["-c:a", "aac", "-b:a", f"{settings['audio_kbps'] or DISCORD_AUDIO_KBPS}k"]
     pass2 += ["-movflags", "+faststart", "-f", "mp4", out_mp4]
     return [(pass1, "Analysing", 0.4), (pass2, "Encoding", 0.6)]
 
@@ -826,6 +1160,30 @@ def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
 # ---------------------------------------------------------------------------
 # Preview audio and waveforms
 # ---------------------------------------------------------------------------
+
+def needs_preview_copy(asset):
+    """Whether the editor's window can't play an imported video as it is."""
+    return asset["kind"] == "video" and (os.path.splitext(asset["path"])[1].lower() not in PREVIEW_EXTENSIONS
+                                         or asset.get("video_codec") not in PREVIEW_CODECS)
+
+
+def asset_preview_command(ffmpeg, source, out_path):
+    """An imported video as a quick H.264 MP4 the page can play: at most
+    PREVIEW_HEIGHT high, in even pixels, at the same times."""
+    return [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-i", source,
+            "-map", "0:v:0", "-map", "0:a:0?", "-vf", f"scale=-2:'min({PREVIEW_HEIGHT},trunc(ih/2)*2)'",
+            "-pix_fmt", "yuv420p", "-c:v", "libx264", "-preset", "veryfast", "-crf", str(PREVIEW_CRF),
+            "-c:a", "aac", "-b:a", f"{PREVIEW_AUDIO_KBPS}k", "-movflags", "+faststart", "-f", "mp4", out_path]
+
+
+def asset_preview(ffmpeg, source, cache_path, run=subprocess.run):
+    def make(partial):
+        result = run(asset_preview_command(ffmpeg, source, partial), capture_output=True, text=True,
+                     errors="replace", **_no_window_kwargs())
+        if result.returncode != 0:
+            raise RuntimeError(f"Couldn't make a preview: {result.stderr.strip()[-300:]}")
+    return _cached(cache_path, make)
+
 
 def track_audio_command(ffmpeg, source, index, codec, out_path, level=False, gate_db=None, volume_db=0.0):
     """One audio track as an .m4a the page can play next to the (muted)

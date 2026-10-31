@@ -697,3 +697,249 @@ def test_auto_mix_master_aims_at_the_level_target():
     assert clip_edit.auto_master_db(-20.4) == 6.4
     assert clip_edit.auto_master_db(-3.0) == -11.0
     assert clip_edit.auto_master_db(-80.0) == clip_edit.MAX_MASTER_DB
+
+
+# --- Added tracks and fades ----------------------------------------------------
+
+WIDE = {"duration": 10.0, "width": 320, "height": 180, "fps": 30.0, "video_codec": "h264", "mark": None,
+        "audio": [{"index": 0, "codec": "aac", "title": None, "channels": 2}]}
+PICTURE = {"id": "pic", "name": "a.png", "kind": "image", "duration": None, "width": 100, "height": 100,
+           "has_audio": False, "path": "/assets/pic.png"}
+SONG = {"id": "song", "name": "b.mp3", "kind": "audio", "duration": 20.0, "width": None, "height": None,
+        "has_audio": True, "path": "/assets/song.mp3"}
+MOVIE = {"id": "movie", "name": "c.mp4", "kind": "video", "duration": 6.0, "width": 160, "height": 90,
+         "has_audio": True, "path": "/assets/movie.mp4"}
+ASSETS = {asset["id"]: asset for asset in (PICTURE, SONG, MOVIE)}
+
+
+def layer(kind, *items, **changes):
+    return {"id": f"{kind}1", "kind": kind, "title": kind.title(), "items": list(items), **changes}
+
+
+def item(asset, start=0.0, first=0.0, last=2.0, **changes):
+    return {"asset": asset, "start": start, "in": first, "out": last, **changes}
+
+
+def layered(*layers, info=WIDE, **changes):
+    return clip_edit.normalize_project({"layers": list(layers), **changes}, info, ASSETS)
+
+
+def test_added_items_are_cleaned_up():
+    project = layered(
+        layer("video", item("pic", last=9999, fade_in=2.0, fade_out=9999, scale=100, opacity=3, x="bad"),
+              item("song"), item("gone"), item("pic", start=-5, last=0.01)),
+        layer("sound"), layer("audio", item("song", first=19.9, last=30), item("song", last=0)))
+    video, audio = project["layers"]
+    assert len(video["items"]) == 1 and len(audio["items"]) == 1  # wrong kind, unknown file, nothing left
+    picture = video["items"][0]
+    assert picture["out"] == clip_edit.MAX_IMAGE_SECONDS and picture["scale"] == clip_edit.MAX_ITEM_SCALE
+    assert (picture["fade_in"], picture["opacity"], picture["x"]) == (2.0, 1.0, 0.5)
+    assert picture["fade_out"] == clip_edit.MAX_IMAGE_SECONDS - 2.0
+    assert audio["items"][0]["out"] == 20.0
+    assert set(project["assets"]) == {"pic", "song"}
+    ids = [picture["id"], audio["items"][0]["id"]]
+    assert len(set(ids)) == 2 and video["id"] != audio["id"]
+
+
+def test_the_page_cant_point_an_asset_at_another_file():
+    sent = dict(ASSETS, pic=dict(PICTURE, path="/etc/passwd"))
+    project = clip_edit.normalize_project({"assets": sent, "layers": [layer("video", item("pic"))]}, WIDE, ASSETS)
+    assert project["assets"]["pic"]["path"] == "/assets/pic.png"
+
+
+def test_no_asset_library_means_no_added_items():
+    project = clip_edit.normalize_project({"layers": [layer("video", item("pic"))]}, WIDE)
+    assert project["layers"][0]["items"] == [] and project["assets"] == {}
+
+
+def test_an_item_past_the_clip_lengthens_the_timeline():
+    project = layered(layer("audio", item("song", start=9, last=5)), keep=[[0, 14]])
+    assert clip_edit.timeline_end(project, WIDE) == 14 and project["keep"] == [[0, 14]]
+    graph, _vout, _audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "tpad=color=black:stop_mode=add:stop_duration=4" in graph and "apad=whole_dur=14" in graph
+    assert clip_edit.uses_layers(project, WIDE)
+
+
+def test_sound_on_added_tracks_doesnt_need_the_new_filters():
+    project = layered(layer("audio", item("song", last=5)))
+    assert not clip_edit.uses_layers(project, WIDE)
+    assert clip_edit.uses_layers(layered(layer("video", item("pic"))), WIDE)
+    assert clip_edit.uses_layers(layered(fade_in=1), WIDE)
+
+
+def test_every_input_is_given_and_every_output_used():
+    project = layered(layer("video", item("pic", last=3), item("movie", start=3, first=1, last=3), id="v"),
+                      layer("audio", item("song", last=5), id="a"))
+    args = clip_edit.input_args("/clip.mkv", project)
+    assert args == ["-i", "/clip.mkv", "-loop", "1", "-framerate", "30", "-t", "3", "-i", "/assets/pic.png",
+                    "-i", "/assets/movie.mp4", "-i", "/assets/song.mp3"]
+    graph, _vout, audio = clip_edit.build_graph(project, WIDE, audio="tracks")
+    assert len(audio) == 3 and clip_edit.output_track_titles(WIDE, project) == ["Track 1", "Video", "Audio"]
+    assert "[1:v:0]" in graph and "[2:v:0]" in graph and "[2:a:0]" in graph and "[3:a:0]" in graph
+    assert "[1:a:0]" not in graph  # a picture has no sound
+    assert clip_edit.is_multitrack(project, WIDE)
+
+
+def test_a_hidden_or_muted_track_is_left_out():
+    project = layered(layer("video", item("movie"), hidden=True, muted=True))
+    graph, _vout, audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "overlay" not in graph and "[1:" not in graph and len(audio) == 1
+    assert not clip_edit.is_multitrack(project, WIDE)
+
+
+def test_solo_leaves_added_tracks_out_of_the_mix_only():
+    project = dict(layered(layer("audio", item("song"))), solo=[0])
+    graph, _vout, audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "amix" not in graph and "[1:a:0]" in graph or len(audio) == 1
+    _graph, _vout, audio = clip_edit.build_graph(project, WIDE, audio="tracks")
+    assert len(audio) == 2
+
+
+def test_fades_sit_at_the_ends_of_what_is_kept():
+    project = clip_edit.normalize_project(
+        {"keep": [[2, 8]], "fade_in": 1, "fade_out": 0.5,
+         "tracks": [{"index": 0, "fade_in": 0.25, "fade_out": 1.5}]}, WIDE)
+    graph, _vout, _audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "fade=t=in:st=0:d=1," in graph and "fade=t=out:st=5.5:d=0.5," in graph  # after the cut
+    assert "afade=t=in:st=2:d=0.25" in graph and "afade=t=out:st=6.5:d=1.5" in graph  # before it
+
+
+def test_item_boxes_fit_the_frame_and_stay_centred():
+    assert clip_edit.item_box(item("pic", scale=1.0, x=0.5, y=0.5), PICTURE, 320, 180) == (180, 180, 70, 0)
+    assert clip_edit.item_box(item("pic", scale=0.5, x=0.25, y=0.25), PICTURE, 320, 180) == (90, 90, 35, 0)
+
+
+def _png(ffmpeg, path, color):
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color={color}:s=64x64:d=1",
+                    "-frames:v", "1", str(path)], check=True)
+
+
+def _pixel(ffmpeg, path, seconds):
+    """(r, g, b) at the middle of the frame `seconds` into a video."""
+    out = subprocess.run([ffmpeg, "-loglevel", "error", "-ss", str(seconds), "-i", str(path), "-frames:v", "1",
+                          "-vf", "crop=2:2:iw/2:ih/2", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"],
+                         capture_output=True, check=True).stdout
+    return tuple(out[:3])
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_layered_project_exports_with_real_ffmpeg(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    clip = tmp_path / "clip.mp4"
+    song = tmp_path / "song.wav"
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=4",
+                    "-f", "lavfi", "-i", "sine=f=300:d=4", "-c:v", "libx264", "-c:a", "aac", "-shortest", str(clip)],
+                   check=True)
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=800:d=6", str(song)], check=True)
+    picture = tmp_path / "blue.png"
+    _png(ffmpeg, picture, "blue")
+    assets = {
+        "pic": clip_edit.probe_asset(ffmpeg, str(picture), "blue.png") | {"path": str(picture)},
+        "song": clip_edit.probe_asset(ffmpeg, str(song), "song.wav") | {"path": str(song)},
+    }
+    assert assets["pic"]["kind"] == "image" and assets["song"]["kind"] == "audio"
+    info = clip_edit.probe(ffmpeg, str(clip))
+    project = clip_edit.normalize_project({
+        "keep": [[0, 6]],
+        "fade_out": 0.5,
+        "layers": [layer("video", item("pic", start=1, last=1)),
+                   layer("audio", item("song", start=2, last=4, fade_in=0.2, fade_out=0.2))],
+    }, info, assets)
+    mkv, mp4 = tmp_path / "out.mkv", tmp_path / "out.mp4"
+    for cmd, _label, _weight in clip_edit.full_quality_commands(ffmpeg, str(clip), project, info, str(mkv), str(mp4)):
+        subprocess.run(cmd, check=True, capture_output=True)
+
+    out = clip_edit.probe(ffmpeg, str(mkv))
+    assert [track["title"] for track in out["audio"]] == ["Track 1", "Audio"]
+    assert abs(clip_edit.probe(ffmpeg, str(mp4))["duration"] - 6) < 0.2
+    def near(pixel, expected):
+        return all(abs(a - b) < 40 for a, b in zip(pixel, expected, strict=True))
+    assert near(_pixel(ffmpeg, mkv, 0.5), (254, 0, 0))  # the clip
+    assert near(_pixel(ffmpeg, mkv, 1.5), (0, 0, 254))  # the picture over it
+    assert near(_pixel(ffmpeg, mkv, 2.5), (254, 0, 0))  # gone again
+    assert near(_pixel(ffmpeg, mkv, 4.5), (0, 0, 0))  # black after the clip, while the sound plays on
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_an_export_of_added_tracks_without_recorded_sound(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    clip, song = tmp_path / "clip.mp4", tmp_path / "song.wav"
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=2",
+                    "-c:v", "libx264", str(clip)], check=True)
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "sine=f=800:d=2", str(song)], check=True)
+    assets = {"song": clip_edit.probe_asset(ffmpeg, str(song), "song.wav") | {"path": str(song)}}
+    info = clip_edit.probe(ffmpeg, str(clip))
+    project = clip_edit.normalize_project({"layers": [layer("audio", item("song", last=2))]}, info, assets)
+    mp4 = tmp_path / "out.mp4"
+    steps = clip_edit.discord_commands(ffmpeg, str(clip), project, info, str(mp4), str(tmp_path / "log"))
+    for cmd, _label, _weight in steps:
+        subprocess.run(cmd, check=True, capture_output=True)
+    assert len(clip_edit.probe(ffmpeg, str(mp4))["audio"]) == 1
+
+
+def test_moving_the_clip_delays_all_of_it():
+    project = layered(clip_start=5, keep=[[0, 15]],
+                      tracks=[{"index": 0, "offset": -0.5, "regions": [{"start": 6, "end": 7, "db": -6}]}])
+    assert clip_edit.timeline_end(project, WIDE) == 15 and clip_edit.uses_layers(project, WIDE)
+    graph, _vout, _audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "tpad=color=black:start_mode=add:start_duration=5" in graph
+    assert "atrim=start=0.5,asetpts=PTS-STARTPTS,adelay=delays=5000:all=1" in graph
+    assert "between(t,6,7)" in graph  # already where the clip now is
+
+
+def test_a_later_track_shift_adds_to_the_clips_place():
+    project = layered(clip_start=2, keep=[[0, 12]], tracks=[{"index": 0, "offset": 0.5}])
+    graph, _vout, _audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "adelay=delays=2500:all=1" in graph
+
+
+def test_transitions_are_cleaned_up_and_kept():
+    video = layered(layer("video", item("pic", last=3, transition="slide-left", transition_s=9),
+                          item("pic", start=4, transition="explode", transition_s=1)))["layers"][0]["items"]
+    assert (video[0]["transition"], video[0]["transition_s"]) == ("slide-left", 3.0)
+    assert (video[1]["transition"], video[1]["transition_s"]) == (None, 0.0)
+
+
+def test_a_crossfade_fades_the_picture_and_a_slide_moves_it():
+    project = layered(layer("video", item("movie", start=1, transition="crossfade", transition_s=0.5),
+                            item("pic", start=4, transition="slide-left", transition_s=1)))
+    graph, _vout, _audio = clip_edit.build_graph(project, WIDE, audio="mix")
+    assert "fade=t=in:st=1:d=0.5:alpha=1" in graph
+    assert "overlay=x='if(lt(t,5),70+(320-(70))*(1-(t-4)/1),70)':y='" in graph
+
+
+def test_a_transition_crossfades_the_sound_of_both_items():
+    project = layered(layer("audio", item("song", last=4), item("song", start=3, last=4, transition="crossfade",
+                                                                transition_s=1)))
+    first, second = project["layers"][0]["items"]
+    assert clip_edit._sound_fades(project["layers"][0], first) == (0.0, 1.0)
+    assert clip_edit._sound_fades(project["layers"][0], second) == (1.0, 0.0)
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_an_intro_before_the_moved_clip_exports_with_real_ffmpeg(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    clip = tmp_path / "clip.mp4"
+    subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", "color=c=red:s=320x180:r=30:d=3",
+                    "-f", "lavfi", "-i", "sine=f=300:d=3", "-c:v", "libx264", "-c:a", "aac", "-shortest", str(clip)],
+                   check=True)
+    picture = tmp_path / "blue.png"
+    _png(ffmpeg, picture, "blue")
+    assets = {"pic": clip_edit.probe_asset(ffmpeg, str(picture), "blue.png") | {"path": str(picture)}}
+    info = clip_edit.probe(ffmpeg, str(clip))
+    project = clip_edit.normalize_project({
+        "clip_start": 2, "keep": [[0, 5]],
+        "layers": [layer("video", item("pic", last=2.5, scale=2), item("pic", start=3.5, last=1.5, scale=2,
+                                                                       transition="slide-left", transition_s=1))],
+    }, info, assets)
+    mp4 = tmp_path / "out.mp4"
+    for cmd, _label, _weight in clip_edit.full_quality_commands(ffmpeg, str(clip), project, info, "", str(mp4)):
+        subprocess.run(cmd, check=True, capture_output=True)
+    assert abs(clip_edit.probe(ffmpeg, str(mp4))["duration"] - 5) < 0.2
+
+    def near(pixel, expected):
+        return all(abs(a - b) < 40 for a, b in zip(pixel, expected, strict=True))
+    assert near(_pixel(ffmpeg, mp4, 1), (0, 0, 254))  # the intro, before the clip
+    assert near(_pixel(ffmpeg, mp4, 2.8), (254, 0, 0))  # the clip, once the intro has ended
+    assert near(_pixel(ffmpeg, mp4, 3.6), (254, 0, 0))  # the slide hasn't reached the middle
+    assert near(_pixel(ffmpeg, mp4, 4.7), (0, 0, 254))  # and now it has

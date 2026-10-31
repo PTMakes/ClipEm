@@ -151,3 +151,49 @@ def test_monitor_survives_not_being_able_to_list_apps():
     monitor.tick()
     monitor.tick()
     assert recorder.targets == []
+
+
+def _stream(key, label=None, corked=False):
+    return app_audio.Stream(key, key, label or key, ("pa", 1, "m"), corked)
+
+
+def test_the_active_app_is_the_game_not_the_music_or_chat():
+    active = app_audio.ActiveApp()
+    assert active.update([], 0) is None
+    assert active.update([_stream("spotify", "Spotify")], 1) == "Spotify"
+    assert active.update([_stream("spotify", "Spotify"), _stream("firefox", "Firefox")], 2) == "Firefox"
+    assert active.update([_stream("spotify", "Spotify"), _stream("firefox", "Firefox"),
+                          _stream("deadlock", "Deadlock")], 3) == "Deadlock"
+
+
+def test_the_active_app_lasts_through_a_quiet_moment_but_not_for_ever():
+    active = app_audio.ActiveApp()
+    active.update([_stream("deadlock", "Deadlock")], 0)
+    assert active.update([_stream("spotify", "Spotify")], app_audio.ACTIVE_HOLD_SECONDS) == "Deadlock"
+    assert active.update([_stream("spotify", "Spotify")], app_audio.ACTIVE_HOLD_SECONDS + 1) == "Spotify"
+    assert active.update([_stream("deadlock", "Deadlock", corked=True)], 200) is None
+
+
+def test_the_monitor_publishes_the_active_app_without_split_tracks():
+    published, recorder = [], FakeRecorder()
+    clock = [0.0]
+    streams = [_stream("deadlock", "Deadlock")]
+    monitor = app_audio.AppTrackMonitor(recorder, list_streams=lambda: streams, monotonic=lambda: clock[0],
+                                        enabled=lambda: False, names_clips=lambda: True, publish=published.append)
+    monitor.tick()
+    clock[0] += 3
+    monitor.tick()
+    assert published == ["Deadlock"]  # only when it changes
+    assert not recorder.targets
+
+
+def test_the_monitor_leaves_streams_alone_when_clips_arent_named_after_apps():
+    published = []
+
+    def listed():
+        raise AssertionError("no need to ask")
+
+    monitor = app_audio.AppTrackMonitor(FakeRecorder(), list_streams=listed, enabled=lambda: False,
+                                        names_clips=lambda: False, publish=published.append)
+    monitor.tick()
+    assert published == [None]

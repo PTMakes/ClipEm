@@ -99,7 +99,7 @@ def encode(path, source, tracks, minute):
 
 def make_clips(folder):
     for index, (source, minute) in enumerate(CLIPS):
-        name = f"Replay 2026-10-25 21-{minute:02d}-07"
+        name = f"Replay-2026102521{minute:02d}07"
         encode(os.path.join(folder, name + ".mp4"), source, TRACKS[:1], minute)
         if index == 0:
             encode(os.path.join(folder, name + "-tracks.mkv"), source, TRACKS, minute)
@@ -122,6 +122,16 @@ def capture(work, out_png):
         return send_json(handler, data, status)
 
     clip_browser.Handler._json = json_with_shown_folder
+
+    # Every track on show: the editor opens in Trim mode otherwise.
+    send = clip_browser.Handler._send
+
+    def send_in_multitrack_mode(handler, status, body, content_type, extra_headers=None):
+        if content_type.startswith("text/html"):
+            body = body.replace(b"<head>", b'<head><script>localStorage.setItem("clipem.editorMode", "multi")</script>', 1)
+        return send(handler, status, body, content_type, extra_headers)
+
+    clip_browser.Handler._send = send_in_multitrack_mode
     cache = os.path.join(work, "cache")
     server = clip_browser.ClipBrowserServer(
         lambda: clips,

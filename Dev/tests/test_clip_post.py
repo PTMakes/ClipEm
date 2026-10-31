@@ -1,6 +1,7 @@
 import array
 import json
 import math
+import os
 import random
 import shutil
 import subprocess
@@ -160,7 +161,7 @@ def test_post_clip_save_end_to_end_with_real_ffmpeg(tmp_path):
     state = {"pressed_at": 1000.0, "requested_at": 1000.0 + seconds - press, "clip_seconds": 4, "sound": str(wav)}
     logs = []
     clip, extra = clip_post.finish_post_save("ffmpeg", str(save), state, {"naming": None}, logs.append)
-    assert extra == str(tmp_path / "Replay 2026-10-27 10-00-00-extra.mkv"), logs
+    assert extra == os.path.splitext(clip)[0] + "-extra.mkv", logs
     assert any("taking the clip sound out of track 3" in line for line in logs), logs
 
     info = clip_edit.probe("ffmpeg", extra)

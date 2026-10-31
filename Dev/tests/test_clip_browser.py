@@ -2,6 +2,8 @@
 clip listing, Range requests for the video player, path checks, token -
 plus how it picks a window and opens the editor (Installer/editor_install.py)."""
 
+import hashlib
+import io
 import json
 import os
 import pathlib
@@ -559,3 +561,144 @@ def test_which_editor_clips_are_edited_in():
     off = dict(old, clip_editor="external", clip_editors_disabled=True)
     assert disabled(off) and external(off) is None
     assert external({"clip_editor": "external", "custom_editor_path": "  "}) is None
+
+
+# --- Imported files ------------------------------------------------------------
+
+def _post_file(server, name, data):
+    request = urllib.request.Request(f"{server.url}api/asset?name={urllib.parse.quote(name)}", data=data, method="POST")
+    with urllib.request.urlopen(request) as response:
+        return json.loads(response.read())
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_importing_a_file_keeps_it_for_the_editor(tmp_path):
+    png = tmp_path / "logo.png"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=blue:s=64x32:d=1", "-frames:v", "1",
+                    str(png)], check=True)
+    editor = clip_browser.Editor(assets_dir=str(tmp_path / "assets"))
+    server = clip_browser.ClipBrowserServer(lambda: str(tmp_path), editor=editor)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        data = png.read_bytes()
+        asset = _post_file(server, "My Logo.png", data)
+        assert asset["kind"] == "image" and asset["name"] == "My Logo.png" and "path" not in asset
+        assert (asset["width"], asset["height"]) == (64, 32)
+        assert _post_file(server, "again.png", data)["id"] == asset["id"]  # one copy of one file
+        with urllib.request.urlopen(f"{server.url}asset/{asset['id']}") as response:
+            assert response.read() == data
+            assert response.headers["Content-Type"] == "image/png"
+        with urllib.request.urlopen(f"{server.url}api/assets") as response:
+            assert [a["id"] for a in json.loads(response.read())["assets"]] == [asset["id"]]
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("name, data", [("notes.txt", b"hello"), ("fake.png", b"not a picture")])
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_file_that_cant_be_used_is_refused_and_not_kept(tmp_path, name, data):
+    editor = clip_browser.Editor(assets_dir=str(tmp_path / "assets"))
+    with pytest.raises(ValueError):
+        editor.import_asset(io.BytesIO(data), len(data), name)
+    assert editor.assets() == {} and not (tmp_path / "assets" / name).exists()
+    if (tmp_path / "assets").exists():
+        assert os.listdir(tmp_path / "assets") == []
+
+
+def test_only_kept_assets_are_served(tmp_path):
+    editor = clip_browser.Editor(assets_dir=str(tmp_path / "assets"))
+    server = clip_browser.ClipBrowserServer(lambda: str(tmp_path), editor=editor)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        with pytest.raises(urllib.error.HTTPError) as error:
+            urllib.request.urlopen(f"{server.url}asset/..%2F..%2Frun_config.json")
+        assert error.value.code == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _asset(editor, name="a.png", when=None):
+    """An import, without ffmpeg."""
+    asset_id = hashlib.sha256(name.encode()).hexdigest()[:32] + ".png"
+    os.makedirs(editor.assets_dir, exist_ok=True)
+    path = os.path.join(editor.assets_dir, asset_id)
+    pathlib.Path(path).write_bytes(b"x")
+    pathlib.Path(path + ".json").write_text(json.dumps({"name": name, "kind": "image", "duration": None,
+                                                        "width": 10, "height": 10, "has_audio": False}))
+    if when is not None:
+        os.utime(path, (when, when))
+    return asset_id
+
+
+def _edit_using(editor, tmp_path, asset_id, clip_exists=True):
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"x")
+    info = {"duration": 10.0, "width": 100, "height": 100, "fps": 30.0, "video_codec": "h264", "mark": None,
+            "audio": []}
+    item = {"asset": asset_id, "start": 0, "in": 0, "out": 2}
+    editor.save_project(str(clip), info, {"layers": [{"kind": "video", "items": [item]}]})
+    if not clip_exists:
+        clip.unlink()
+
+
+def test_an_import_in_use_is_kept_and_an_unused_one_can_go(tmp_path):
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 assets_dir=str(tmp_path / "assets"))
+    used, unused = _asset(editor, "used.png"), _asset(editor, "unused.png")
+    _edit_using(editor, tmp_path, used)
+    assert editor.assets_in_use() == {used}
+    with pytest.raises(ValueError):
+        editor.remove_asset(used)
+    editor.remove_asset(unused)
+    assert set(editor.assets()) == {used}
+    assert sorted(os.listdir(tmp_path / "assets")) == [used, used + ".json"]
+
+
+def test_an_edit_of_a_clip_thats_gone_doesnt_keep_its_imports(tmp_path):
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 assets_dir=str(tmp_path / "assets"))
+    asset = _asset(editor)
+    _edit_using(editor, tmp_path, asset, clip_exists=False)
+    assert editor.prune_assets() == 1 and editor.assets() == {}
+
+
+def test_only_old_unused_imports_go_by_themselves(tmp_path):
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 assets_dir=str(tmp_path / "assets"))
+    now = 1_000_000_000
+    old = _asset(editor, "old.png", when=now - 31 * 86400)
+    recent = _asset(editor, "recent.png", when=now - 86400)
+    used = _asset(editor, "used.png", when=now - 31 * 86400)
+    _edit_using(editor, tmp_path, used)
+    assert editor.prune_assets(clip_browser.ASSET_KEEP_DAYS, now=now) == 1
+    assert set(editor.assets()) == {recent, used} and old not in editor.assets()
+
+
+def test_a_path_is_no_asset_id(tmp_path):
+    outside = tmp_path / "outside.json"
+    outside.write_text("{}")
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 assets_dir=str(tmp_path / "assets"))
+    editor.remove_asset("../outside.json")
+    assert outside.exists()
+
+
+@pytest.mark.parametrize("name, copied", [("a.flv", True), ("a.gif", True), ("a.mp4", False)])
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_video_the_window_cant_play_gets_a_preview_copy(tmp_path, name, copied):
+    source = tmp_path / name
+    codec = ["-c:v", "libx264", "-pix_fmt", "yuv420p"] if name != "a.gif" else []
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=red:s=66x34:r=10:d=1", *codec,
+                    str(source)], check=True)
+    editor = clip_browser.Editor(assets_dir=str(tmp_path / "assets"), track_dir=str(tmp_path / "tracks"))
+    data = source.read_bytes()
+    asset = editor.import_asset(io.BytesIO(data), len(data), name)
+    played = editor.asset_preview(asset)
+    assert (played != asset["path"]) == copied
+    if copied:
+        info = clip_edit.probe("ffmpeg", played)
+        assert info["video_codec"] == "h264" and info["height"] % 2 == 0 and abs(info["duration"] - 1) < 0.3
+        editor.remove_asset(asset["id"])
+        assert not os.path.exists(played)

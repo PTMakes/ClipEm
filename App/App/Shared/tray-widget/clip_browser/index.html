@@ -39,6 +39,8 @@
       <!-- The video at its fitted size; zoomed and panned as a whole (view.js). -->
       <div id="stage" hidden>
         <video id="player" preload="auto" playsinline muted></video>
+        <div id="layers"></div>
+        <div id="picture-fade"></div>
         <div id="crop">
           <div class="crop-shade" data-side="top"></div>
           <div class="crop-shade" data-side="bottom"></div>
@@ -55,6 +57,12 @@
             <div class="crop-handle" data-edge="se"></div>
             <span id="crop-size"></span>
           </div>
+        </div>
+        <div id="item-box" hidden>
+          <div class="item-corner" data-corner="nw"></div>
+          <div class="item-corner" data-corner="ne"></div>
+          <div class="item-corner" data-corner="sw"></div>
+          <div class="item-corner" data-corner="se"></div>
         </div>
       </div>
       <div id="zoom-controls">
@@ -89,6 +97,17 @@
         <button id="play" class="icon" title="Play / pause (Space)" aria-label="Play">&#9654;</button>
         <span id="time" class="mono"></span>
         <span id="kept-length" class="muted"></span>
+        <div id="mode" role="group" aria-label="Editing mode">
+          <button id="mode-trim" class="toggle" title="Trim the clip: just the video and the Mix track">Trim</button>
+          <button id="mode-multi" class="toggle" title="Edit every track, add video and audio tracks, and import files">Multi-track</button>
+        </div>
+        <div id="layer-tools" hidden>
+          <button id="add-video">+ Video track</button>
+          <button id="add-audio" title="Add an empty audio track">+ Audio track</button>
+          <button id="import" title="Add a video, picture or sound file at the playhead - or drop files here">Import...</button>
+          <button id="show-assets" class="toggle" title="Everything you've imported">Assets</button>
+          <input id="import-file" type="file" multiple hidden accept="video/*,audio/*,image/*,.mkv,.flv">
+        </div>
         <div class="spacer"></div>
         <span class="muted hint" title="Hold Alt while dragging on a stereo track to select just its left (top) or right (bottom) channel - a volume change there only affects that side.">Drag on the timeline to select &middot; drag the handles to trim &middot; Alt-drag a stereo track for one channel</span>
       </div>
@@ -124,6 +143,7 @@
     </section>
   </main>
   <script src="browser.js"></script>
+  <script src="layers.js"></script>
   <script src="editor.js"></script>
   <script src="view.js"></script>
 </body>

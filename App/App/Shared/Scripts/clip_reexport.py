@@ -112,9 +112,9 @@ def process_clip(ffmpeg, clip_path, options, log):
     clip_naming's settings (the defaults if missing)."""
     naming = options.get("naming") or clip_naming.DEFAULTS
     if options.get("split_tracks"):
-        split_tracks(ffmpeg, clip_path, options.get("app_labels", ()), log, naming["tracks_suffix"])
+        split_tracks(ffmpeg, clip_path, options.get("app_labels", ()), log, clip_naming.suffix(naming, "tracks"))
     if options.get("reexport"):
-        reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log, naming["small_suffix"])
+        reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log, clip_naming.suffix(naming, "small"))
 
 
 def finish_post_save(ffmpeg, clip_path, state, options):

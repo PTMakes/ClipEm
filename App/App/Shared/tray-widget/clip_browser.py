@@ -88,15 +88,24 @@ log = logging.getLogger("clip_browser")
 
 UI_DIR = os.path.join(SCRIPT_DIR, "clip_browser")
 UI_FILES = {"": "index.html", "index.html": "index.html", "browser.js": "browser.js", "editor.js": "editor.js",
-            "view.js": "view.js", "app.css": "app.css"}
+            "layers.js": "layers.js", "view.js": "view.js", "app.css": "app.css"}
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
     ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".flv": "video/x-flv",
     ".jpg": "image/jpeg", ".m4a": "audio/mp4", ".png": "image/png", ".ico": "image/x-icon",
+    ".jpeg": "image/jpeg", ".webp": "image/webp", ".bmp": "image/bmp", ".gif": "image/gif", ".webm": "video/webm",
+    ".aac": "audio/aac", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
 }
 CACHE_DIR = os.path.join(APP_DIR, "cache")
 THUMB_DIR = os.path.join(CACHE_DIR, "thumbs")
 EDITS_DIR = os.path.join(CACHE_DIR, "edits")
+# Files imported into the editor: <sha256>.<ext>, and <that>.json saying what
+# it is (clip_edit.probe_asset) - projects keep working if the original moves.
+ASSETS_DIR = os.path.join(CACHE_DIR, "assets")
+ASSET_ID_RE = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{2,5}$")
+# An import no saved edit uses goes after this long (prune_assets).
+ASSET_KEEP_DAYS = 30
 TRACK_AUDIO_DIR = os.path.join(CACHE_DIR, "track-audio")
 PEAKS_DIR = os.path.join(CACHE_DIR, "peaks")
 PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
@@ -314,7 +323,8 @@ class Editor:
     per file version), saved projects, and the one export that can run."""
 
     def __init__(self, ffmpeg=None, edits_dir=EDITS_DIR, track_dir=TRACK_AUDIO_DIR, peaks_dir=PEAKS_DIR,
-                 exports_path=EXPORTS_PATH):
+                 exports_path=EXPORTS_PATH, assets_dir=ASSETS_DIR):
+        self.assets_dir = assets_dir
         self.ffmpeg = ffmpeg if ffmpeg is not None else find_ffmpeg()
         self.edits_dir, self.track_dir, self.peaks_dir = edits_dir, track_dir, peaks_dir
         self.exports_path = exports_path
@@ -379,6 +389,10 @@ class Editor:
                 f in self._features() for f in clip_edit.CHANNEL_FILTERS)
         return self._can_channels
 
+    def can_layer(self):
+        """Whether it has what added video tracks and fades of the picture need."""
+        return bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.LAYER_FILTERS)
+
     def info(self, source):
         key = (source, os.path.getmtime(source))
         with self._lock:
@@ -401,12 +415,118 @@ class Editor:
                 saved = json.load(f)
         except (OSError, ValueError):
             saved = None
-        return clip_edit.normalize_project(saved, info) if saved else clip_edit.default_project(info)
+        return (clip_edit.normalize_project(saved, info, self.assets()) if saved
+                else clip_edit.normalize_project(clip_edit.default_project(info), info))
+
+    def assets(self):
+        """{id: clip_edit.probe_asset()'s answer, plus "path"} of everything imported."""
+        found = {}
+        try:
+            names = os.listdir(self.assets_dir)
+        except OSError:
+            return found
+        for name in names:
+            asset_id = name.removesuffix(".json")
+            if name.endswith(".json") and ASSET_ID_RE.match(asset_id):
+                meta = load_json(os.path.join(self.assets_dir, name), None)
+                path = os.path.join(self.assets_dir, asset_id)
+                if isinstance(meta, dict) and os.path.isfile(path):
+                    found[asset_id] = {**meta, "id": asset_id, "path": path, "size": os.path.getsize(path)}
+        return found
+
+    def assets_in_use(self):
+        """The ids of the imports saved edits use. An edit whose clip is gone
+        doesn't count; one from before edits named their clip does."""
+        used = set()
+        try:
+            names = os.listdir(self.edits_dir)
+        except OSError:
+            return used
+        for name in names:
+            saved = load_json(os.path.join(self.edits_dir, name), None) if name.endswith(".json") else None
+            if not isinstance(saved, dict) or (saved.get("clip") and not os.path.isfile(saved["clip"])):
+                continue
+            used.update(item.get("asset") for layer in saved.get("layers") or [] for item in layer.get("items") or [])
+        return used
+
+    def remove_asset(self, asset_id):
+        """Deletes an import no saved edit uses; ValueError if one does."""
+        if asset_id in self.assets_in_use():
+            raise ValueError("A clip's edit still uses that file - take it off the timeline first.")
+        if self.export_job.running():
+            raise ValueError("An export is running - wait for it to finish first.")
+        if isinstance(asset_id, str) and ASSET_ID_RE.match(asset_id):
+            for path in (os.path.join(self.assets_dir, asset_id), os.path.join(self.assets_dir, asset_id + ".json"),
+                         self.asset_preview_path({"id": asset_id})):
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+    def prune_assets(self, older_than_days=0, now=None):
+        """Deletes every import no saved edit uses, that's been here this
+        long. Returns how many."""
+        now = time.time() if now is None else now
+        used = self.assets_in_use()
+        old = [asset_id for asset_id, asset in self.assets().items()
+               if asset_id not in used and now - os.path.getmtime(asset["path"]) >= older_than_days * 86400]
+        for asset_id in old:
+            self.remove_asset(asset_id)
+        return len(old)
+
+    def import_asset(self, stream, length, name):
+        """Keeps a file the page is uploading (`length` bytes from stream).
+        Returns what assets() says of it; ValueError if it can't be used."""
+        name = os.path.basename(str(name or "").replace("\\", "/"))
+        ext = os.path.splitext(name)[1].lower()
+        os.makedirs(self.assets_dir, exist_ok=True)
+        digest = hashlib.sha256()
+        partial = os.path.join(self.assets_dir, f".{secrets.token_hex(8)}.partial")
+        try:
+            with open(partial, "wb") as f:
+                remaining = length
+                while remaining > 0:
+                    chunk = stream.read(min(CHUNK_BYTES, remaining))
+                    if not chunk:
+                        raise ValueError(f"The upload of {name} stopped halfway.")
+                    f.write(chunk)
+                    digest.update(chunk)
+                    remaining -= len(chunk)
+            # Only now: the page can't read an answer until it's sent the file.
+            if ext not in clip_edit.ASSET_EXTENSIONS:
+                raise ValueError(f"Can't import {name}: pick a video, a picture or a sound file.")
+            asset_id = digest.hexdigest()[:32] + ext
+            path = os.path.join(self.assets_dir, asset_id)
+            # The file's own extension: ffmpeg and the page's players go by it.
+            probed = partial + ext
+            os.replace(partial, probed)
+            partial = probed
+            meta = clip_edit.probe_asset(self.ffmpeg, partial, name)
+            os.replace(partial, path)
+        finally:
+            if os.path.exists(partial):
+                os.remove(partial)
+        write_text_atomic(path + ".json", json.dumps(meta))
+        return {**meta, "id": asset_id, "path": path, "size": os.path.getsize(path)}
+
+    def asset_preview_path(self, asset):
+        return os.path.join(self.track_dir, f"{asset['id']}-preview.mp4")
+
+    def asset_preview(self, asset):
+        """The file for the page to play: the import, or a copy it can play."""
+        if not clip_edit.needs_preview_copy(asset):
+            return asset["path"]
+        return clip_edit.asset_preview(self.ffmpeg, asset["path"], self.asset_preview_path(asset))
+
+    def asset_peaks(self, asset):
+        """An imported sound's waveform, like peaks()."""
+        path = os.path.join(self.peaks_dir, f"{asset['id']}-v3.json")
+        return clip_edit.track_peaks(self.ffmpeg, asset["path"], 0, path)
 
     def save_project(self, clip_path, info, project):
-        project = clip_edit.normalize_project(project, info)
+        project = clip_edit.normalize_project(project, info, self.assets())
         os.makedirs(self.edits_dir, exist_ok=True)
-        write_text_atomic(self.project_path(clip_path), json.dumps(project))
+        write_text_atomic(self.project_path(clip_path), json.dumps({**project, "clip": os.path.realpath(clip_path)}))
         return project
 
     def record_export(self, clip_path, files, now=None):
@@ -531,12 +651,12 @@ class Editor:
         else:
             mp4 = clip_edit.unique_path(folder, exact or f"{stem}-edit", ".mp4")
             mp4_stem = os.path.splitext(os.path.basename(mp4))[0]
-            mkv = os.path.join(folder, mp4_stem + clip_naming.load()["tracks_suffix"] + ".mkv")
+            mkv = clip_naming.tracks_path(os.path.join(folder, mp4_stem + ".mp4"))
             mp4_partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
             mkv_partial = os.path.join(folder, f".{os.path.basename(mkv)}.partial")
             steps = clip_edit.full_quality_commands(self.ffmpeg, source, project, info, mkv_partial, mp4_partial)
             outputs = {mp4_partial: mp4}
-            if len(info["audio"]) > 1:
+            if clip_edit.is_multitrack(project, info):
                 outputs[mkv_partial] = mkv
             cleanup = []
         log.info(f"Exporting {os.path.basename(clip_path)} ({preset}) to {', '.join(outputs.values())}")
@@ -564,6 +684,11 @@ def export_as_target(path, clip_path, source):
     if os.path.realpath(path) in (os.path.realpath(clip_path), os.path.realpath(source)):
         raise ValueError("Pick another name - that's the clip being exported.")
     return path
+
+
+def public_asset(asset):
+    """An asset as the page sees it: not where it's kept."""
+    return {key: value for key, value in asset.items() if key != "path"}
 
 
 def project_payload(clip, source, info, project, missing):
@@ -936,6 +1061,28 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 log.exception(f"{route} failed")
                 self._json({"error": str(exc)}, 500)
+        elif route == "api/assets":
+            self._json({"assets": [public_asset(a) for a in self.server.editor.assets().values()]})
+        elif route.startswith("asset-peaks/"):
+            asset = self.server.editor.assets().get(route[len("asset-peaks/"):])
+            if not asset or not (asset["has_audio"] or asset["kind"] == "audio"):
+                self._send(404, b"Not found", "text/plain")
+                return
+            try:
+                self._json(self.server.editor.asset_peaks(asset))
+            except Exception as exc:
+                log.exception(f"{route} failed")
+                self._json({"error": str(exc)}, 500)
+        elif route.startswith("asset/"):
+            asset = self.server.editor.assets().get(route[len("asset/"):])
+            if not asset:
+                self._send(404, b"Not found", "text/plain")
+                return
+            try:
+                self._send_file(self.server.editor.asset_preview(asset), cache=True)
+            except Exception as exc:
+                log.exception(f"{route} failed")
+                self._json({"error": str(exc)}, 500)
         elif route.startswith("media/"):
             path = resolve_clip(folder, route[len("media/"):])
             if path:
@@ -957,6 +1104,9 @@ class Handler(BaseHTTPRequestHandler):
         if route is None:
             return
         folder = self.server.current_folder()
+        if route == "api/asset":  # the body is the file, not JSON
+            self._import_asset()
+            return
         body = self._read_json()
         try:
             if route == "api/folder":
@@ -974,6 +1124,15 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"project": project,
                                 "discord": clip_edit.discord_settings(sized, clip_edit.kept_duration(project)),
                                 "custom": clip_edit.custom_options(sized)})
+            elif route == "api/asset-delete":
+                try:
+                    self.server.editor.remove_asset(body.get("id"))
+                except ValueError as exc:
+                    self._json({"error": str(exc)}, 409)
+                    return
+                self._json({"ok": True})
+            elif route == "api/assets-clean":
+                self._json({"removed": self.server.editor.prune_assets()})
             elif route == "api/automix":
                 self._automix(folder, body)
             elif route == "api/export":
@@ -1028,8 +1187,25 @@ class Handler(BaseHTTPRequestHandler):
         payload["can_channels"] = editor.can_split_channels()
         payload["can_gate"] = editor.can_gate()
         payload["can_crop"] = editor.can_crop()
+        payload["can_layer"] = editor.can_layer()
+        payload["assets"] = [public_asset(asset) for asset in editor.assets().values()]
         payload["gate_default_db"] = clip_edit.GATE_DEFAULT_DB
         self._json(payload)
+
+    def _import_asset(self):
+        length = int(self.headers.get("Content-Length") or 0)
+        try:
+            asset = self.server.editor.import_asset(self.rfile, length, self._query("name"))
+        except ValueError as exc:
+            self.close_connection = True  # what wasn't read of the file is still coming
+            self._json({"error": str(exc)}, 422)
+            return
+        except Exception as exc:
+            log.exception("Importing a file failed")
+            self.close_connection = True
+            self._json({"error": str(exc)}, 500)
+            return
+        self._json(public_asset(asset))
 
     def _automix(self, folder, body):
         """The master gain that takes the page's current mix to the target
@@ -1042,7 +1218,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"error": "ffmpeg isn't available."}, 422)
             return
         info = editor.info(source)
-        project = clip_edit.normalize_project(body.get("project"), info)
+        project = clip_edit.normalize_project(body.get("project"), info, editor.assets())
         if isinstance(body.get("solo"), list):
             project["solo"] = [i for i in body["solo"] if isinstance(i, int) and not isinstance(i, bool)]
         cmd = clip_edit.mix_loudness_command(editor.ffmpeg, source, project, info)
@@ -1080,6 +1256,10 @@ class Handler(BaseHTTPRequestHandler):
         if any(t.get("gate_db") is not None for t in saved["tracks"]) and not editor.can_gate():
             self._json({"error": "A track has the noise gate on, which needs a newer ffmpeg - update ClipEm "
                                  "or turn it off."}, 409)
+            return
+        if clip_edit.uses_layers(saved, editor.info(source)) and not editor.can_layer():
+            self._json({"error": "Added tracks and picture fades need a newer ffmpeg - update ClipEm or undo "
+                                 "them."}, 409)
             return
         if clip_edit.uses_channels(saved) and not editor.can_split_channels():
             self._json({"error": "Mono and left/right-only volume changes need a newer ffmpeg - update "
@@ -1276,6 +1456,7 @@ def main():
             signal.signal(signum, lambda _sig, _frame: threading.Thread(
                 target=quit_editor, args=(server,), daemon=True).start())
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.editor.prune_assets, args=(ASSET_KEEP_DAYS,), daemon=True).start()
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:

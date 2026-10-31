@@ -50,6 +50,15 @@ class SigningKey:
             return base64.b64encode(f.read()).decode("ascii")
 
 
+@pytest.fixture(autouse=True)
+def active_app_file(tmp_path, monkeypatch):
+    """Clip names' game or app, which the tray publishes - never the real one."""
+    sys.path.insert(0, SCRIPTS_DIR)
+    import clip_naming
+
+    monkeypatch.setattr(clip_naming, "ACTIVE_APP_PATH", str(tmp_path / "cache" / "active_app.json"))
+
+
 @pytest.fixture(scope="session")
 def signing_key(tmp_path_factory):
     if not shutil.which("openssl"):

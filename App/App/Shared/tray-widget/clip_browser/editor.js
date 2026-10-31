@@ -4,6 +4,8 @@
 // handles, a cut tool, and one lane per audio track for volume changes,
 // muting and shifting - and the exports. The project (see clip_edit.py)
 // is saved as it changes; clip_browser.py turns it into ffmpeg commands.
+// Trim mode shows the video and the Mix; Multi-track mode every track, plus
+// added video and audio tracks (layers.js).
 //
 // Preview: the video plays muted and each audio track plays from its own
 // extracted .m4a through Web Audio, kept in step with the video, so track
@@ -30,6 +32,15 @@ const ed = {
   tracks: [], // the project's tracks
   peaks: {}, // track index -> {per_second, peaks}
   showUnused: false, // lanes for app slots nothing was recorded on
+  mode: "trim", // or "multi" (layers.js)
+  layers: [], // the added tracks
+  clip_start: 0, // where the clip sits on the timeline
+  fade_in: 0, // of the whole picture, from black
+  fade_out: 0,
+  library: {}, // imported files: id -> what clip_edit.probe_asset says
+  item: null, // the id of the added item the panel shows
+  itemPeaks: {}, // asset id -> {per_second, peaks}
+  showAssets: false,
   selection: null, // {start, end, track} - track null: the video lane
   region: null, // {track, index} - the volume change being edited
   solo: new Set(),
@@ -96,20 +107,29 @@ function el(tag, className, text) {
   return node;
 }
 
-function duration() {
+function clipLength() {
   return (ed.info && ed.info.duration) || 0;
+}
+
+function clipEnd() {
+  return ed.clip_start + clipLength();
+}
+
+// The timeline: on to the clip's end, or the last added item's.
+function duration() {
+  return Math.max(clipEnd(), layersEnd());
 }
 
 // A post-clip save's clip hotkey press (Scripts/clip_post.py), or null: the
 // clip ends there unless the seconds after it are added.
 function mark() {
   const at = ed.info && ed.info.mark;
-  return at && at > 0 && at < duration() ? at : null;
+  return at && at > 0 && at < clipLength() ? at + ed.clip_start : null;
 }
 
 // Where the clip ends before any edit: the press, or the end.
 function defaultEnd() {
-  return mark() ?? duration();
+  return mark() ?? clipEnd();
 }
 
 const MARK_SNAP_PX = 8;
@@ -167,7 +187,8 @@ function loadKeep(keep) {
 }
 
 function project() {
-  return { version: 2, keep: keepRanges(), tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null };
+  return { version: 2, keep: keepRanges(), tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null,
+    clip_start: ed.clip_start, fade_in: ed.fade_in, fade_out: ed.fade_out, layers: ed.layers };
 }
 
 // The exported video's height before any scaling: the crop's, or the clip's.
@@ -180,7 +201,8 @@ function keptLength() {
 }
 
 function snapshot() {
-  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null });
+  return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, master_db: ed.master_db,
+    crop: ed.crop || null, clip_start: ed.clip_start, fade_in: ed.fade_in, fade_out: ed.fade_out, layers: ed.layers });
 }
 
 function restore(snap) {
@@ -190,7 +212,12 @@ function restore(snap) {
   ed.tracks = data.tracks;
   ed.master_db = data.master_db || 0;
   ed.crop = data.crop || null;
+  ed.clip_start = data.clip_start || 0;
+  ed.fade_in = data.fade_in || 0;
+  ed.fade_out = data.fade_out || 0;
+  ed.layers = data.layers || [];
   ed.region = null;
+  if (ed.item && !findItem(ed.item)) ed.item = null;
 }
 
 // An edit made in one go (a click) - or, with beginEdit/endEdit, one made
@@ -297,6 +324,8 @@ function closeClip() {
   ed.name = null;
   ed.info = null;
   teardownAudio();
+  teardownLayers();
+  resetTail();
   player.pause();
   state.selected = null;
   for (const li of list.children) li.classList.remove("selected");
@@ -310,6 +339,8 @@ async function loadEditor(name) {
   ed.name = null;
   ed.info = null;
   teardownAudio();
+  teardownLayers();
+  resetTail();
   renderDetails();
   let data;
   try {
@@ -328,7 +359,17 @@ async function loadEditor(name) {
   ed.master_db = data.project.master_db || 0;
   loadKeep(data.project.keep);
   ed.crop = data.project.crop || null;
+  ed.clip_start = data.project.clip_start || 0;
+  ed.fade_in = data.project.fade_in || 0;
+  ed.fade_out = data.project.fade_out || 0;
+  ed.layers = data.project.layers || [];
+  ed.library = Object.fromEntries((data.assets || []).map((asset) => [asset.id, asset]));
+  ed.item = null;
+  ed.showAssets = false;
+  // Added tracks only show in Multi-track mode - don't hide this clip's.
+  ed.mode = ed.layers.length || ed.clip_start ? "multi" : loadMode();
   ed.canCrop = !!data.can_crop;
+  ed.canLayer = !!data.can_layer;
   ed.discord = data.discord;
   ed.custom = data.custom;
   ed.missing = data.missing || [];
@@ -417,11 +458,12 @@ function renderToolbar() {
 
 // Nothing changed - in one track, or (no index) in the whole clip.
 function isUnedited(index) {
-  const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length;
+  const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length &&
+    !t.fade_in && !t.fade_out;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
   return start <= 0.001 && Math.abs(end - defaultEnd()) <= 0.001 && !ed.cuts.length && !ed.crop &&
-    ed.tracks.every(plain);
+    !ed.layers.length && !ed.clip_start && !ed.fade_in && !ed.fade_out && ed.tracks.every(plain);
 }
 
 function resetEdits() {
@@ -430,7 +472,12 @@ function resetEdits() {
     ed.cuts = [];
     ed.crop = null;
     ed.tracks = ed.tracks.map((t) => ({ index: t.index, volume_db: 0, offset: 0, muted: false, level: false,
-      gate_db: null, mono: false, regions: [] }));
+      gate_db: null, mono: false, fade_in: 0, fade_out: 0, regions: [] }));
+    ed.layers = [];
+    ed.clip_start = 0;
+    ed.fade_in = 0;
+    ed.fade_out = 0;
+    ed.item = null;
     ed.selection = null;
   });
 }
@@ -473,18 +520,25 @@ function isUnused(index) {
 }
 
 function shownTracks() {
+  if (ed.mode === "trim") return ed.info.tracks.slice(0, 1); // the Mix
   return ed.info.tracks.filter((t) => ed.showUnused || !isUnused(t.index));
 }
 
 function renderTimeline() {
   if (!ed.info) return;
   const shown = shownTracks();
-  timeline.replaceChildren(scrubRow(), videoRow(), ...shown.map((t) => audioRow(t.index)));
+  const multi = ed.mode === "multi";
+  // The top video track first, as it sits over the ones below it.
+  const added = (kind) => (multi ? ed.layers.filter((l) => l.kind === kind).map(layerRow) : []);
+  timeline.replaceChildren(scrubRow(), ...added("video").reverse(), videoRow(),
+    ...shown.map((t) => audioRow(t.index)), ...added("audio"));
   for (const track of shown) drawWaveform(track.index);
+  drawItemWaves();
   syncEffects();
+  renderModeBar();
   const hidden = ed.info.tracks.length - shown.length;
   const toggle = $("toggle-unused");
-  toggle.hidden = !hidden && !ed.showUnused;
+  toggle.hidden = !multi || (!hidden && !ed.showUnused);
   toggle.textContent = ed.showUnused ? "Hide unused tracks" : `Show ${hidden} unused track${hidden === 1 ? "" : "s"}`;
   updatePlayheads();
   $("kept-length").textContent = `Export length ${formatTime(keptLength())}`;
@@ -549,8 +603,8 @@ function scrubRow() {
 function dragPlayhead(e) {
   if (e.button !== 0) return;
   e.preventDefault();
-  const wasPlaying = !player.paused;
-  if (wasPlaying) player.pause();
+  const wasPlaying = isPlaying();
+  if (wasPlaying) pausePlayback();
   scrub.head = laneTime(e.clientX);
   seek(scrub.head);
   trackPointer(e, (ev) => scrubSeek(laneTime(ev.clientX)), () => {
@@ -569,13 +623,13 @@ player.addEventListener("seeked", () => {
   if (scrub.target === null) return;
   const t = scrub.target;
   scrub.target = null;
-  player.currentTime = clamp(t, 0, duration());
+  player.currentTime = clamp(t - ed.clip_start, 0, clipLength());
 });
 
 function scrubSeek(t) {
   scrub.head = t;
   updatePlayheads();
-  if (player.seeking) {
+  if (player.seeking && !outsideClip(t)) {
     scrub.target = t;
   } else {
     seek(t);
@@ -586,12 +640,15 @@ function videoRow() {
   const row = el("div", "row video-row");
   const head = el("div", "row-head");
   head.append(el("strong", null, "Video"), el("span", "muted small", "Trim & cut"));
+  if (ed.mode === "multi") head.append(clipStartLine());
   const at = mark();
   if (at !== null) head.append(extraToggle(at));
   const lane = el("div", "lane video-lane");
   rulerTicks(lane);
   addRemoved(lane, true);
   addSelection(lane, null);
+  if (ed.canLayer) addLaneFades(lane, ed);
+  if (ed.mode === "multi" && ed.canLayer) lane.append(clipBar());
   if (at !== null) {
     const line = el("div", "hotkey-mark");
     line.style.left = pct(at);
@@ -762,7 +819,7 @@ function audioRow(index) {
   // Mic and Desktop come from OBS, in step with the Mix: only apps can be shifted.
   const fromObs = ed.info.split && index > 0 && index <= DESKTOP;
   if (isMaster(index)) {
-    head.append(mixSourceLine());
+    if (ed.mode === "multi" || track.muted) head.append(mixSourceLine());
   } else if (desktopChoice) {
     head.append(desktopSourceLine());
   } else if (!fromObs) {
@@ -805,6 +862,7 @@ function audioRow(index) {
     lane.append(node);
   });
   addSelection(lane, index);
+  addLaneFades(lane, track);
   lane.append(el("div", "playhead"));
   lane.addEventListener("pointerdown", (e) => laneDown(e, index));
   row.append(head, lane);
@@ -824,7 +882,7 @@ function drawWaveform(index) {
   const ctx = canvas.getContext("2d");
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--wave").trim() || "#6c9bc7";
-  const offset = trackOf(index).offset;
+  const offset = trackOf(index).offset + ed.clip_start;
   const perPixel = duration() / width;
   // Stereo: left on top, right below; mono (or "Mono" on): one, combined.
   const rows = showsChannels(index) && data.channels ? data.channels : [data.peaks];
@@ -921,11 +979,13 @@ function laneDown(e, track) {
     const t = laneTime(ev.clientX);
     ed.selection = { start: Math.min(anchor, t), end: Math.max(anchor, t), track, channel };
     ed.region = null;
+    ed.item = null;
     renderTimeline();
   }, () => {
     if (!dragging) {
       ed.selection = null;
       ed.region = null;
+      ed.item = null;
       seek(anchor);
       renderTimeline();
     } else if (ed.selection.end - ed.selection.start < MIN_SPAN) {
@@ -940,11 +1000,11 @@ function laneDown(e, track) {
 // back on the press.
 function extraToggle(at) {
   const included = ed.trim[1] > at + 0.001;
-  const button = el("button", "toggle", `Include extra ${Math.round(duration() - at)}s`);
+  const button = el("button", "toggle", `Include extra ${Math.round(clipEnd() - at)}s`);
   button.setAttribute("aria-pressed", String(included));
   button.title = included ? "End the clip at the hotkey press" : "Keep the seconds recorded after the hotkey press";
   button.addEventListener("click", () => change(() => {
-    ed.trim[1] = included ? Math.max(at, ed.trim[0] + MIN_SPAN) : duration();
+    ed.trim[1] = included ? Math.max(at, ed.trim[0] + MIN_SPAN) : clipEnd();
     ed.cuts = ed.cuts.filter(([start]) => start < ed.trim[1]);
   }));
   const line = el("div", "title-line");
@@ -1069,10 +1129,19 @@ function renderPanel() {
   const panel = $("panel");
   const sel = ed.selection;
   const region = activeRegion();
+  const found = ed.item ? findItem(ed.item) : null;
   panel.replaceChildren();
   if (sel || region) ed.fx = null; // a selection takes the panel over
-  panel.hidden = !ed.info || (!sel && !region && ed.fx === null);
+  panel.hidden = !ed.info || (!sel && !region && ed.fx === null && !found && !ed.showAssets);
   if (panel.hidden) return;
+  if (found) {
+    renderItemPanel(panel, found);
+    return;
+  }
+  if (ed.showAssets) {
+    renderAssetsPanel(panel);
+    return;
+  }
   if (ed.fx !== null) {
     renderFx(panel, ed.fx);
     return;
@@ -1211,6 +1280,8 @@ function closeButton() {
     ed.selection = null;
     ed.region = null;
     ed.fx = null;
+    ed.item = null;
+    ed.showAssets = false;
     renderTimeline();
     renderPanel();
   });
@@ -1221,46 +1292,107 @@ function closeButton() {
 // Playback
 // ---------------------------------------------------------------------------
 
+// Before or past the clip (added items are there) there's no video to keep
+// time: the playhead runs on its own, with the clip's picture hidden.
+const tail = { at: null, playing: false, last: 0 };
+
+function resetTail() {
+  tail.at = null;
+  tail.playing = false;
+}
+
+function position() {
+  return tail.at ?? (player.currentTime || 0) + ed.clip_start;
+}
+
+function outsideClip(t) {
+  return t < ed.clip_start || (t >= clipEnd() && duration() > clipEnd());
+}
+
+function isPlaying() {
+  return tail.playing || !player.paused;
+}
+
+function pausePlayback() {
+  tail.playing = false;
+  player.pause();
+}
+
+function startTail(at) {
+  player.pause();
+  tail.at = at;
+  tail.playing = true;
+  tail.last = performance.now();
+}
+
 function seek(t) {
-  player.currentTime = clamp(t, 0, duration());
+  const target = clamp(t, 0, duration());
+  if (outsideClip(target)) {
+    if (isPlaying()) startTail(target);
+    else tail.at = target;
+    player.currentTime = clamp(target - ed.clip_start, 0, clipLength());
+  } else {
+    const resume = tail.playing;
+    resetTail();
+    player.currentTime = target - ed.clip_start;
+    if (resume) player.play().catch(() => {});
+  }
   updatePlayheads();
 }
 
 function togglePlay() {
   if (!ed.info) return;
-  if (player.paused) {
+  if (!isPlaying()) {
     const keep = keepRanges();
     const end = keep.length ? keep[keep.length - 1][1] : duration();
-    if (player.currentTime >= end - 0.05 || player.currentTime < ed.trim[0]) player.currentTime = ed.trim[0];
+    if (position() >= end - 0.05 || position() < ed.trim[0]) seek(ed.trim[0]);
     if (audio.ctx && audio.ctx.state === "suspended") audio.ctx.resume();
-    player.play().catch((err) => setStatus(`Can't play: ${err.message}`, true));
+    if (tail.at !== null) startTail(tail.at);
+    else player.play().catch((err) => setStatus(`Can't play: ${err.message}`, true));
   } else {
-    player.pause();
+    pausePlayback();
   }
 }
 
 function updatePlayheads() {
-  const t = scrub.head ?? (player.currentTime || 0);
+  const t = scrub.head ?? position();
   for (const head of timeline.querySelectorAll(".playhead")) head.style.left = pct(t);
   $("time").textContent = `${formatTime(t)} / ${formatTime(duration())}`;
-  $("play").innerHTML = player.paused ? "&#9654;" : "&#10074;&#10074;";
-  $("play").setAttribute("aria-label", player.paused ? "Play" : "Pause");
+  $("play").innerHTML = isPlaying() ? "&#10074;&#10074;" : "&#9654;";
+  $("play").setAttribute("aria-label", isPlaying() ? "Pause" : "Play");
 }
 
 // While playing: jump over what's cut, stop at the end.
 function skipRemoved() {
-  const t = player.currentTime;
+  const t = position();
   const keep = keepRanges();
   if (!keep.length) return;
   if (keep.some(([a, b]) => t >= a - 0.02 && t < b)) return;
   const next = keep.find(([a]) => a > t);
   if (next) {
-    player.currentTime = next[0];
+    seek(next[0]);
   } else {
-    player.pause();
-    player.currentTime = keep[keep.length - 1][1];
+    pausePlayback();
+    seek(keep[keep.length - 1][1]);
   }
 }
+
+// The clip ran out with the timeline still going: carry on past it - and,
+// reaching the clip from before it, hand over to the video.
+function runTail() {
+  if (!player.paused && duration() > clipEnd() && player.currentTime >= clipLength() - 0.03) startTail(clipEnd());
+  if (!tail.playing) return;
+  const now = performance.now();
+  const before = tail.at;
+  tail.at = Math.min(duration(), tail.at + (now - tail.last) / 1000);
+  tail.last = now;
+  if (before < ed.clip_start && tail.at >= ed.clip_start) seek(tail.at);
+  else if (tail.at >= duration()) tail.playing = false;
+}
+
+player.addEventListener("ended", () => {
+  if (duration() > clipEnd() && ed.trim[1] > clipEnd()) startTail(clipEnd());
+});
 
 // With Level Out Audio on, the track's volume goes before it (as
 // clip_edit.pre_level_db): it's in the audio the server renders, not added here.
@@ -1273,6 +1405,7 @@ function gainAt(track, t, channel) {
   if (track.muted) return 0;
   // Level Out Audio on: the volume is already in the rendered audio.
   let gain = track.level && track.volume_db > MUTE_DB ? 1 : dbToGain(track.volume_db);
+  gain *= fadeLevel(track, t, ed.trim[0], ed.trim[1]);
   for (const region of track.regions) {
     const here = region.channel == null || region.channel === channel;
     if (here && t >= region.start && t < region.end) gain *= dbToGain(region.db);
@@ -1362,8 +1495,8 @@ function teardownAudio() {
 
 function syncAudio() {
   if (!audio.ctx || !ed.info) return;
-  const t = player.currentTime;
-  const playing = !player.paused && !player.seeking;
+  const t = position();
+  const playing = tail.playing || (!player.paused && !player.seeking);
   const heard = audibleTracks();
   const now = audio.ctx.currentTime;
   if (audio.master !== ed.master_db) {
@@ -1372,7 +1505,7 @@ function syncAudio() {
   }
   for (const [index, node] of audio.nodes) {
     const track = trackOf(index);
-    const desired = t - track.offset;
+    const desired = t - ed.clip_start - track.offset;
     const inRange = desired >= 0 && (!isFinite(node.media.duration) || desired < node.media.duration);
     const on = playing && heard.has(index) && inRange;
     const mix = channelMatrix(index);
@@ -1396,9 +1529,11 @@ function syncAudio() {
 
 function frame() {
   if (ed.info) {
-    if (!player.paused) skipRemoved();
+    runTail();
+    if (isPlaying()) skipRemoved();
     updatePlayheads();
     syncAudio();
+    syncLayers(position(), tail.playing || (!player.paused && !player.seeking));
     drawMeter();
   }
   requestAnimationFrame(frame);
@@ -2092,9 +2227,12 @@ document.addEventListener("keydown", (e) => {
   } else if (e.ctrlKey || e.metaKey || e.altKey) {
     // leave everything else alone
   } else if (key === "i") {
-    change(() => { ed.trim[0] = clamp(player.currentTime, 0, ed.trim[1] - MIN_SPAN); });
+    change(() => { ed.trim[0] = clamp(position(), 0, ed.trim[1] - MIN_SPAN); });
   } else if (key === "o") {
-    change(() => { ed.trim[1] = clamp(player.currentTime, ed.trim[0] + MIN_SPAN, duration()); });
+    change(() => { ed.trim[1] = clamp(position(), ed.trim[0] + MIN_SPAN, duration()); });
+  } else if ((key === "delete" || key === "backspace") && ed.item) {
+    e.preventDefault();
+    deleteItem(ed.item);
   } else if ((key === "delete" || key === "backspace") && ed.selection && ed.selection.track === null) {
     e.preventDefault();
     removeSelection();
@@ -2103,10 +2241,11 @@ document.addEventListener("keydown", (e) => {
     deleteRegion();
   } else if (key === "arrowleft" || key === "arrowright") {
     e.preventDefault();
-    seek(player.currentTime + (key === "arrowleft" ? -1 : 1) * arrowStep(e));
+    seek(position() + (key === "arrowleft" ? -1 : 1) * arrowStep(e));
   } else if (key === "escape") {
     ed.selection = null;
     ed.region = null;
+    ed.item = null;
     renderTimeline();
     renderPanel();
   }

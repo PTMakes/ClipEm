@@ -9,6 +9,9 @@ every app that made sound during it becomes a track, named after the app.
 Streams are recorded whether or not they're paused, so the start of an app's
 sound isn't lost.
 
+The same check tells clip names (Scripts/clip_naming.py) which game or app is
+active: ActiveApp below.
+
 Apps playing sound: on Windows, the WASAPI sessions on the default output
 device (pycaw); on Linux, PulseAudio/PipeWire sink inputs (`pactl`), labelled
 with the Flatpak's .desktop name when there is one. macOS has no app tracks.
@@ -19,11 +22,15 @@ import logging
 import os
 import platform
 import subprocess
+import sys
 import threading
 import time
 from collections import namedtuple
 
 import obs_config
+
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Scripts"))
+import clip_naming  # noqa: E402 - Scripts/clip_naming.py
 
 log = logging.getLogger("tray")
 
@@ -261,6 +268,42 @@ def app_targets(streams):
     return targets
 
 
+# What's playing beside the game, so least likely to be what a clip is of:
+# browsers, then these chat and music apps. Compared like IGNORED_APPS.
+BROWSER_APPS = {"firefox", "firefox-bin", "librewolf", "zen", "zen-bin", "chrome", "google-chrome", "chromium",
+                "brave", "brave-browser", "msedge", "opera", "vivaldi", "vivaldi-bin"}
+BACKGROUND_APPS = {"discord", "discordcanary", "discordptb", "vesktop", "spotify", "teamspeak", "teamspeak3",
+                   "ts3client_linux_amd64", "mumble", "slack", "teams", "ms-teams", "zoom", "skype", "telegram",
+                   "telegram-desktop", "signal", "signal-desktop", "element", "whatsapp", "vlc", "mpv"}
+# An app stays active this long after its last sound: games go quiet too.
+ACTIVE_HOLD_SECONDS = 60
+
+
+class ActiveApp:
+    """Which app a clip saved now is of: of those heard in the last
+    ACTIVE_HOLD_SECONDS, a game or other app before a browser before chat or
+    music - then whichever has been playing longest."""
+
+    def __init__(self):
+        self._heard = {}  # app key: [label, first heard, last heard]
+
+    @staticmethod
+    def _rank(key):
+        return 2 if key in BACKGROUND_APPS else 1 if key in BROWSER_APPS else 0
+
+    def update(self, streams, now):
+        """Returns the active app's label, or None."""
+        self._heard = {key: entry for key, entry in self._heard.items() if now - entry[2] <= ACTIVE_HOLD_SECONDS}
+        for stream in streams:
+            if not stream.corked:
+                entry = self._heard.setdefault(stream.key, [stream.label, now, now])
+                entry[0], entry[2] = stream.label, now
+        if not self._heard:
+            return None
+        best = min(self._heard, key=lambda key: (self._rank(key), self._heard[key][1]))
+        return self._heard[best][0]
+
+
 def replay_buffer_seconds():
     try:
         return int(obs_config.read_ini_section("AdvOut").get("RecRBTime", 60))
@@ -269,13 +312,15 @@ def replay_buffer_seconds():
 
 
 class AppTrackMonitor:
-    """Call tick() from the poll loop. Does nothing unless `enabled()` - split
-    audio tracks are on and this system can record apps. recorder:
-    app_recorder.AppRecorder (or anything with set_targets(targets) and stop())."""
+    """Call tick() from the poll loop. Records apps only if `enabled()` - split
+    audio tracks are on and this system can record apps - and publishes the
+    active app only if `names_clips()`. recorder: app_recorder.AppRecorder (or
+    anything with set_targets(targets) and stop())."""
 
     def __init__(self, recorder, list_streams=list_audio_streams, monotonic=time.monotonic,
                  interval_seconds=CHECK_INTERVAL_SECONDS,
-                 enabled=lambda: obs_config.load_tray_tracks() and obs_config.app_capture_supported()):
+                 enabled=lambda: obs_config.load_tray_tracks() and obs_config.app_capture_supported(),
+                 names_clips=lambda: clip_naming.load()["app"], publish=clip_naming.publish_active_app):
         self._recorder = recorder
         self._list_streams = list_streams
         self._monotonic = monotonic
@@ -284,6 +329,10 @@ class AppTrackMonitor:
         self._next_check = None
         self._detect_failed = False
         self._was_enabled = False
+        self._names_clips = names_clips
+        self._publish = publish
+        self._active = ActiveApp()
+        self._published = ""  # None is a value: nothing's active
 
     def forget(self):
         """After a reconnect: check again straight away."""
@@ -301,19 +350,29 @@ class AppTrackMonitor:
             # tray's poll loop (which would drop and reconnect, silently).
             log.exception("App track check crashed")
 
+    def _publish_active(self, app):
+        if app != self._published:
+            self._published = app
+            self._publish(app)
+
     def _tick(self):
-        if not self._enabled():
-            if self._was_enabled:
-                self._recorder.stop()
-            self._was_enabled = False
+        enabled, names_clips = self._enabled(), self._names_clips()
+        if self._was_enabled and not enabled:
+            self._recorder.stop()
+        self._was_enabled = enabled
+        if not names_clips:
+            self._publish_active(None)
+        if not (enabled or names_clips):
             return
-        self._was_enabled = True
         try:
             streams = self._list_streams()
         except Exception as exc:
             if not self._detect_failed:
-                log.warning(f"Can't tell which apps are playing sound ({exc}) - app tracks won't be recorded.")
+                log.warning(f"Can't tell which apps are playing sound ({exc}) - no app tracks or app names in clips.")
                 self._detect_failed = True
             return
         self._detect_failed = False
-        self._recorder.set_targets(app_targets(streams))
+        if enabled:
+            self._recorder.set_targets(app_targets(streams))
+        if names_clips:
+            self._publish_active(self._active.update(streams, self._monotonic()))

@@ -252,10 +252,11 @@ class Card(tk.Canvas):
         self._pad, self._radius, self._fill_height = pad, radius, fill_height
         self.body = tk.Frame(self, background=BG)
         self._window = self.create_window(pad, pad, window=self.body, anchor="nw")
-        self.body.bind("<Configure>", self._fit)
+        self.body.bind("<Configure>", self.fit)
         self.bind("<Configure>", self._draw)
 
-    def _fit(self, _event=None):
+    def fit(self, _event=None):
+        """Also for when .body wants more width than it has: that alone isn't a <Configure>."""
         self.configure(width=self.body.winfo_reqwidth() + 2 * self._pad,
                        height=self.body.winfo_reqheight() + 2 * self._pad)
 

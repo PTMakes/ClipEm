@@ -5,6 +5,7 @@
 # official source:
 #   - FFmpeg  https://github.com/FFmpeg/FFmpeg          (pinned tag + commit)
 #   - x264    https://code.videolan.org/videolan/x264   (pinned commit)
+#   - zlib    https://github.com/madler/zlib            (pinned commit, for PNG)
 #
 # Targets (both fully static - no runtime dependencies on the user's system):
 #   linux-x86_64    native build
@@ -12,7 +13,8 @@
 #
 # The build is deliberately minimal: the ffmpeg CLI only, H.264 via x264,
 # FFmpeg's native AAC encoder, the demuxers/decoders OBS recordings can
-# contain, MP4/MKV output, JPEG thumbnails, raw PCM (waveforms) and the
+# contain, the video, picture and sound files people import into the clip
+# editor, MP4/MKV output, JPEG thumbnails, raw PCM (waveforms) and the
 # filters the clip editor's exports use. No network, no hardware
 # acceleration, no autodetected system libraries - so the result is
 # reproducible and small.
@@ -21,7 +23,7 @@
 #   ffmpeg-<ver>-<rev>-linux-x86_64.tar.gz   bin/ffmpeg + LICENSE/SOURCES
 #   ffmpeg-<ver>-<rev>-windows-x86_64.zip    bin/ffmpeg.exe + LICENSE/SOURCES
 #   ffmpeg-<ver>-<rev>-source.tar.gz         the exact FFmpeg + x264 sources built
-#                                        (published alongside the binaries -
+#                                        (zlib's too; published alongside the binaries -
 #                                        the GPL requires offering them)
 #
 # Requirements (Arch/CachyOS):
@@ -42,9 +44,10 @@ esac
 FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
+ZLIB_COMMIT="51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"  # zlib v1.3.1
 # ClipEm's own build revision: bump it whenever FFMPEG_COMMON_FLAGS change, so
 # the archives get new names (and hashes) and installs pick the new build up.
-BUILD_REV="r3"
+BUILD_REV="r4"
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEV_DIR/dist/ffmpeg"
@@ -84,9 +87,10 @@ fetch() {  # <url> <commit> <dir>
 }
 
 mkdir -p "$WORK_DIR" "$OUT_DIR"
-echo "=== Fetching FFmpeg $FFMPEG_TAG and x264 ==="
+echo "=== Fetching FFmpeg $FFMPEG_TAG, x264 and zlib ==="
 fetch https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_COMMIT" "$WORK_DIR/src/ffmpeg"
 fetch https://code.videolan.org/videolan/x264.git "$X264_COMMIT" "$WORK_DIR/src/x264"
+fetch https://github.com/madler/zlib.git "$ZLIB_COMMIT" "$WORK_DIR/src/zlib"
 
 # Guard against the tag having been moved upstream.
 tag_commit="$(git ls-remote https://github.com/FFmpeg/FFmpeg.git "refs/tags/$FFMPEG_TAG^{}" | awk '{print $1}')"
@@ -98,24 +102,28 @@ tag_commit="$(git ls-remote https://github.com/FFmpeg/FFmpeg.git "refs/tags/$FFM
 # --- Build -----------------------------------------------------------------
 # Everything OBS can write to a recording (H.264/HEVC/AV1 video, AAC/Opus
 # audio, in MP4/MOV/MKV/FLV/TS) must be readable; output is H.264+AAC in
-# MP4/MKV, JPEG thumbnails, and raw PCM for the editor's waveforms.
+# MP4/MKV, JPEG thumbnails, and raw PCM for the editor's waveforms. The other
+# formats are what can be imported into the editor (clip_edit.ASSET_EXTENSIONS).
 # shellcheck disable=SC2054  # commas are part of the configure values
 FFMPEG_COMMON_FLAGS=(
-  --enable-gpl --enable-libx264
+  --enable-gpl --enable-libx264 --enable-zlib
   --disable-autodetect --disable-network --disable-doc --disable-debug
   --disable-ffplay --disable-ffprobe
   --enable-static --disable-shared
   --disable-everything
   --enable-protocol=file,pipe
   --enable-demuxer=mov,matroska,flv,mpegts,aac,h264,hevc
+  --enable-demuxer=mp3,wav,flac,ogg,gif,image2,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe
   --enable-decoder=h264,hevc,av1,aac,aac_latm,opus,mp3,pcm_s16le,pcm_f32le
-  --enable-parser=h264,hevc,av1,aac,aac_latm,opus
+  --enable-decoder=pcm_s24le,pcm_s32le,pcm_u8,flac,vorbis,vp8,vp9,gif,png,mjpeg,webp,bmp
+  --enable-parser=h264,hevc,av1,aac,aac_latm,opus,mpegaudio,flac,vorbis,vp8,vp9,png,mjpeg,webp,bmp,gif
   --enable-encoder=libx264,aac,mjpeg,pcm_s16le
   --enable-muxer=mp4,matroska,null,pcm_s16le,image2
   --enable-bsf=aac_adtstoasc,h264_mp4toannexb,extract_extradata
   --enable-filter=scale,format,aresample,aformat,null,anull,trim,atrim,setpts,asetpts
   --enable-filter=concat,volume,amix,adelay,apad,afade,asplit,split
   --enable-filter=loudnorm,alimiter,pan,channelsplit,join,agate
+  --enable-filter=overlay,fade,tpad,colorchannelmixer
   --enable-swscale --enable-swresample
 )
 
@@ -145,6 +153,12 @@ build_target() {  # <name> <host-triplet-or-empty>
 
   (cd "$WORK_DIR/$name/x264" && ./configure "${x264_flags[@]}" && make -j"$JOBS" && make install)
 
+  echo -e "\n=== Building zlib ($name) ==="
+  cp -a "$WORK_DIR/src/zlib" "$WORK_DIR/$name/zlib"
+  (cd "$WORK_DIR/$name/zlib" \
+    && CHOST="$host" CFLAGS="-O2 -fPIC" ./configure --static --prefix="$prefix" \
+    && make -j"$JOBS" libz.a && make install)
+
   echo -e "\n=== Building FFmpeg $FFMPEG_TAG ($name) ==="
   (cd "$WORK_DIR/$name/ffmpeg" \
     && PKG_CONFIG_PATH="$prefix/lib/pkgconfig" PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig" \
@@ -158,6 +172,7 @@ write_notices() {  # <dir>
 This ffmpeg was built for ClipEm from unmodified official sources:
   FFmpeg $FFMPEG_TAG  https://github.com/FFmpeg/FFmpeg  commit $FFMPEG_COMMIT
   x264             https://code.videolan.org/videolan/x264  commit $X264_COMMIT
+  zlib             https://github.com/madler/zlib  commit $ZLIB_COMMIT
 Licensed under the GNU GPL (see LICENSE.txt). The exact source code is
 published next to this download as ffmpeg-$VERSION-$BUILD_REV-source.tar.gz, and the
 build script is Dev/build/build-ffmpeg.sh in the ClipEm repository.
@@ -182,7 +197,7 @@ package() {  # <name> <binary> <archive>
 
 build_target linux-x86_64 ""
 strip "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg"
-check_has() {  # <-encoders|-muxers|-filters> <name>...
+check_has() {  # <-encoders|-decoders|-muxers|-filters> <name>...
   local kind="$1" listing
   shift
   listing="$("$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" -hide_banner "$kind" 2>/dev/null)"
@@ -193,6 +208,8 @@ check_has() {  # <-encoders|-muxers|-filters> <name>...
 check_has -encoders libx264 aac mjpeg pcm_s16le
 check_has -muxers mp4 matroska null s16le image2
 check_has -filters concat volume amix adelay apad afade asplit split scale loudnorm alimiter pan channelsplit join agate crop
+check_has -filters overlay fade tpad colorchannelmixer
+check_has -decoders png mjpeg vp9 flac vorbis mp3 gif
 if ldd "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" >/dev/null 2>&1; then
   echo "Linux build is dynamically linked - expected a static binary" >&2
   exit 1
@@ -206,7 +223,7 @@ package windows-x86_64 ffmpeg.exe "$WINDOWS_ARCHIVE"
 echo -e "\n=== Source archive (GPL) ==="
 rm -f "$SOURCE_ARCHIVE"
 tar --sort=name --owner=0 --group=0 --numeric-owner --exclude=.git \
-  -C "$WORK_DIR/src" -cf - ffmpeg x264 | gzip -n > "$SOURCE_ARCHIVE"
+  -C "$WORK_DIR/src" -cf - ffmpeg x264 zlib | gzip -n > "$SOURCE_ARCHIVE"
 echo "Wrote $SOURCE_ARCHIVE"
 
 rm -rf "$WORK_DIR/linux-x86_64" "$WORK_DIR/windows-x86_64"

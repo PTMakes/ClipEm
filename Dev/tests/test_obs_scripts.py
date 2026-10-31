@@ -305,7 +305,7 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
         assert state["clip_seconds"] == 60  # the buffer (70 s) less the post-clip seconds
         assert 0 <= state["requested_at"] - state["pressed_at"] < 5
     if name == "clip_reexport.py":
-        assert len(started) == 1 and started[0][1] == str(clip)
+        assert len(started) == 1 and os.path.basename(started[0][1]).startswith("Replay-") and not clip.exists()
         assert started[0][2]["split_tracks"] and started[0][2]["reexport"]
         assert started[0][2]["app_labels"] == []  # OBS records Mix, Mic and Desktop only
     if name == "stuck_output_check.py":
