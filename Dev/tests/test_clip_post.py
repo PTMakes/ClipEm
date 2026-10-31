@@ -224,3 +224,13 @@ def test_queued_post_clip_settings_apply_after_the_hotkey(tmp_path, monkeypatch)
     assert obs_config.load_clip_hotkey() == (False, False, True, "F10")
     assert obs_config.read_ini_section("AdvOut")["RecRBTime"] == "35"
     assert obs_config.load_post_clip() == {"enabled": True, "seconds": 5, "sound_after": True}
+
+
+def test_setup_keeps_recording_after_the_hotkey_like_settings(tmp_path, monkeypatch):
+    """The text installer's prompts end up in the same place as Settings."""
+    _post_clip_files(tmp_path, monkeypatch, {"enabled": False})
+    answers = iter(["y", "25", "n"])
+    monkeypatch.setattr("builtins.input", lambda *_args: next(answers))
+    setup.configure_post_clip()
+    assert obs_config.load_post_clip() == {"enabled": True, "seconds": 25, "sound_after": False}
+

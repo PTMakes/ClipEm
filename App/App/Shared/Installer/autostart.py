@@ -739,6 +739,10 @@ def repair_linux_menu_entry():
     return linux_menu_entry_path()
 
 
+# Written by clip_browser.py and settings_dialog.py.
+WINDOW_DESKTOP_FILES = ("clipem-editor.desktop", "clipem-settings.desktop")
+
+
 def applications_dir():
     data_home = os.environ.get("XDG_DATA_HOME") or os.path.expanduser("~/.local/share")
     return os.path.join(data_home, "applications")
@@ -773,6 +777,23 @@ def write_window_desktop_entry(file_name, content, directory=None):
     os.makedirs(directory, exist_ok=True)
     write_text_atomic(path, content)
     return path
+
+
+def remove_window_desktop_entries(directory=None):
+    """Removes this install's hidden entries (window_desktop_entry) - another
+    ClipEm folder's are left alone."""
+    if platform.system() != "Linux":
+        return
+    directory = directory or applications_dir()
+    for name in WINDOW_DESKTOP_FILES:
+        path = os.path.join(directory, name)
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                if SHARED_DIR in f.read():
+                    os.remove(path)
+                    print(f"Removed {path}")
+        except OSError:
+            pass
 
 
 def _linux_icon():

@@ -60,6 +60,7 @@ from app_window import use_windows_app_id  # noqa: E402
 from clip_folder import ClipFolderWatch  # noqa: E402
 from clipem_common import (  # noqa: E402
     LOG_DIR,
+    OBS_RESTART_FLAG,
     OPEN_EDITOR_ENV,
     REOPEN_EDITOR_FLAG,
     SETTINGS_REQUEST_PATH,
@@ -73,6 +74,7 @@ from clipem_common import (  # noqa: E402
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from input_activity import InputActivity  # noqa: E402
 from mic_check import EVENT_SUBSCRIPTIONS, MicCheck  # noqa: E402
+from obs_crash import ObsCrashWatch  # noqa: E402
 from obs_notices import ObsPlugin  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
 from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
@@ -195,6 +197,8 @@ ICON_SIZE = 64
 # this, closing OBS any way other than through this tray icon's own menu
 # left the widget spinning on obs-websocket reconnects forever.
 MAX_DISCONNECTED_SECONDS = 120
+# How long KDE's script gets to say whether OBS's window is showing.
+OBS_WINDOW_REPORT_SECONDS = 1
 
 # How long to give a Linux desktop's tray host (panel/extension) to pick up
 # our icon before assuming there isn't one. Registering with a
@@ -289,10 +293,13 @@ def show_obs_window():
 
 
 def close_obs_window(client=None):
-    """Best-effort: stop OBS's outputs (via client, if connected) and ask this
-    distribution's OBS to close - see obs_process.close_obs. Never raises."""
+    """Stops OBS's outputs (via client, if connected) and asks this
+    distribution's OBS to close - see obs_process.close_obs - then ends it if
+    it won't, so a hidden OBS isn't left with nothing to quit it from.
+    Never raises."""
     try:
-        obs_process.close_obs(log, client=client, timeout_seconds=OBS_EXIT_WAIT_SECONDS)
+        if not obs_process.close_obs(log, client=client, timeout_seconds=OBS_EXIT_WAIT_SECONDS):
+            obs_process.kill_obs(log)
     except Exception as exc:
         log.warning(f"Failed to close OBS: {exc}")
 
@@ -342,6 +349,7 @@ class TrayApp:
         # OBS's ClipEm plugin: OBS's errors and messages, and showing/hiding it.
         self.obs_plugin = ObsPlugin(self._notify, on_window_change=self._on_obs_window_reported)
         self.input_activity = InputActivity(log)
+        self.obs_crash = ObsCrashWatch(self._notify, lambda: start_clipem([OBS_RESTART_FLAG]), obs_process.obs_running)
         self.stuck_screen = StuckScreenMonitor(
             self._notify,
             DisplayChoice(obs_config.load_setup_capture_display, obs_config.set_capture_display_user_changed),
@@ -392,9 +400,9 @@ class TrayApp:
             pystray.MenuItem(
                 "Quit",
                 pystray.Menu(
-                    pystray.MenuItem("Restart ClipEm Tray and OBS", self._restart_clipem_and_obs),
-                    pystray.MenuItem("Quit ClipEm Tray Only", self._quit),
-                    pystray.MenuItem("Quit ClipEm Tray and OBS", self._quit_and_close_obs),
+                    pystray.MenuItem("Restart ClipEm and OBS", self._restart_clipem_and_obs),
+                    pystray.MenuItem("Quit ClipEm Only", self._quit_leaving_obs),
+                    pystray.MenuItem("Quit ClipEm and OBS", self._quit_and_close_obs),
                 ),
             ),
         )
@@ -661,6 +669,11 @@ class TrayApp:
             self.client.close()
         icon.stop()
 
+    def _quit_leaving_obs(self, icon, item):
+        if self.connected and self.client is not None:
+            self.obs_plugin.goodbye(self.client)
+        self._quit(icon, item)
+
     def _quit_and_close_obs(self, icon, item):
         close_obs_window(self.client if self.connected else None)
         self._quit(icon, item)
@@ -709,10 +722,12 @@ class TrayApp:
             timeout_seconds=MAX_DISCONNECTED_SECONDS,
             log=log.info,
         )
+        self.client.on_event("ExitStarted", self.obs_crash.exit_started)
         self.client.on_event("InputSettingsChanged", self._on_input_settings_changed)
         self.client.on_event("ReplayBufferSaved", self.clip_finisher.on_replay_saved)
         self.client.on_event("InputVolumeMeters", self.mic_check.on_volume_meters)
         self.connected = True
+        self.obs_crash.connected()
         log.info(f"Connected to OBS at {url}.")
         self.obs_plugin.attach(self.client)
         self.stuck_screen.forget()
@@ -769,9 +784,11 @@ class TrayApp:
     def _poll_loop(self):
         while True:
             if not self.connected:
+                self.obs_crash.check()
                 try:
                     self._connect()
                 except Exception as exc:
+                    self._close_unreachable_obs()
                     self._shutdown(f"could not reach OBS ({exc})")
                     return
 
@@ -815,6 +832,23 @@ class TrayApp:
 
             self._refresh_obs_window()
             time.sleep(POLL_SECONDS)
+
+    def _close_unreachable_obs(self):
+        """The tray is giving up on an OBS that isn't answering. A hidden one
+        would be left with nothing to quit it from, so it's closed; a window
+        that's showing is someone's to close - it may be in use."""
+        if not obs_process.find_obs_pids():
+            if not self.obs_crash.exited_cleanly:  # e.g. it never got going
+                self._notify("OBS isn't running, so ClipEm is closing. See logs/run.log if it won't start.")
+            return
+        self._refresh_obs_window()
+        time.sleep(OBS_WINDOW_REPORT_SECONDS)  # KDE's script answers over D-Bus
+        self._refresh_obs_window()
+        if self.obs_window.visible:
+            log.warning("OBS isn't answering, but its window is showing - leaving it open.")
+            self._notify("ClipEm lost its connection to OBS and is closing. OBS is still open.")
+            return
+        close_obs_window()
 
     def _refresh_obs_window(self):
         if self.connected and self.obs_plugin.present:

@@ -720,15 +720,7 @@ def open_dialog(start_tab=None, highlight=()):
                                   from_=obs_config.clip_post.MIN_SECONDS, to=obs_config.clip_post.MAX_SECONDS)
     post_seconds_box.pack(side="left", padx=(px(3), 0))
     tk.Label(post_line, text="seconds after the hotkey").pack(side="left", padx=(px(3), 0))
-    info_button(post_line, "Post-clip", (
-        "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
-        "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
-        "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
-        "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
-        "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
-        "tracks (what your mic picked up from your speakers stays).\n\n"
-        "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
-    )).pack(side="left", padx=(px(6), 0))
+    info_button(post_line, "Post-clip", detection_help.POST_CLIP).pack(side="left", padx=(px(6), 0))
     post_sound_check = tk.Checkbutton(post_box, text="Play the clip sound again when the extra seconds are saved",
                                       variable=post_sound_var)
     post_sound_check.pack(anchor="w", padx=(px(22), 0))

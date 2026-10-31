@@ -6,6 +6,7 @@ import sys
 
 import obs_process
 import pytest
+from conftest import TRAY_WIDGET_DIR
 
 log = logging.getLogger("test")
 
@@ -140,3 +141,26 @@ def test_kill_obs_says_if_it_survives(monkeypatch):
     monkeypatch.setattr(obs_process.os, "kill", refuse)
     monkeypatch.setattr(obs_process, "wait_for_obs_exit", lambda timeout: False)
     assert obs_process.kill_obs(log) is False
+
+
+TRAY_SOURCE = os.path.join(TRAY_WIDGET_DIR, "tray_widget.py")
+
+
+def test_the_tray_menu_offers_both_ways_to_quit():
+    with open(TRAY_SOURCE, encoding="utf-8") as f:
+        source = f.read()
+    assert 'pystray.MenuItem("Quit ClipEm Only", self._quit_leaving_obs)' in source
+    assert 'pystray.MenuItem("Quit ClipEm and OBS", self._quit_and_close_obs)' in source
+    assert 'pystray.MenuItem("Restart ClipEm and OBS", self._restart_clipem_and_obs)' in source
+    assert "ClipEm Tray" not in source
+    assert "obs_process.kill_obs(log)" in source  # one that won't close doesn't stay behind
+
+
+def test_obs_gets_its_tray_icon_back_when_the_tray_goes():
+    """An OBS left running hidden needs a way to be reached."""
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "obs-plugin",
+                           "clipem-obs.cpp"), encoding="utf-8") as f:
+        plugin = f.read()
+    assert "set_tray_icon_visible(listener_seen_ms.load() && !listener_alive());" in plugin
+    assert 'register_request(vendor, "Goodbye", request_goodbye, nullptr)' in plugin
+

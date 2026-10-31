@@ -822,6 +822,7 @@ def _kill_existing():
     forced if that doesn't work. Returns whether they're gone."""
     if not obs_process.close_obs_stopping_outputs(log, timeout_seconds=KILL_WAIT_SECONDS):
         log.warning("OBS didn't close - forcing it.")
+        stop_tray_widget(log)  # first: to the tray, a forced end looks like a crash to restart
         obs_process.kill_obs(log)
     stop_clip_editor(log)
     stop_tray_widget(log)

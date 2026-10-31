@@ -123,5 +123,6 @@ class NamingForm(tk.Frame):
         number = clip_naming.next_number(folder, settings) if folder else settings["number_start"]
         stem = clip_naming.stem(settings, datetime.datetime.now(), number)
         self._preview.configure(
-            text=f"{stem}.mp4  (addons: {stem}{settings['tracks_suffix']}.mkv, {stem}{settings['small_suffix']}.mp4)",
+            text=(f"{stem}.mp4\naddons: {settings['tracks_suffix']}.mkv, {settings['small_suffix']}.mp4, "
+                  f"{settings['extra_suffix']}.mkv"),
             fg=dark_theme.MUTED)

@@ -50,25 +50,8 @@ sys.path.insert(
 
 import gui
 
-PAGES = (
-    "_show_welcome",
-    "_show_provisioning",
-    "_show_clip_folder",
-    "_show_video_quality",
-    "_show_audio_devices",
-    "_show_split_tracks",
-    "_show_clip_quality",
-    "_show_reexport",
-    "_show_hotkey",
-    "_show_sound",
-    "_show_clip_editor",
-    "_show_tray_menu",
-    "_show_scripts",
-    "_show_obs_websocket",
-    "_show_auto_update",
-    "_show_autostart",
-    "_show_finish",
-)
+# Every page, so a new one can't be left out of these checks.
+PAGES = ("_show_welcome", *(page for page in gui.STEP_PAGES if page != "_show_done"))
 
 # Widgets whose whole point is text/content that can't reflow if squeezed -
 # a Label/Button/Checkbutton given less room than it asked for means part of
@@ -173,6 +156,8 @@ def make_stub_controller(tray_ok=True):
         "load_clip_sound_volume": lambda: 0.8,
         "load_clip_reexport": lambda: {"reexport_enabled": True, "target_mb": 10.0, "crop_seconds": 30},
         "load_split_tracks": lambda: True,
+        "load_post_clip": lambda: {"enabled": False, "seconds": 10, "sound_after": False},
+        "post_clip_seconds_range": (1, 120),
         "save_split_tracks": lambda *a, **k: None,
         "app_capture_supported": lambda: True,
         "save_clip_reexport": lambda *args: None,

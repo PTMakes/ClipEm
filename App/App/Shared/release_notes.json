@@ -4,18 +4,19 @@
     "date": "2026-10-30",
     "sections": {
       "New Features": [
-        "Post-clip: ClipEm can keep recording for a few seconds after you press the clip hotkey, so you catch what's said right after. Turn it on in Settings > Clip Output. Your clip saves as usual, along with a \"-extra.mkv\" copy that has the extra seconds.",
+        "Post-clip: ClipEm can keep recording for a few seconds after you press the clip hotkey, so you catch what's said right after. Turn it on in Setup or Settings > Clip Output. Your clip saves as usual, along with a \"-extra.mkv\" copy that has the extra seconds.",
         "In the clip editor, a clip with a post-clip copy opens ending at the hotkey press. Use Include extra, or drag the end handle, to keep the extra seconds.",
         "Clip naming lets you choose the post-clip copy's suffix.",
-        "Release notes: update prompts show what's new, ClipEm shows them after it updates, and Settings has a Release Notes button with the notes for every version.",
+        "Release notes: see what's new before and after updating, and every version's notes in Settings.",
         "Read every ClipEm log, OBS log and OBS crash report in Settings, with View Logs in Troubleshooting."
       ],
       "Improvements": [
         "On Windows and Linux, OBS now stays fully out of sight: ClipEm's tray icon is the only one, and OBS's errors and messages appear as ClipEm notifications.",
         "Settings and the clip editor have their own icons.",
-        "Settings has a new Recording/Devices tab, plus Clip Names and Clipping Add-Ons boxes.",
+        "Settings has a new Recording/Devices tab and reorganized boxes.",
         "The ClipEm Is Already Open window can now kill a stuck ClipEm and OBS and start fresh.",
-        "Stuck-screen detection now leaves a screen alone when nothing is happening on it, so fewer false alarms."
+        "Stuck-screen detection now leaves a screen alone when nothing is happening on it, so fewer false alarms.",
+        "If OBS crashes, ClipEm now tells you and restarts it."
       ],
       "Fixes": [
         "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden.",

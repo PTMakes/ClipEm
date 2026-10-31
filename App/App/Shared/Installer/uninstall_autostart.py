@@ -41,6 +41,7 @@ def main():
         # Another ClipEm folder's (or an older version's) - not ours to remove.
         print(f"Left in place: {entry['path']} starts ClipEm from somewhere else.")
     autostart.remove_start_menu_shortcut()
+    autostart.remove_window_desktop_entries()
 
 
 if __name__ == "__main__":

@@ -535,7 +535,7 @@ def test_kill_existing_forces_an_obs_that_wont_close(launch_gate, monkeypatch):
     calls = _existing_clipem(monkeypatch, closes=False)
     answer(run.ALREADY_OPEN_KILL)
     assert run._claim_launch() is True
-    assert calls == ["close", "kill", "editor", "tray"]
+    assert calls == ["close", "tray", "kill", "editor", "tray"]  # or the tray takes it for a crash
 
 
 def test_kill_existing_stops_if_something_survives(launch_gate, monkeypatch):

@@ -48,6 +48,8 @@ class FakePlugin:
         elif request_data["requestType"] == "SetWindowVisible":
             self.window_visible = data["visible"]
             reply = {"ok": True}
+        else:
+            reply = {}
         return {"vendorName": "ClipEm", "requestType": request_data["requestType"], "responseData": reply}
 
 
@@ -178,6 +180,20 @@ def test_show_and_hide_go_through_the_plugin():
     tracker.attach(plugin)
     assert tracker.set_window_visible(plugin, True)
     assert plugin.calls[-1] == ("SetWindowVisible", {"visible": True})
+
+
+def test_goodbye_tells_the_plugin_the_tray_is_going():
+    tracker, plugin, _, _, _ = make()
+    tracker.attach(plugin)
+    tracker.goodbye(plugin)
+    assert plugin.calls[-1] == ("Goodbye", {})
+
+
+def test_goodbye_without_the_plugin_asks_nothing():
+    tracker, plugin, _, _, _ = make(FakePlugin(loaded=False))
+    tracker.attach(plugin)
+    tracker.goodbye(plugin)
+    assert [c[0] for c in plugin.calls] == ["Hello"]
 
 
 def test_without_the_plugin_nothing_is_shown_and_show_falls_back():

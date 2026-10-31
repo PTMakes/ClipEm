@@ -24,6 +24,11 @@ const FEATURES = [
       "OBS's replay buffer is always running, so pressing the clip hotkey (Alt+~ by default) saves the last 15 seconds to 10 minutes - you choose how far back - with an optional sound to confirm it.",
   },
   {
+    title: "Post-clip",
+    description:
+      "ClipEm can keep recording for a few seconds after you press the hotkey, so you catch what's said right after. Your clip saves as usual, with a copy that has the extra seconds.",
+  },
+  {
     title: "Discord-sized copies",
     description:
       "Each clip can also be saved as a smaller copy, cropped to its last few seconds and re-encoded to fit Discord's free upload limit, while the full-quality clip is kept.",

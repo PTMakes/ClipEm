@@ -274,7 +274,7 @@ apps (macOS), `clip_reexport.py` splits the three OBS tracks itself.
 `build/build-app-capture.sh` cross-compiles the Windows helper from
 `Dev/app-capture/` into `App/Shared/Tools/` (`release.sh` runs it).
 
-**Post-clip.** With post-clip on in Settings > Clip Output, the clip hotkey moves
+**Post-clip.** With post-clip on in Setup or Settings > Clip Output, the clip hotkey moves
 from OBS's "Save Replay" to `Scripts/post_clip.py` and the replay buffer is kept
 N seconds longer than the clip. A press plays the clip sound, and N seconds
 later saves once. That save becomes the usual clip, ending at the press, plus

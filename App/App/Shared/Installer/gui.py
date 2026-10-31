@@ -81,6 +81,7 @@ STEP_TITLES = {
     "_show_split_tracks": "Multitrack Audio",
     "_show_clip_quality": "Clip Quality",
     "_show_reexport": "Smaller Copy",
+    "_show_post_clip": "Post-Clip",
     "_show_hotkey": "Hotkeys",
     "_show_sound": "Clip Sound",
     "_show_clip_editor": "Clip Editor",
@@ -94,7 +95,7 @@ STEP_TITLES = {
     "_show_done": "Done",
 }
 
-# The pages after Welcome, in order - numbered "Step N of 13" in the bottom bar.
+# The pages after Welcome, in order - numbered "Step N of M" in the bottom bar.
 STEP_PAGES = (
     "_show_provisioning",
     "_show_clip_folder",
@@ -104,6 +105,7 @@ STEP_PAGES = (
     "_show_split_tracks",
     "_show_clip_quality",
     "_show_reexport",
+    "_show_post_clip",
     "_show_hotkey",
     "_show_sound",
     "_show_clip_editor",
@@ -225,6 +227,10 @@ class Wizard(tk.Tk):
         )
         self.target_filesize_var = tk.StringVar(value=f"{reexport['target_mb']:g}")
         self.bitrate_preview_var = tk.StringVar(value="")
+        post_clip = controller["load_post_clip"]()
+        self.post_clip_var = tk.BooleanVar(value=post_clip["enabled"])
+        self.post_seconds_var = tk.StringVar(value=str(post_clip["seconds"]))
+        self.post_sound_var = tk.BooleanVar(value=post_clip["sound_after"])
         run_config = controller["load_run_config"]()
         # The tray menu's items and the tray widget's checks - the same
         # settings as Settings > Tray Menu and Scripts.
@@ -1257,6 +1263,46 @@ class Wizard(tk.Tk):
         except Exception as exc:
             popups.showerror("Setup", f"Could not save clip quality settings:\n{exc}")
             return
+        self._show_post_clip()
+
+    def _show_post_clip(self):
+        self._clear()
+        ttk.Label(self.container, text="Post-Clip", font=("", 13, "bold")).pack(anchor="w")
+        ttk.Label(
+            self.container, text=detection_help.POST_CLIP, justify="left", wraplength=self.px(WRAP_WIDTH),
+        ).pack(anchor="w", pady=(self.px(4), self.px(PAD)))
+
+        def set_state():
+            state = "normal" if self.post_clip_var.get() else "disabled"
+            seconds_box.configure(state=state)
+
+        self._make_toggle(self.container, self.post_clip_var, "Keep recording after the clip hotkey",
+                          on_toggle=set_state)
+        row = ttk.Frame(self.container)
+        row.pack(anchor="w", pady=(0, self.px(PAD // 2)))
+        ttk.Label(row, text="Seconds to keep recording:").pack(side="left")
+        low, high = self.controller["post_clip_seconds_range"]
+        seconds_box = ttk.Spinbox(row, textvariable=self.post_seconds_var, from_=low, to=high, width=5)
+        seconds_box.pack(side="left", padx=(self.px(6), 0))
+        self._make_toggle(self.container, self.post_sound_var,
+                          "Play the clip sound again when the extra seconds are saved")
+        set_state()
+
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_reexport)
+        ttk.Button(bar, text="Continue", command=self._apply_post_clip).pack(side="right")
+
+    def _apply_post_clip(self):
+        try:
+            seconds = int(float(self.post_seconds_var.get()))
+        except ValueError:
+            popups.showerror("Setup", "Enter how many seconds to keep recording after the hotkey.")
+            return
+        try:
+            self._call_logged(self.controller["save_post_clip"], self.post_clip_var.get(), seconds,
+                              self.post_sound_var.get())
+        except Exception as exc:
+            popups.showerror("Setup", f"Could not save the post-clip setting:\n{exc}")
+            return
         self._show_hotkey()
 
     def _show_hotkey(self):
@@ -1308,7 +1354,7 @@ class Wizard(tk.Tk):
         for name, title in TOGGLE_HOTKEY_TITLES.items():
             hotkey_row(title, *self.toggle_hotkey_vars[name], [NO_HOTKEY, *HOTKEY_KEY_CHOICES])
 
-        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_reexport)
+        bar, _ = self._make_bottom_bar(self.container, back_command=self._show_post_clip)
         ttk.Button(bar, text="Continue", command=self._apply_hotkey).pack(side="right")
 
     def _apply_hotkey(self):
@@ -1569,7 +1615,7 @@ class Wizard(tk.Tk):
 
         def option(var, text, explanation):
             frame = ttk.Frame(self.container)
-            frame.pack(anchor="w", fill="x", pady=(0, self.px(PAD // 2)))
+            frame.pack(anchor="w", fill="x", pady=(0, self.px(PAD // 4)))
             self._make_toggle(frame, var, text).pack_configure(pady=0)
             ttk.Label(frame, text=explanation, foreground=dark_theme.MUTED, justify="left",
                       wraplength=self.px(WRAP_WIDTH - 34)).pack(anchor="w", padx=(self.px(34), 0))

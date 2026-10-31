@@ -135,6 +135,16 @@ class ObsPlugin:
             return False
         return bool(reply.get("ok", False))
 
+    def goodbye(self, client):
+        """The tray is quitting and leaving OBS running: the plugin gives OBS
+        its own tray icon back. Without this it does so 30 s later."""
+        if not self.present:
+            return
+        try:
+            self._call(client, "Goodbye", {})
+        except ObsWebSocketError as exc:
+            log.warning(f"Couldn't tell OBS's plugin the tray is quitting: {exc}")
+
     @staticmethod
     def _call(client, request_type, data):
         response = client.call(

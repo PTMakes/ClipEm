@@ -1663,6 +1663,28 @@ def ensure_editor_window():
               "Setup is re-run.", file=sys.stderr)
 
 
+def configure_split_tracks():
+    save_split_tracks(ask_yes_no(
+        "Also save a copy of each clip with every audio track separate, for editing?",
+        default=load_split_tracks(),
+    ))
+
+
+def configure_post_clip():
+    current = obs_config.load_post_clip()
+    enabled = ask_yes_no("Keep recording for a few seconds after the clip hotkey (post-clip)?",
+                         default=current["enabled"])
+    seconds, sound_after = current["seconds"], current["sound_after"]
+    if enabled:
+        raw = input(f"How many seconds [{seconds}]: ").strip()
+        try:
+            seconds = int(raw) if raw else seconds
+        except ValueError:
+            print("Not a number - keeping the current seconds.", file=sys.stderr)
+        sound_after = ask_yes_no("Play the clip sound again when the extra seconds are saved?", default=sound_after)
+    obs_config.save_post_clip(enabled, seconds, sound_after)
+
+
 def configure_clip_reexport():
     current = load_clip_reexport()
     enabled = ask_yes_no(
@@ -2240,6 +2262,9 @@ def try_launch_gui(system):
         "load_audio_script_settings": obs_config.load_audio_script_settings,
         "save_audio_script_settings": save_audio_script_settings,
         "peak_ceiling_range": (obs_config.PEAK_CEILING_MIN_DB, obs_config.PEAK_CEILING_MAX_DB),
+        "load_post_clip": obs_config.load_post_clip,
+        "save_post_clip": obs_config.save_post_clip,
+        "post_clip_seconds_range": (clip_post.MIN_SECONDS, clip_post.MAX_SECONDS),
         "load_split_tracks": load_split_tracks,
         "save_split_tracks": save_split_tracks,
         "app_capture_supported": app_capture_supported,
@@ -2283,7 +2308,9 @@ def main_cli(system):
     configure_audio_devices()
     configure_clip_hotkey()
     configure_clip_sound()
+    configure_split_tracks()
     configure_clip_reexport()
+    configure_post_clip()
     configure_obs_websocket()
     set_up_tray_widget()
     configure_autostart()

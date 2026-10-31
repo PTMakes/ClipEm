@@ -6,7 +6,9 @@
  * Loaded only by ClipEm's OBS: run.py points OBS_PLUGINS_PATH at
  * App/Shared/OBS-Plugin/<platform>/ (built by Dev/build/build-obs-plugin.sh).
  *
- * - Hidden OBS: removes OBS's own tray icon (ClipEm's is the only one), and
+ * - Hidden OBS: removes OBS's own tray icon (ClipEm's is the only one) - it
+ *   comes back once the tray widget has gone (it said Goodbye, or went quiet),
+ *   so an OBS left running can still be reached - and
  *   when OBS was started with --minimize-to-tray but shows its window anyway
  *   (no tray host, e.g. GNOME without the AppIndicator extension), hides it
  *   again. The tray shows/hides the window over obs-websocket instead of
@@ -56,7 +58,7 @@
 
 OBS_DECLARE_MODULE()
 
-#define PLUGIN_VERSION 1
+#define PLUGIN_VERSION 2
 #define VENDOR_NAME "ClipEm"
 
 static const size_t MAX_NOTICES = 200;
@@ -327,14 +329,14 @@ static std::string plain(const QString &text)
 	return out.trimmed().toStdString();
 }
 
-static void hide_tray_icon()
+static void set_tray_icon_visible(bool visible)
 {
 	QMainWindow *main = get_main_window();
 	if (!main)
 		return;
 	for (QSystemTrayIcon *icon : main->findChildren<QSystemTrayIcon *>()) {
-		if (icon->isVisible())
-			icon->hide();
+		if (icon->isVisible() != visible)
+			icon->setVisible(visible);
 	}
 }
 
@@ -453,7 +455,8 @@ static void tick()
 {
 	if (shutting_down)
 		return;
-	hide_tray_icon();
+	// Hidden from the start: until the tray first says Hello, it's on its way.
+	set_tray_icon_visible(listener_seen_ms.load() && !listener_alive());
 	bool visible = main_window_showing();
 	if (visible != window_visible.load() || !visibility_sent) {
 		window_visible = visible;
@@ -498,6 +501,13 @@ static void request_hello(obs_data_t *request, obs_data_t *response, void *)
 	obs_data_set_bool(response, "window_visible", window_visible.load());
 	obs_data_set_array(response, "notices", list);
 	obs_data_array_release(list);
+}
+
+// The tray widget is quitting and leaving OBS running: OBS's own tray icon comes
+// back at the next tick. 1, not 0: 0 means no tray has been seen yet.
+static void request_goodbye(obs_data_t *, obs_data_t *, void *)
+{
+	listener_seen_ms = 1;
 }
 
 static void request_set_window_visible(obs_data_t *request, obs_data_t *response, void *)
@@ -583,6 +593,7 @@ void obs_module_post_load(void)
 		return;
 	}
 	obs_websocket_vendor_register_request(vendor, "Hello", request_hello, nullptr);
+	obs_websocket_vendor_register_request(vendor, "Goodbye", request_goodbye, nullptr);
 	obs_websocket_vendor_register_request(vendor, "SetWindowVisible", request_set_window_visible, nullptr);
 	obs_websocket_vendor_register_request(vendor, "GetWindowState", request_get_window_state, nullptr);
 }

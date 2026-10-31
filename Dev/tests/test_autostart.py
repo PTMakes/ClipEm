@@ -247,3 +247,13 @@ def test_launch_repairs_a_broken_menu_entry_unless_uninstalled(shortcuts):
     assert autostart.repair_linux_menu_entry() == str(menu / "clipem.desktop")
     assert autostart.shortcut_state(autostart.SHORTCUT_START_MENU) == autostart.SHORTCUT_OURS
     assert autostart.repair_linux_menu_entry() is None  # working now: left alone
+
+
+def test_uninstall_removes_this_installs_window_entries_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    ours, theirs = tmp_path / "clipem-editor.desktop", tmp_path / "clipem-settings.desktop"
+    ours.write_text(f"Icon={autostart.SHARED_DIR}/tray-widget/ClipEmEditor.png\n")
+    theirs.write_text("Icon=/other/ClipEm/App/Shared/tray-widget/ClipEmSettings.png\n")
+    autostart.remove_window_desktop_entries(str(tmp_path))
+    assert not ours.exists() and theirs.exists()
+

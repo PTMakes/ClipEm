@@ -18,6 +18,16 @@ BLACK_SCREEN = (
     "unless the screen is locked."
 )
 
+POST_CLIP = (
+    "The clip hotkey keeps recording for this long after you press it, to catch what's said right "
+    "after. The clip itself is saved as usual (ending at the press) together with a copy that has "
+    "the extra seconds (\"-extra.mkv\"). The clip editor opens that copy with its end on the press - "
+    "drag the end handle (or use Include extra) to keep the extra seconds.\n\n"
+    "The clip sound still plays at the press; ClipEm takes it back out of the copy's Desktop and Mix "
+    "tracks (what your mic picked up from your speakers stays).\n\n"
+    "The replay buffer is kept this much longer, which uses a little more memory. Applies when OBS restarts."
+)
+
 DISK_SPACE = (
     "Every minute ClipEm checks the free space on the drive your clips are saved to. It warns you when "
     "less than 20 GB is left, and again (every 15 minutes while OBS is recording) below 5 GB - OBS stops "

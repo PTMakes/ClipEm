@@ -65,7 +65,7 @@ def test_lock_is_released_at_exit_but_not_one_taken_over(tmp_path):
 
 
 def test_releasing_hands_the_lock_to_the_next_instance(tmp_path):
-    """Restart ClipEm Tray and OBS: the old tray releases its lock before
+    """Restart ClipEm and OBS: the old tray releases its lock before
     starting the new one, which must then be able to take it."""
     from clipem_common import release_instance_lock
 
