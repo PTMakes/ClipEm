@@ -557,6 +557,12 @@ bool obs_module_load(void)
 	base_get_log_handler(&previous_log_handler, &previous_log_param);
 	base_set_log_handler(log_handler, nullptr);
 
+	// Hiding OBS's tray icon must not quit OBS. On KDE, Qt's tray icon is a
+	// KStatusNotifierItem holding a QEventLoopLocker; hiding destroys it, and
+	// with OBS's setQuitOnLastWindowClosed(false) nothing else is holding the
+	// event loop, so Qt posts a Quit: OBS exits cleanly, 250 ms in (the first tick).
+	QCoreApplication::setQuitLockEnabled(false);
+
 	start_hidden = qApp->arguments().contains("--minimize-to-tray");
 	event_watch = new EventWatch();
 	qApp->installEventFilter(event_watch);

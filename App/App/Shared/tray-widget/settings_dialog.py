@@ -55,6 +55,7 @@ import detection_help  # noqa: E402
 import editor_install  # noqa: E402
 import file_dialogs  # noqa: E402
 import key_picker  # noqa: E402
+import log_viewer  # noqa: E402
 import mic_filter  # noqa: E402
 import naming_form  # noqa: E402
 import obs_config  # noqa: E402
@@ -516,9 +517,13 @@ def open_dialog(start_tab=None):
         tk.Label(frame, text=title, font=("", 10, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
         next_row = 1
 
+    info_button_image = root.info_button_image = tk.PhotoImage(width=1, height=1)  # on root: Tk drops unreferenced ones
+
     def info_button(parent, title, explanation):
         """The "i" next to an option, opening its explanation."""
-        return tk.Button(parent, text="i", width=2, font=("", 9, "bold"), cursor="hand2",
+        # An image, even this blank one, makes width and height pixels - characters aren't square.
+        return tk.Button(parent, text="i", image=info_button_image, compound="center", width=px(20), height=px(20),
+                         padx=0, pady=0, font=("", 9, "bold"), cursor="hand2",
                          command=lambda: popups.showinfo(title, explanation, parent=root))
 
     # Clip Hotkey is now the first section - no gap above it.
@@ -1760,6 +1765,8 @@ def open_dialog(start_tab=None):
     troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
     bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...", command=on_bug_report)
     bug_button.pack(side="left")
+    tk.Button(troubleshooting_row, text="View Logs...",
+              command=lambda: log_viewer.open_log_viewer(root, px, reveal_file)).pack(side="left", padx=(px(4), 0))
     reinstall_button = tk.Button(troubleshooting_row, text="Reinstall ClipEm...", command=on_reinstall)
     reinstall_button.pack(side="left", padx=(px(4), 0))
     next_row += 1

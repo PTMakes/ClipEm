@@ -67,21 +67,20 @@ Without this, SmartScreen warns users about an unrecognised app.
 Dev/release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
 ```
 
-Before you run it, write what's new for users in `Dev/releasenotes.txt`, up to
-1500 characters: a heading on its own line (`New Features`, `Improvements`,
-`Fixes`), then its notes, one `- ` line each. Give component updates their
-versions (`Updated OBS from 32.2.2 to 32.3.0.`). It goes into the signed
-`install-manifest.json`, so the update prompts in `run.py` and Settings show
-it, and becomes the GitHub release's description. A prompt shows the notes of
-the version it's offering, using the installed version's code, so installs from
-before this was added don't show any. A release stops at preflight if the file
-is empty or unchanged since the last release; a dev build ships it as it is.
+Before you run it, add an entry for the new version at the top of
+`App/App/Shared/release_notes.json`, with `version`, `date` and `sections`:
+headings such as `New Features`, `Improvements` and `Fixes`, each with a list of
+notes, up to 1500 characters in all. Give component updates their versions
+(`Updated OBS from 32.2.2 to 32.3.0.`). A release stops at preflight without an
+entry for its version. A dev build uses its coming version's entry, if there is one.
 
-`release.sh` also adds the notes to `App/Shared/release_notes.json`, the history
-of every version, which ships with ClipEm. After an update, `run.py` opens
-"ClipEm Has Updated From X to Y" with the notes of every version in between,
-and Settings > Release Notes shows the whole history. `run.py` works out the
-old version from `last_version` in `update_config.json`.
+The entry goes into the signed `install-manifest.json`, so the update prompts in
+`run.py` and Settings show it, and becomes the GitHub release's description. A
+prompt runs the installed version's code, so installs from before this was added
+don't show notes there. The file also ships with ClipEm: after an update, `run.py`
+opens "ClipEm Has Updated From X to Y" with the notes of every version in between,
+working out the old version from `last_version` in `update_config.json`, and
+Settings > Release Notes shows the whole history.
 
 1. **Preflight.** Checks the tools, the signing key, the version bump, the
    release notes, that
@@ -102,7 +101,7 @@ old version from `last_version` in `update_config.json`.
    - `build-info.json`, which records the exact commits used
 
    The only changes to the source tree are `App/Shared/VERSION`,
-   `App/Shared/checksums.json`, `App/Shared/release_notes.json` and any new entries in
+   `App/Shared/checksums.json` and any new entries in
    `Dev/release/upstream-pins.json`.
 3. **Sign both manifests.**
 4. **Upload everything**, plus `ClipEmSetupLinux.sh`, to a *draft* GitHub

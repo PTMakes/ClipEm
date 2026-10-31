@@ -13,6 +13,8 @@ ENTRIES = [{"version": v, "date": "2026-10-30", "sections": {"Fixes": [v]}} for 
     (None, "1.4.9", ["1.4.9"]),
     ("1.4.8", "1.5.0", ["1.4.10", "1.4.9"]),  # 1.5.0 has no notes of its own
     ("1.4.9-dev.202610142130", "1.4.9", ["1.4.9"]),  # a dev build sorts before its release
+    ("1.4.8", "1.4.9-dev.202610142130", ["1.4.9"]),  # a dev build shows its coming version's
+    (None, "1.4.9-dev.202610142130", ["1.4.9"]),
 ])
 def test_since(old, new, expected):
     assert [e["version"] for e in release_notes.since(ENTRIES, old, new)] == expected

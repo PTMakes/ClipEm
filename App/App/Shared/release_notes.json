@@ -1,5 +1,27 @@
 [
   {
+    "version": "1.4.9",
+    "date": "2026-10-30",
+    "sections": {
+      "New Features": [
+        "Post-clip: ClipEm can keep recording for a few seconds after you press the clip hotkey, so you catch what's said right after. Turn it on in Settings > Recording. Your clip saves as usual, along with a \"-extra.mkv\" copy that has the extra seconds.",
+        "In the clip editor, a clip with a post-clip copy opens ending at the hotkey press. Use Include extra, or drag the end handle, to keep the extra seconds.",
+        "Clip naming lets you choose the post-clip copy's suffix.",
+        "Release notes: update prompts show what's new, ClipEm shows them after it updates, and Settings has a Release Notes button with the notes for every version.",
+        "Read every ClipEm log, OBS log and OBS crash report in Settings, with View Logs in Troubleshooting.",
+        "Log viewer for troubleshooting."
+      ],
+      "Improvements": [
+        "On Windows and Linux, OBS now stays fully out of sight: ClipEm's tray icon is the only one, and OBS's errors and messages appear as ClipEm notifications.",
+        "Settings and the clip editor have their own icons.",
+        "Settings' Clip Output/Devices tab now uses two columns, with Audio Devices beside the recording settings, so it fits without scrolling."
+      ],
+      "Fixes": [
+        "OBS no longer checks for missing files at startup, a dialog nobody could see with OBS hidden."
+      ]
+    }
+  },
+  {
     "version": "1.4.8",
     "date": "2026-10-26",
     "sections": {

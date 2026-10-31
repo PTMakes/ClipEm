@@ -88,9 +88,9 @@ def manifest(tmp_path, monkeypatch):
              "--windows-python-pbs-tag", "20261026",
              "--windows-pip-version", "26.2.1", "--macos-obs-version", "32.2.2",
              "--electron-version", "44.5.1"]
-    notes = tmp_path / "releasenotes.txt"
-    notes.write_text("\nNew: post-clip.\n\n", encoding="utf-8")
-    argv += ["--release-notes", str(notes)]
+    history = tmp_path / "release_notes.json"
+    history.write_text(json.dumps([{"version": "1.2.3", "date": "2026-11-01", "sections": {"Fixes": ["A fix."]}}]))
+    argv += ["--release-history", str(history)]
     generate_install_manifest.main(argv)
     return out, files
 
@@ -101,7 +101,7 @@ def test_manifest_layout(manifest):
     assert data["version"] == "1.2.3"
     # ClipEmSetupLinux.sh's plain-text scan needs the notes after "linux" (see main()).
     assert list(data) == ["version", "windows", "linux", "macos", "sources", "release_notes"]
-    assert data["release_notes"] == "New: post-clip."
+    assert data["release_notes"] == "Fixes\n- A fix."
     assert list(data["linux"])[:2] == ["obs", "python"]
     python = data["linux"]["python"]
     assert python["url"].endswith("/releases/download/v1.2.3/" + os.path.basename(files["--linux-python-tar"]))
@@ -372,30 +372,36 @@ def test_release_asset_urls_point_at_github_releases():
     assert "/releases/download/dev/" in release_common.release_asset_url("1.4.1-dev.202610142130", "x.zip")
 
 
-def test_release_adds_its_notes_to_the_shipped_history(tmp_path):
-    history = tmp_path / "release_notes.json"
-    old = {"version": "1.4.8", "date": "2026-10-26", "sections": {"Fixes": ["Old."]}}
-    history.write_text(json.dumps([old]))
-    notes = tmp_path / "releasenotes.txt"
-    notes.write_text("New Features\n- New.\n- Café.\n\nFixes\n- Fix.\n", encoding="utf-8")
-
-    release_common.add_release_notes(history, "1.4.9", notes, "2026-11-01")
-    release_common.add_release_notes(history, "1.4.9", notes, "2026-11-02")  # the release redone
-
-    assert json.loads(history.read_text(encoding="utf-8")) == [
-        {"version": "1.4.9", "date": "2026-11-02", "sections": {"New Features": ["New.", "Café."], "Fixes": ["Fix."]}},
-        old,
-    ]
-    assert '      "New.",\n' in history.read_text(encoding="utf-8")  # a line each, as the file reads
-    notes.write_text("\n")
-    release_common.add_release_notes(history, "1.4.10-dev.1", notes, "2026-11-03")  # a dev build, nothing written
-    assert len(json.loads(history.read_text(encoding="utf-8"))) == 2
+HISTORY = [{"version": "1.4.9", "date": "2026-11-01", "sections": {"New Features": ["A.", "B."], "Fixes": ["C."]}},
+           {"version": "1.4.8", "date": "2026-10-26", "sections": {"Fixes": ["Old."]}}]
 
 
-@pytest.mark.parametrize("text", ["- No heading.\n", "Fixes\n", "Fixes\n- Fine.\nA wrapped line, not a note\n"])
-def test_badly_written_release_notes_are_refused(text):
-    with pytest.raises(ValueError):
-        release_common.parse_release_notes(text)
+@pytest.fixture
+def history(tmp_path):
+    path = tmp_path / "release_notes.json"
+    path.write_text(json.dumps(HISTORY))
+    return path
+
+
+def test_release_notes_come_from_the_history(history):
+    assert release_common.release_notes_text(history, "1.4.9") == "New Features\n- A.\n- B.\n\nFixes\n- C."
+    assert release_common.release_notes_text(history, "1.4.9-dev.202610310049").startswith("New Features")
+    assert release_common.release_notes_text(history, "1.5.0") == ""
+
+
+def test_a_release_needs_notes_and_a_dev_build_doesnt(history):
+    release_common.check_release_notes(history, "1.4.9")
+    release_common.check_release_notes(history, "1.5.0-dev.202610310049")
+    with pytest.raises(SystemExit):
+        release_common.check_release_notes(history, "1.5.0")
+
+
+def test_too_long_release_notes_stop_the_release(tmp_path):
+    path = tmp_path / "release_notes.json"
+    long_note = "x" * (release_common.MAX_RELEASE_NOTES_CHARS + 1)
+    path.write_text(json.dumps([{"version": "1.4.9", "date": "2026-11-01", "sections": {"Fixes": [long_note]}}]))
+    with pytest.raises(SystemExit):
+        release_common.check_release_notes(path, "1.4.9")
 
 
 def test_shipped_release_history_is_complete_and_newest_first():
@@ -407,36 +413,32 @@ def test_shipped_release_history_is_complete_and_newest_first():
     assert all(re.fullmatch(r"\d{4}-\d\d-\d\d", entry["date"]) for entry in history)
     assert all(entry["sections"] and all(entry["sections"].values()) for entry in history)
     assert all(updater.is_newer(a, b) for a, b in zip(versions, versions[1:], strict=False))
-    assert versions[0] == open(os.path.join(APP_INSTALLER_DIR, "..", "VERSION"), encoding="utf-8").read().strip()
+    with open(os.path.join(APP_INSTALLER_DIR, "..", "VERSION"), encoding="utf-8") as f:
+        assert f.read().strip() in versions  # the newest may be the coming version's
 
 
-def test_release_notes_fit_the_update_prompts():
-    """Here so release.sh's preflight finds out, not the build after it."""
-    with open(os.path.join(DEV_DIR, "releasenotes.txt"), encoding="utf-8") as f:
-        text = f.read()
-    assert len(text.strip()) <= generate_install_manifest.MAX_RELEASE_NOTES_CHARS
-    release_common.parse_release_notes(text)  # raises if it isn't written the way release.sh needs
+def test_the_newest_notes_fit_the_update_prompts():
+    path = os.path.join(APP_INSTALLER_DIR, "..", "release_notes.json")
+    with open(path, encoding="utf-8") as f:
+        newest = json.load(f)[0]["version"]
+    release_common.check_release_notes(path, newest)  # exits if they're too long
 
 
-def test_too_long_release_notes_stop_the_manifest(tmp_path):
-    notes = tmp_path / "releasenotes.txt"
-    notes.write_text("x" * (generate_install_manifest.MAX_RELEASE_NOTES_CHARS + 1), encoding="utf-8")
-    with pytest.raises(SystemExit):
-        generate_install_manifest.read_release_notes(notes)
-
-
-@pytest.mark.parametrize("notes_file, expected", [
-    ("Dev/releasenotes.txt", ["--notes-file", "Dev/releasenotes.txt"]),
-    (None, ["--notes", "ClipEm 1.4.9"]),
-])
-def test_github_release_gets_the_notes(tmp_path, monkeypatch, notes_file, expected):
+@pytest.mark.parametrize("version, expected", [("1.4.9", "New Features\n- A.\n- B.\n\nFixes\n- C."), ("1.5.0", "ClipEm 1.5.0")])
+def test_github_release_gets_the_notes(tmp_path, monkeypatch, history, version, expected):
     calls = []
     monkeypatch.setattr(release_common, "_gh_ok", lambda *args: calls.append(args))
-    asset = tmp_path / "clipem-shared-1.4.9.zip"
+    asset = tmp_path / f"clipem-shared-{version}.zip"
     asset.write_bytes(b"zip")
-    release_common.upload_release("1.4.9", [asset], "abc123", notes_file)
+    release_common.upload_release(version, [asset], "abc123", history)
     args = list(calls[0])
-    assert args[args.index(expected[0]):args.index(expected[0]) + 2] == expected
+    assert args[args.index("--notes") + 1] == expected
+
+
+def test_obs_plugin_keeps_obs_running_when_it_hides_the_tray_icon():
+    """On KDE, hiding OBS's tray icon releases Qt's last quit lock, and OBS exits."""
+    with open(os.path.join(DEV_DIR, "obs-plugin", "clipem-obs.cpp"), encoding="utf-8") as f:
+        assert "QCoreApplication::setQuitLockEnabled(false);" in f.read()
 
 
 def test_obs_plugin_is_built_for_the_obs_windows_installs_get():

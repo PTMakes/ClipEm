@@ -110,6 +110,62 @@ def test_settings_gets_its_own_taskbar_entry_and_icon(tmp_path, monkeypatch):
     assert "ClipEmSettings.png" in text and "NoDisplay=true" in text
 
 
+def _in_settings(monkeypatch, look):
+    """Runs look(root) in the real Settings window, shown, then closes it."""
+    import tkinter as tk
+
+    try:
+        tk.Tk().destroy()
+    except tk.TclError:
+        pytest.skip("no display")
+
+    def run(root, *_args):
+        root.deiconify()
+        root.update()
+        look(root)
+        root.destroy()
+
+    monkeypatch.setattr(tk.Misc, "mainloop", run)
+    monkeypatch.setattr(settings_dialog, "watch_for_reopen", lambda root: None)
+    monkeypatch.setattr(settings_dialog, "bring_to_front", lambda root: None)
+    settings_dialog.open_dialog()
+
+
+def _widgets(widget):
+    yield widget
+    for child in widget.winfo_children():
+        yield from _widgets(child)
+
+
+def test_info_buttons_are_square(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    sizes = []
+
+    def look(root):
+        root.layout["show_tab"]("All")
+        root.update()
+        sizes.extend((w.winfo_reqwidth(), w.winfo_reqheight()) for w in _widgets(root)
+                     if isinstance(w, tk.Button) and w.cget("text") == "i")
+
+    _in_settings(monkeypatch, look)
+    assert len(sizes) >= 3 and all(width == height for width, height in sizes)
+
+
+def test_troubleshooting_has_a_view_logs_button(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    opened = []
+    monkeypatch.setattr(settings_dialog.log_viewer, "open_log_viewer", lambda *args: opened.append(args))
+
+    def look(root):
+        button = next(w for w in _widgets(root) if isinstance(w, tk.Button) and w.cget("text") == "View Logs...")
+        button.invoke()
+
+    _in_settings(monkeypatch, look)
+    assert len(opened) == 1
+
+
 def _tab_overflow(monkeypatch):
     """{tab: what doesn't fit} for every tab but "All", in the real Settings
     window at the size it opens at on a big enough screen."""

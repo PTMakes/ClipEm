@@ -32,6 +32,8 @@ from clipem_common import APP_DIR, LOG_DIR, ROOT_DIR, load_json, load_run_config
 # OBS writes a new log (and crash report) per run - the latest few cover the problem.
 OBS_LOG_COUNT = 10
 OBS_CRASH_COUNT = 5
+# The log viewer's limit per file, from its end - logs grow at the bottom.
+VIEW_MAX_BYTES = 2 * 1024 * 1024
 OBS_CRASH_DIR = os.path.join(obs_config.OBS_CONFIG_DIR, "crashes")
 INSTALLED_VERSIONS_PATH = os.path.join(APP_DIR, "installed_versions.json")
 REDACTED = "<redacted>"
@@ -151,6 +153,30 @@ def collected_files():
     for path in _newest_files(OBS_CRASH_DIR, OBS_CRASH_COUNT):
         files.append((f"obs-crashes/{os.path.basename(path)}", path))
     return files
+
+
+def log_files():
+    """[(group title, [paths])] of every log there is, for the log viewer.
+    ClipEm's by name, OBS's newest first."""
+    groups = [("ClipEm logs", sorted(_newest_files(LOG_DIR, 1000))),
+              ("OBS logs", _newest_files(obs_config.OBS_LOG_DIR, 1000)),
+              ("OBS crash reports", _newest_files(OBS_CRASH_DIR, 1000))]
+    return [(title, paths) for title, paths in groups if paths]
+
+
+def read_log(path, max_bytes=VIEW_MAX_BYTES):
+    """The end of a log as text, for reading - with the websocket password
+    masked, like a report's copy."""
+    try:
+        with open(path, "rb") as f:
+            size = f.seek(0, os.SEEK_END)
+            f.seek(max(0, size - max_bytes))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError as exc:
+        return f"Couldn't read {path}: {exc}\n"
+    if size > max_bytes:
+        text = f"[Showing the last {max_bytes // (1024 * 1024)} MB of {size / (1024 * 1024):.0f} MB]\n" + text
+    return _redact(text, _secrets())
 
 
 def create_bug_report(dest_path):

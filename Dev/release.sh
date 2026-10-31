@@ -225,16 +225,10 @@ else
   TAG="v$new_version"
 fi
 
-# Shown in the update prompts, and the GitHub release's description. A dev
-# build ships whatever's there; a release needs them written, and not the last one's.
-RELEASE_NOTES="$SCRIPT_DIR/releasenotes.txt"
-if [[ "$DEV" == 0 ]]; then
-  grep -q '[^[:space:]]' "$RELEASE_NOTES" 2>/dev/null || die "Write what's new in $RELEASE_NOTES first"
-  if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/v$current_version" >/dev/null \
-    && git -C "$ROOT_DIR" diff --quiet "v$current_version" -- "$RELEASE_NOTES"; then
-    die "$RELEASE_NOTES still has the notes for $current_version - update it for $new_version"
-  fi
-fi
+# What's new is written by hand in release_notes.json: shown in the update
+# prompts and the GitHub release. A dev build shows its coming version's.
+RELEASE_HISTORY="$APP_DIR/App/Shared/release_notes.json"
+python3 "$SCRIPT_DIR/release/release_common.py" check-release-notes "$new_version" "$RELEASE_HISTORY"
 
 if [[ "$UPLOAD" == 1 ]]; then
   python3 "$SCRIPT_DIR/release/release_common.py" check-github
@@ -305,14 +299,10 @@ done
 DEV_RESTORE_DIR="$RELEASE_DIR/restore"
 if [[ "$DEV" == 1 ]]; then
   mkdir -p "$DEV_RESTORE_DIR"
-  cp "$APP_DIR/App/Shared/VERSION" "$APP_DIR/App/Shared/checksums.json" "$APP_DIR/App/Shared/release_notes.json" \
-    "$DEV_RESTORE_DIR/"
+  cp "$APP_DIR/App/Shared/VERSION" "$APP_DIR/App/Shared/checksums.json" "$DEV_RESTORE_DIR/"
 fi
 # Shipped inside App/Shared so the installed copy knows its own version.
 echo "$new_version" > "$APP_DIR/App/Shared/VERSION"
-# So is every version's notes, for the Release Notes window and after an update.
-python3 "$SCRIPT_DIR/release/release_common.py" add-release-notes --date "$(date -u +%Y-%m-%d)" \
-  "$new_version" "$RELEASE_NOTES" "$APP_DIR/App/Shared/release_notes.json"
 # Checksums must be written before zipping, or the zip ships stale ones.
 python3 "$SCRIPT_DIR/release/generate_checksums.py" "$APP_DIR/App/Shared"
 
@@ -325,8 +315,7 @@ SHARED_ZIP="$RELEASE_DIR/clipem-shared-$new_version.zip"
 python3 "$SCRIPT_DIR/release/release_common.py" zip-dir "$STAGE_DIR" Shared "$SHARED_ZIP"
 rm -rf "$STAGE_DIR"
 if [[ "$DEV" == 1 ]]; then
-  cp "$DEV_RESTORE_DIR/VERSION" "$DEV_RESTORE_DIR/checksums.json" "$DEV_RESTORE_DIR/release_notes.json" \
-    "$APP_DIR/App/Shared/"
+  cp "$DEV_RESTORE_DIR/VERSION" "$DEV_RESTORE_DIR/checksums.json" "$APP_DIR/App/Shared/"
   rm -rf "$DEV_RESTORE_DIR"
 fi
 echo "Wrote $SHARED_ZIP"
@@ -373,7 +362,7 @@ python3 "$SCRIPT_DIR/release/generate_install_manifest.py" \
   --windows-pip-version "$WINDOWS_PIP_VERSION" \
   --macos-obs-version "$MACOS_OBS_VERSION" \
   --electron-version "$ELECTRON_VERSION" \
-  --release-notes "$RELEASE_NOTES"
+  --release-history "$RELEASE_HISTORY"
 
 # Legacy update feed, only read by pre-1.0.22 installs.
 python3 "$SCRIPT_DIR/release/generate_checksums.py" "$APP_DIR/App/Shared" --skip-checksums \
@@ -481,7 +470,7 @@ if [[ "$DEV" == 1 ]]; then
 fi
 
 step "Uploading release assets to a draft GitHub release $TAG"
-python3 "$SCRIPT_DIR/release/release_common.py" upload --commit "$BUILD_COMMIT" --notes-file "$RELEASE_NOTES" \
+python3 "$SCRIPT_DIR/release/release_common.py" upload --commit "$BUILD_COMMIT" --release-history "$RELEASE_HISTORY" \
   "$new_version" "${RELEASE_FILES[@]}"
 
 # --- 5. Legacy update feed on the website ----------------------------------
@@ -491,7 +480,7 @@ cp "$RELEASE_DIR/install-manifest.json" "$RELEASE_DIR/install-manifest.json.sig"
 
 # --- 6. Commit, push and publish -------------------------------------------
 step "Committing release $new_version"
-# VERSION + checksums.json + release_notes.json, the website's manifests, new upstream pins and a
+# VERSION + checksums.json, the website's manifests, new upstream pins and a
 # retaken editor screenshot (with the hash of what it shows).
 commit_all "Update $new_version" App/App/Shared Website/public Dev/release/upstream-pins.json \
   Dev/assets/editor-screenshot.sha256

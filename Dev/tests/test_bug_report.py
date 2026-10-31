@@ -161,3 +161,73 @@ def test_send_network_failure_is_readable(temp_zips, monkeypatch):
 
     with pytest.raises(bug_report.BugReportError, match="Couldn't reach"):
         bug_report.send_bug_report("broken")
+
+
+def test_log_files_lists_every_log_by_group(install):
+    groups = dict(bug_report.log_files())
+    assert [os.path.basename(p) for p in groups["ClipEm logs"]] == ["run.log", "settings.log"]
+    assert len(groups["OBS logs"]) == bug_report.OBS_LOG_COUNT + 3  # every one, unlike a report
+    assert os.path.basename(groups["OBS logs"][0]) == f"obs-{bug_report.OBS_LOG_COUNT + 2:02}.txt"  # newest first
+    assert [os.path.basename(p) for p in groups["OBS crash reports"]] == ["crash.txt"]
+
+
+def test_log_files_leaves_out_empty_groups(install):
+    os.remove(dict(bug_report.log_files())["OBS crash reports"][0])
+    assert "OBS crash reports" not in dict(bug_report.log_files())
+
+
+def test_read_log_masks_the_websocket_password(install):
+    path = dict(bug_report.log_files())["ClipEm logs"][0]
+    text = bug_report.read_log(path)
+    assert PASSWORD not in text and bug_report.REDACTED in text
+
+
+def test_read_log_shows_the_end_of_a_big_log(tmp_path):
+    path = tmp_path / "big.log"
+    path.write_text("old\n" * 1000 + "newest line\n")
+    text = bug_report.read_log(str(path), max_bytes=100)
+    assert text.endswith("newest line\n") and text.startswith("[Showing the last") and "old\nold" in text
+
+
+def test_read_log_says_when_it_cant(tmp_path):
+    assert "Couldn't read" in bug_report.read_log(str(tmp_path / "gone.log"))
+
+
+def test_log_viewer_reads_each_log_on_its_own(install):
+    import tkinter as tk
+
+    import log_viewer
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+    dialog = log_viewer.open_log_viewer(root, lambda value: value, lambda path: None)
+    assert log_viewer.open_log_viewer(root, lambda value: value, lambda path: None) is dialog  # only one
+
+    def find(widget, kind):
+        for child in widget.winfo_children():
+            if isinstance(child, kind):
+                return child
+            found = find(child, kind)
+            if found:
+                return found
+        return None
+
+    files, text = find(dialog, tk.Listbox), find(dialog, tk.Text)
+    names = list(files.get(0, "end"))
+    assert names[0] == "ClipEm logs" and "  run.log" in names and "OBS logs" in names
+    assert PASSWORD not in text.get("1.0", "end")  # run.log, opened first
+
+    files.selection_clear(0, "end")
+    files.selection_set(names.index("  settings.log"))
+    files.event_generate("<<ListboxSelect>>")
+    root.update()
+    assert text.get("1.0", "end").strip() == "saved"
+
+    files.selection_clear(0, "end")
+    files.selection_set(names.index("OBS logs"))  # a heading opens nothing
+    files.event_generate("<<ListboxSelect>>")
+    root.update()
+    assert text.get("1.0", "end").strip() == "saved"
+    root.destroy()

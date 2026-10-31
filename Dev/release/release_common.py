@@ -53,6 +53,8 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
+# Settings' update popup shows them whole, and it doesn't scroll.
+MAX_RELEASE_NOTES_CHARS = 1500
 SCRIPT_DIR = Path(__file__).resolve().parent
 DEV_DIR = SCRIPT_DIR.parent
 ROOT_DIR = DEV_DIR.parent
@@ -485,42 +487,33 @@ def _ordered_uploads(files) -> list:
     return sorted((Path(f) for f in files), key=lambda f: f.name in MANIFEST_FILES)
 
 
-def parse_release_notes(text: str) -> dict:
-    """Dev/releasenotes.txt as {heading: [note, ...]}: a heading on its own
-    line, then its notes, one "- " line each."""
-    sections = {}
-    heading = None
-    for line in map(str.strip, text.splitlines()):
-        if line.startswith("- "):
-            if heading is None:
-                raise ValueError(f'"{line}" comes before any heading')
-            sections[heading].append(line[2:].strip())
-        elif line:
-            heading = line
-            sections[heading] = []
-    empty = [name for name, notes in sections.items() if not notes]
-    if empty:
-        raise ValueError(f'"{empty[0]}" has no "- " notes under it')
-    return sections
-
-
-def add_release_notes(history_path, version: str, notes_file, date: str) -> None:
-    """Puts this release's notes on top of the shipped history
-    (App/Shared/release_notes.json), replacing a redone release's. Dev builds
-    with no notes written yet add nothing."""
-    sections = parse_release_notes(Path(notes_file).read_text(encoding="utf-8"))
-    if not sections:
-        return
+def release_notes_text(history_path, version: str) -> str:
+    """The notes in App/Shared/release_notes.json for `version`, or a dev
+    build's coming version, as plain text ("" if it has no entry)."""
+    version = version.split("-dev.")[0]
     history = json.loads(Path(history_path).read_text(encoding="utf-8"))
-    write_json_atomic(history_path, [{"version": version, "date": date, "sections": sections},
-                                     *(e for e in history if e["version"] != version)], ensure_ascii=False)
+    entry = next((e for e in history if e["version"] == version), None)
+    if entry is None:
+        return ""
+    return "\n\n".join("\n".join([heading, *(f"- {note}" for note in notes)])
+                       for heading, notes in entry["sections"].items())
 
 
-def upload_release(version: str, files, commit: str, notes_file=None) -> None:
+def check_release_notes(history_path, version: str) -> None:
+    """Stops a release with no notes written for it. Dev builds may not have any yet."""
+    notes = release_notes_text(history_path, version)
+    if not notes and not is_dev_version(version):
+        raise SystemExit(f"{history_path} has no entry for {version} - write what's new there first.")
+    if len(notes) > MAX_RELEASE_NOTES_CHARS:
+        raise SystemExit(f"The {version} notes have {len(notes)} characters - the most Settings' update "
+                         f"popup shows is {MAX_RELEASE_NOTES_CHARS}.")
+
+
+def upload_release(version: str, files, commit: str, release_history=None) -> None:
     """A release: a draft release v<version> with every file as an asset -
     published (tagging the release commit) by publish_release once that is
-    pushed. `commit` is what the files were built from, `notes_file` its
-    GitHub release notes. A dev version: the rolling "dev" prerelease's assets are
+    pushed. `commit` is what the files were built from, `release_history`
+    the release_notes.json with its notes. A dev version: the rolling "dev" prerelease's assets are
     replaced by these files, manifests last, then stale ones removed."""
     files = _ordered_uploads(files)
     for f in files:
@@ -529,9 +522,9 @@ def upload_release(version: str, files, commit: str, notes_file=None) -> None:
     if not is_dev_version(version):
         # The release commit may not be pushed yet - publish_release points
         # the tag at it once it is.
-        notes = ["--notes-file", notes_file] if notes_file else ["--notes", f"ClipEm {version}"]
-        _gh_ok("release", "create", tag, "--draft", "--title", f"ClipEm {version}", *notes,
-               *[str(f) for f in files])
+        notes = release_notes_text(release_history, version) if release_history else ""
+        _gh_ok("release", "create", tag, "--draft", "--title", f"ClipEm {version}",
+               "--notes", notes or f"ClipEm {version}", *[str(f) for f in files])
         return
     notes = f"Development build {version} (commit {commit}) - for testing, not a release."
     if not release_exists(tag):
@@ -629,14 +622,12 @@ def main(argv=None) -> None:
     sub.add_parser("check-github")
     exists = sub.add_parser("release-exists")
     exists.add_argument("version")
-    history = sub.add_parser("add-release-notes")
-    history.add_argument("--date", required=True)
-    history.add_argument("version")
-    history.add_argument("notes_file")
-    history.add_argument("history")
+    notes_check = sub.add_parser("check-release-notes")
+    notes_check.add_argument("version")
+    notes_check.add_argument("history")
     upload = sub.add_parser("upload")
     upload.add_argument("--commit", required=True)
-    upload.add_argument("--notes-file")
+    upload.add_argument("--release-history")
     upload.add_argument("version")
     upload.add_argument("files", nargs="+")
     publish = sub.add_parser("publish")
@@ -686,10 +677,10 @@ def main(argv=None) -> None:
         print(f"GitHub OK ({RELEASE_REPO})")
     elif args.command == "release-exists":
         return 0 if release_exists(release_tag(args.version)) else 1
-    elif args.command == "add-release-notes":
-        add_release_notes(args.history, args.version, args.notes_file, args.date)
+    elif args.command == "check-release-notes":
+        check_release_notes(args.history, args.version)
     elif args.command == "upload":
-        upload_release(args.version, args.files, args.commit, args.notes_file)
+        upload_release(args.version, args.files, args.commit, args.release_history)
     elif args.command == "publish":
         publish_release(args.version, args.commit)
         print(f" - https://github.com/{RELEASE_REPO}/releases/tag/{release_tag(args.version)}")

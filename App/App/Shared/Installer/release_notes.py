@@ -1,7 +1,7 @@
 """
 The release notes of every version, shipped in Shared/release_notes.json:
 [{"version", "date", "sections": {heading: [note, ...]}}], newest first.
-release.sh adds each release's from Dev/releasenotes.txt.
+Written by hand: add the coming version's entry at the top, before releasing it.
 
 Shown after an update (run.py) and from Settings > Check for Updates' Release
 Notes button.
@@ -27,7 +27,8 @@ def load(path=None):
 
 def since(entries, old, new):
     """What an update from `old` to `new` brought, newest first. old None
-    (it isn't known): only `new`'s."""
+    (it isn't known): only `new`'s. A dev build counts as its coming version."""
+    new = new.split("-dev.")[0]
     if old is None:
         return [e for e in entries if e["version"] == new]
     return [e for e in entries
