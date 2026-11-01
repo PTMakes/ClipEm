@@ -322,7 +322,9 @@ echo "Wrote $SHARED_ZIP"
 
 step "Linux OBS (built from source)"
 LINUX_OBS_TAR="$RELEASE_DIR/linux-obs-install-$LINUX_OBS_VERSION.tar.gz"
-tar --sort=name --mtime="@$SOURCE_DATE_EPOCH" --owner=0 --group=0 --numeric-owner \
+# A fixed mtime, not the commit's: installs tell OBS builds apart by this
+# archive's sha256 (components.check), so it must only change with Dev/obs-install.
+tar --sort=name --mtime="@0" --owner=0 --group=0 --numeric-owner \
   -C "$SCRIPT_DIR" -cf - obs-install \
   | python3 "$SCRIPT_DIR/release/release_common.py" pipe --label "Compressing Linux OBS" \
       --total "$(du -sb "$SCRIPT_DIR/obs-install" | cut -f1)" \

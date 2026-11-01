@@ -431,6 +431,14 @@ def test_a_release_older_than_the_notes_is_stopped(tmp_path, version, refused):
         release_common.check_release_notes(history, version)
 
 
+def test_the_linux_obs_archive_doesnt_change_with_each_commit():
+    # Its sha256 is how installs spot a new OBS build (components.check).
+    with open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "release.sh"),
+              encoding="utf-8") as f:
+        packaging = f.read().split('step "Linux OBS (built from source)"')[1].split('echo "Wrote')[0]
+    assert '--mtime="@0"' in packaging and "SOURCE_DATE_EPOCH" not in packaging
+
+
 def test_the_newest_notes_fit_the_update_prompts():
     path = os.path.join(APP_INSTALLER_DIR, "..", "release_notes.json")
     with open(path, encoding="utf-8") as f:
