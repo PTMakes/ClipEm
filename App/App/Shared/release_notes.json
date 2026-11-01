@@ -13,9 +13,9 @@
         "The Assets list shows what you've imported and deletes what's unused. Unused files also go by themselves after 30 days."
       ],
       "Improvements": [
-        "File names no longer have spaces. New clips look like Replay-20261025215007-Deadlock.",
-        "The date field now uses yyyyMMddhhmmss.",
-        "Between Parts shows the current character, with a Reset button. It's added for you, so the name boxes and suffixes no longer need hyphens. Your settings update automatically.",
+        "File names no longer have spaces. New clips look like Replay-2026-10-25-21-50-07-Deadlock.",
+        "The date is now six dropdowns: put year, month, day, hour, minute and second in any order.",
+        "Between Parts shows the current character, with a Reset button. It's added for you, so the name boxes and suffixes no longer need hyphens. Each clip name option has a Reset button, and your settings update automatically.",
         "Exports include added tracks in the mix and as their own tracks in the .mkv."
       ]
     },

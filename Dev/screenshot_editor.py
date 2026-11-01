@@ -99,7 +99,7 @@ def encode(path, source, tracks, minute):
 
 def make_clips(folder):
     for index, (source, minute) in enumerate(CLIPS):
-        name = f"Replay-2026102521{minute:02d}07"
+        name = f"Replay-2026-10-25-21-{minute:02d}-07"
         encode(os.path.join(folder, name + ".mp4"), source, TRACKS[:1], minute)
         if index == 0:
             encode(os.path.join(folder, name + "-tracks.mkv"), source, TRACKS, minute)

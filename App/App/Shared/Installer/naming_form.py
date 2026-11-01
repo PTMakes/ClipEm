@@ -7,14 +7,16 @@ import datetime
 import os
 import sys
 import tkinter as tk
+from tkinter import ttk
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Scripts"))
 import clip_naming  # noqa: E402
 import dark_theme  # noqa: E402
 
-DATE_CODES = "yyyy year, MM month, dd day, hh hour, mm minute, ss second"
+DATE_LABELS = dict(clip_naming.DATE_PARTS)
+DATE_CODES = {label: code for code, label in clip_naming.DATE_PARTS}
 ID_CHOICES = ((clip_naming.ID_NUMBER, "Count up"), (clip_naming.ID_GUID, "GUID"))
-PART_LABELS = {"prefix": "Name starts with:", "id": "Number:", "date": "Date and time:", "app": "Game or app:"}
+PART_LABELS = {"prefix": "Custom Text:", "id": "Number:", "date": "Date and time:", "app": "Game or app:"}
 HANDLE = "\u2261"
 PREVIEW_APP = "Game"  # the preview's, while nothing's playing sound
 
@@ -23,8 +25,11 @@ class NamingForm(tk.Frame):
     """get() -> the settings as entered (check them with
     clip_naming.validate). folder() is the clip folder, for the preview's
     next number. Each part of the name has a row: its handle drags it up or
-    down, its checkbox turns it on or off, and the gray character after it is
-    the separator, which the backend adds - it's never typed."""
+    down, its checkbox turns it on or off, the gray character after it is the
+    separator, which the backend adds - it's never typed - and Reset puts it
+    back as it comes, on or off too; the rows' order isn't part of any one of
+    them. The date's six dropdowns are its order, the separator between them:
+    picking what another one shows swaps the two."""
 
     def __init__(self, parent, initial, px=lambda n: n, folder=lambda: None):
         super().__init__(parent)
@@ -49,6 +54,10 @@ class NamingForm(tk.Frame):
         }
         self._pad = pad = {"padx": (px(6), 0), "pady": px(2)}
         self._px = px
+        self._date_vars = [tk.StringVar(value=DATE_LABELS[code])
+                           for code in clip_naming.date_parts(initial["date_format"])]
+        self._date_shown = [var.get() for var in self._date_vars]
+        self.vars["date_format"].set(self._date_format())
         self._rows = {key: self._part_row(key) for key in clip_naming.PARTS}
         self._place_rows()
 
@@ -61,14 +70,14 @@ class NamingForm(tk.Frame):
             tk.Label(line, text=text).pack(side="left")
             self._separator_label(line).pack(side="left", padx=(px(4), 0))
             tk.Entry(line, textvariable=self.vars[key], width=10).pack(side="left", padx=(px(2), px(8)))
+        self._reset_button(line, "tracks_suffix", "small_suffix", "extra_suffix").pack(side="left")
         row += 1
 
         tk.Label(self, text="Between Parts:").grid(row=row, column=1, sticky="w")
         line = tk.Frame(self)
         line.grid(row=row, column=2, sticky="w", **pad)
         tk.Entry(line, textvariable=self.vars["separator"], width=3).pack(side="left")
-        tk.Button(line, text="Reset", command=lambda: self.vars["separator"].set(clip_naming.DEFAULTS["separator"])
-                  ).pack(side="left", padx=(px(4), 0))
+        self._reset_button(line, "separator").pack(side="left", padx=(px(4), 0))
         row += 1
 
         tk.Label(self, text="Next clip:").grid(row=row, column=1, sticky="w")
@@ -80,6 +89,24 @@ class NamingForm(tk.Frame):
 
     def _separator_label(self, parent):
         return tk.Label(parent, textvariable=self.vars["separator"], fg=dark_theme.MUTED)
+
+    def _reset_button(self, parent, *keys):
+        """Reset: these settings as they come. number_on and the date's
+        dropdowns stand for "id" and "date_format"."""
+        def reset():
+            defaults = clip_naming.DEFAULTS
+            for key in keys:
+                if key == "id":
+                    self.vars["number_on"].set(defaults["id"] != clip_naming.ID_NONE)
+                    self.vars["id"].set(clip_naming.ID_NUMBER)
+                elif key == "date_format":
+                    for var, code in zip(self._date_vars, clip_naming.date_parts(defaults[key]), strict=True):
+                        var.set(DATE_LABELS[code])
+                else:
+                    self.vars[key].set(defaults[key])
+            self._show_number()
+
+        return tk.Button(parent, text="Reset", command=reset)
 
     def _part_row(self, key):
         """(handle, checkbox, field) for one part of the name, not placed yet."""
@@ -95,7 +122,12 @@ class NamingForm(tk.Frame):
         if key == "prefix":
             tk.Entry(line, textvariable=self.vars["prefix"], width=18).pack(side="left")
         elif key == "date":
-            tk.Entry(line, textvariable=self.vars["date_format"], width=22).pack(side="left")
+            for index, var in enumerate(self._date_vars):
+                if index:
+                    self._separator_label(line).pack(side="left", padx=px(2))
+                ttk.Combobox(line, textvariable=var, values=list(DATE_CODES), state="readonly", width=7).pack(
+                    side="left")
+                var.trace_add("write", lambda *_args, changed=index: self._date_picked(changed))
         elif key == "app":
             tk.Label(line, text="the one playing sound when the clip is saved", fg=dark_theme.MUTED).pack(side="left")
         else:
@@ -113,9 +145,23 @@ class NamingForm(tk.Frame):
             tk.Label(self._number_row, text="(counts on from the highest already in the folder)",
                      fg=dark_theme.MUTED).pack(side="left", padx=(px(6), 0))
         self._separator_label(line).pack(side="left", padx=(px(4), 0))
-        if key == "date":
-            tk.Label(line, text=DATE_CODES, fg=dark_theme.MUTED).pack(side="left", padx=(px(6), 0))
+        settings = {"prefix": ("prefix_on", "prefix"), "date": ("date", "date_format"), "app": ("app",),
+                    "id": ("id", "number_start", "number_digits")}[key]
+        self._reset_button(line, *settings).pack(side="left", padx=(px(6), 0))
         return handle, check, field
+
+    def _date_format(self):
+        return "".join(DATE_CODES[var.get()] for var in self._date_vars)
+
+    def _date_picked(self, index):
+        """A dropdown changed: one already showing that gets what this one had."""
+        picked, replaced = self._date_vars[index].get(), self._date_shown[index]
+        self._date_shown[index] = picked
+        for other, var in enumerate(self._date_vars):
+            if other != index and var.get() == picked:
+                self._date_shown[other] = replaced
+                var.set(replaced)  # comes back here: nothing else shows it now
+        self.vars["date_format"].set(self._date_format())
 
     def _place_rows(self):
         for row, key in enumerate(self.order):

@@ -4,8 +4,9 @@ OBS), the tray widget (tray-widget/tray_tracks.py) and the clip editor
 (tray-widget/clip_browser.py), so no OBS or ClipEm Installer imports here.
 
 A clip's name is its parts - prefix, number or GUID, date, game or app - each
-one optional, in the order chosen, joined by the separator: e.g.
-"Replay-20261025215007-Deadlock" (the default), "Clip-0042" or "Clip-3f2a...".
+one optional, in the order chosen, joined by the separator, which also goes
+between the date's own parts: e.g. "Replay-2026-10-25-21-50-07-Deadlock" (the
+default), "Clip-0042" or "Clip-3f2a...".
 Its copies add the separator and a suffix: "<clip>-tracks.mkv",
 "<clip>-small.mp4" and, with post-clip on (clip_post.py), "<clip>-extra.mkv"
 by default. The separator is never part of what's typed in Settings, and file
@@ -54,6 +55,11 @@ OLD_DATE_FORMAT = "%Y-%m-%d %H-%M-%S"  # the default before date codes like yyyy
 # Date codes, longest first; hh is the 24-hour clock either way, so names sort.
 _DATE_CODES = {"yyyy": "%Y", "yy": "%y", "MM": "%m", "dd": "%d", "HH": "%H", "hh": "%H", "mm": "%M", "ss": "%S"}
 _DATE_CODE = re.compile("|".join(_DATE_CODES))
+# What Settings lets clips' dates be made of, in any order.
+DATE_PARTS = (("yyyy", "Year"), ("MM", "Month"), ("dd", "Day"), ("hh", "Hour"), ("mm", "Minute"), ("ss", "Second"))
+_SAME_DATE_PART = {"yy": "yyyy", "HH": "hh", "%Y": "yyyy", "%y": "yyyy", "%m": "MM", "%d": "dd", "%H": "hh",
+                   "%I": "hh", "%M": "mm", "%S": "ss"}
+_ANY_DATE_CODE = re.compile("|".join(("%[YymdHIMS]", *_DATE_CODES)))
 MAX_APP_LENGTH = 48
 VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
 # Not allowed in file names on Windows (and "/" anywhere).
@@ -74,6 +80,26 @@ def format_date(when, date_format):
     if "%" in date_format:
         return when.strftime(date_format)
     return _DATE_CODE.sub(lambda code: when.strftime(_DATE_CODES[code.group()]), date_format)
+
+
+def _only_codes(date_format):
+    return "%" not in date_format and not _DATE_CODE.sub("", date_format)
+
+
+def date_text(settings, when):
+    """The date in a name: the separator between its parts, unless it's a
+    saved format with its own punctuation."""
+    date_format = settings["date_format"]
+    if _only_codes(date_format):
+        return settings["separator"].join(format_date(when, code) for code in _DATE_CODE.findall(date_format))
+    return format_date(when, date_format)
+
+
+def date_parts(date_format):
+    """The six DATE_PARTS codes in a date format's order, any it doesn't have
+    after them. Anything else in it (a saved "dd.MM.yyyy"'s dots) goes."""
+    found = (_SAME_DATE_PART.get(code, code) for code in _ANY_DATE_CODE.findall(date_format))
+    return list(dict.fromkeys([*found, *(code for code, _label in DATE_PARTS)]))
 
 
 def upgrade(saved):
@@ -167,7 +193,7 @@ def stem(settings, when, number=None, guid=None, app=None):
     elif settings["id"] == ID_GUID:
         values["id"] = guid or str(uuid.uuid4())
     if settings["date"]:
-        values["date"] = format_date(when, settings["date_format"])
+        values["date"] = date_text(settings, when)
     if settings["app"] and app:
         values["app"] = re.sub(r"\.exe$", "", app.strip(), flags=re.I)[:MAX_APP_LENGTH].strip(" .")
     parts = (_no_spaces(values[key], separator) for key in settings["order"])
@@ -178,6 +204,8 @@ def _date_pattern(settings):
     date_format = settings["date_format"]
     if "%" in date_format:
         return ".+?"
+    if _only_codes(date_format):
+        return re.escape(settings["separator"]).join(rf"\d{{{len(code)}}}" for code in _DATE_CODE.findall(date_format))
     pattern, position = "", 0
     for code in _DATE_CODE.finditer(date_format):
         literal = clean(date_format[position:code.start()])
@@ -211,6 +239,8 @@ def next_number(folder, settings):
     """One more than the highest number a clip with this prefix has in folder,
     or the starting number if that's higher."""
     pattern = _number_pattern(settings)
+    # With the date off, a dated clip's year would look like a number.
+    dated = None if settings["date"] else re.compile(rf"(?:\d{{2,4}}{re.escape(settings['separator'])}){{5}}\d{{2,4}}")
     highest = int(settings["number_start"]) - 1
     try:
         names = os.listdir(folder)
@@ -221,7 +251,7 @@ def next_number(folder, settings):
         if ext.lower() not in VIDEO_EXTENSIONS:
             continue
         match = pattern.match(base)
-        if match:
+        if match and not (dated and dated.search(base)):
             highest = max(highest, int(match.group(1)))
     return highest + 1
 
