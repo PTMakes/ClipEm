@@ -417,6 +417,20 @@ def test_shipped_release_history_is_complete_and_newest_first():
         assert f.read().strip() in versions  # the newest may be the coming version's
 
 
+@pytest.mark.parametrize("version, refused", [("1.4.9", True), ("1.4.9-dev.202611012245", True),
+                                              ("1.5.0-dev.202611012245", False), ("1.5.0", False), ("1.5.1", False)])
+def test_a_release_older_than_the_notes_is_stopped(tmp_path, version, refused):
+    history = tmp_path / "notes.json"
+    history.write_text(json.dumps([{"version": "1.5.0", "date": "x", "sections": {"New": ["A."]}}]))
+    if version == "1.5.1":
+        version += "-dev.1"
+    if refused:
+        with pytest.raises(SystemExit, match="older than 1.5.0"):
+            release_common.check_release_notes(history, version)
+    else:
+        release_common.check_release_notes(history, version)
+
+
 def test_the_newest_notes_fit_the_update_prompts():
     path = os.path.join(APP_INSTALLER_DIR, "..", "release_notes.json")
     with open(path, encoding="utf-8") as f:

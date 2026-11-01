@@ -92,6 +92,13 @@ def test_numbers_are_found_wherever_they_are_in_the_name(tmp_path, order, existi
     assert clip_naming.next_number(tmp_path, settings) == 42
 
 
+@pytest.mark.parametrize("changes", [{}, {"id": "guid"}])
+def test_names_without_a_number_have_nothing_to_count(tmp_path, changes):
+    settings = naming(number_start=5, **changes)
+    (tmp_path / f"{clip_naming.stem(settings, WHEN, guid='g')}.mp4").write_bytes(b"x")
+    assert clip_naming.next_number(tmp_path, settings) == 5
+
+
 def test_a_date_is_never_taken_for_a_number(tmp_path):
     for name in ("Clip-20261025215007.mp4", "Clip-20261025215007-Deadlock.mp4", "Clip-2026-10-25-21-50-07.mp4",
                  "Clip-Deadlock-2026-10-25-21-50-07.mp4"):
@@ -292,6 +299,27 @@ def test_a_bad_separator_is_shown(form):
     shown = form(naming(separator="_"))
     shown.vars["separator"].set(" ")
     assert "Between Parts" in shown._preview.cget("text")
+
+
+@pytest.mark.parametrize("changes", [{}, {"id": "guid"}, {"id": "number"}])
+def test_the_form_opens_on_a_folder_of_clips_it_named(tmp_path, changes):
+    # What Settings does first: the preview, on the real clip folder.
+    tk = pytest.importorskip("tkinter")
+    sys.path.insert(0, INSTALLER_DIR)
+    import naming_form
+
+    settings = naming(**changes)
+    (tmp_path / f"{clip_naming.stem(settings, WHEN, number=3, guid='g', app='Deadlock')}.mp4").write_bytes(b"x")
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("needs a display")
+    root.withdraw()
+    try:
+        shown = naming_form.NamingForm(root, settings, folder=lambda: str(tmp_path))
+        assert shown._preview.cget("text").startswith("Replay-")
+    finally:
+        root.destroy()
 
 
 def test_every_item_has_a_reset(form):

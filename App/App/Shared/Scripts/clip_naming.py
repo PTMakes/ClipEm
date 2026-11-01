@@ -238,6 +238,8 @@ def _number_pattern(settings):
 def next_number(folder, settings):
     """One more than the highest number a clip with this prefix has in folder,
     or the starting number if that's higher."""
+    if settings["id"] != ID_NUMBER:  # no number in these names to count from
+        return int(settings["number_start"])
     pattern = _number_pattern(settings)
     # With the date off, a dated clip's year would look like a number.
     dated = None if settings["date"] else re.compile(rf"(?:\d{{2,4}}{re.escape(settings['separator'])}){{5}}\d{{2,4}}")

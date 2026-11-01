@@ -500,7 +500,18 @@ def release_notes_text(history_path, version: str) -> str:
 
 
 def check_release_notes(history_path, version: str) -> None:
-    """Stops a release with no notes written for it. Dev builds may not have any yet."""
+    """Stops a release with no notes written for it (dev builds may not have
+    any yet), and one older than the notes already written: the updater never
+    goes down a version, so nobody on the newer one would get it."""
+    history = json.loads(Path(history_path).read_text(encoding="utf-8"))
+    newest = history[0]["version"]
+
+    def numbers(text):
+        return [int(part) for part in text.split("-dev.")[0].split(".")]
+
+    if numbers(version) < numbers(newest):
+        raise SystemExit(f"{version} is older than {newest}, the newest version in {history_path}, so it wouldn't "
+                         f"update anyone on {newest} builds. Pick the bump that reaches it (e.g. --dev minor).")
     notes = release_notes_text(history_path, version)
     if not notes and not is_dev_version(version):
         raise SystemExit(f"{history_path} has no entry for {version} - write what's new there first.")
