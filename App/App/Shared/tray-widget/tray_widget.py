@@ -621,9 +621,10 @@ class TrayApp:
 
     def _start_helper(self, script, what, extra_args=()):
         """Runs a helper window's script (the clip editor, the settings
-        dialog) and tells the user if it exits with an error. Its stderr goes
-        to logs/<script>.stderr.log for that: under pythonw, a crash before it
-        opens its own log (e.g. a failed import) otherwise leaves no trace.
+        dialog) and tells the user if it exits with an error. Its stdout and
+        stderr go to logs/<script>.stderr.log for that: under pythonw, a crash
+        before it opens its own log (e.g. a failed import), or what it prints,
+        otherwise leaves no trace.
         A file, not a pipe: what the helper starts (Settings restarting
         ClipEm and OBS, the user's video editor) inherits it and outlives
         this tray widget - a pipe would break under them (SIGPIPE)."""
@@ -633,7 +634,8 @@ class TrayApp:
             os.makedirs(LOG_DIR, exist_ok=True)
             with open(stderr_path, "wb") as stderr_file:
                 proc = subprocess.Popen(
-                    [sys.executable, script, "--parent-pid", str(os.getpid()), *extra_args], stderr=stderr_file
+                    [sys.executable, script, "--parent-pid", str(os.getpid()), *extra_args],
+                    stdout=stderr_file, stderr=stderr_file,
                 )
         except Exception as exc:
             log.warning(f"Failed to open {what}: {exc}")

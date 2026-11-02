@@ -161,6 +161,33 @@ def test_monitor_does_nothing_when_tray_tracks_are_off_and_lets_go_when_turned_o
     assert len(recorder.targets) == 1 and recorder.stopped == 1
 
 
+def test_a_setting_being_rewritten_by_obs_isnt_a_crash(monkeypatch):
+    """OBS rewrites the scene collection as it saves or shuts down - and on
+    Windows reading it then is refused (PermissionError)."""
+    reads = iter([True] + [PermissionError("DefaultPTM.json")] * app_audio.UNREADABLE_WARN_CHECKS + [False])
+    warnings, crashes = [], []
+    monkeypatch.setattr(app_audio.log, "warning", warnings.append)
+    monkeypatch.setattr(app_audio.log, "exception", crashes.append)
+
+    def enabled():
+        value = next(reads)
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    monitor, recorder = make_monitor([stream("spotify", ("pa", 1, "m"))])
+    monitor._enabled = enabled
+    monitor.tick()
+    for _ in range(app_audio.UNREADABLE_WARN_CHECKS - 1):
+        monitor.tick()
+    assert len(recorder.targets) == app_audio.UNREADABLE_WARN_CHECKS and recorder.stopped == 0  # as it was
+    assert warnings == [] and crashes == []
+    monitor.tick()  # still unreadable: now it's worth saying, once
+    assert len(warnings) == 1 and "DefaultPTM.json" in warnings[0]
+    monitor.tick()  # readable again, and off
+    assert recorder.stopped == 1 and crashes == []
+
+
 def test_monitor_survives_not_being_able_to_list_apps():
     def broken():
         raise OSError("no pactl")

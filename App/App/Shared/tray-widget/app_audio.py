@@ -43,6 +43,8 @@ CHECK_INTERVAL_SECONDS = 3
 # once, so the timed check is only a fallback; Windows has to be asked.
 RECORD_CHECK_SECONDS = {"Windows": 0.5}
 STREAM_WATCH_RESTART_SECONDS = 5
+# Checks in a row the app track setting can't be read before it's worth a warning.
+UNREADABLE_WARN_CHECKS = 10
 
 # Never given a track: OBS itself, ClipEm's own clip sound players and its
 # clip editor window (editor_window.EXE_NAMES - its preview would otherwise
@@ -456,6 +458,7 @@ class AppTrackMonitor:
         self._thread = None
         self._stopped = threading.Event()
         self._wake = threading.Event()
+        self._unreadable = 0  # checks in a row the settings couldn't be read
 
     def forget(self):
         """After a reconnect: check again straight away."""
@@ -493,12 +496,27 @@ class AppTrackMonitor:
             self._wake.wait(self._record_interval)
 
     def _record(self):
-        enabled = self._enabled()
+        enabled = self._is_enabled()
         self._update_enabled(enabled)
         if enabled and not self._stopped.is_set():
             streams = self._streams()
             if streams is not None:
                 self._recorder.set_targets(app_targets(streams))
+
+    def _is_enabled(self):
+        """enabled(), or what it was last time while it can't be read: OBS
+        rewrites the scene collection it's read from (and Windows refuses
+        reading a file being written), as it saves or shuts down. Only an
+        unreadable file that stays so is worth a warning."""
+        try:
+            enabled = self._enabled()
+        except (OSError, ValueError) as exc:
+            self._unreadable += 1
+            if self._unreadable == UNREADABLE_WARN_CHECKS:
+                log.warning(f"Can't tell if app tracks are on ({exc}) - going on as they were.")
+            return self._was_enabled
+        self._unreadable = 0
+        return enabled
 
     def _update_enabled(self, enabled):
         if self._was_enabled and not enabled:
@@ -536,7 +554,7 @@ class AppTrackMonitor:
 
     def _tick(self):
         recording_here = self._thread is None  # else the recording thread has it
-        enabled = recording_here and self._enabled()
+        enabled = recording_here and self._is_enabled()
         if recording_here:
             self._update_enabled(enabled)
         names_clips = self._names_clips()

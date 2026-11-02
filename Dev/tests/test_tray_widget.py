@@ -489,6 +489,17 @@ def test_a_helper_that_wont_start_is_reported(app, monkeypatch, tmp_path):
     assert app.notes == ["Couldn't open settings - see logs/tray.log."] and app._children == []
 
 
+def test_what_a_helper_prints_lands_in_its_log_with_its_errors(app, monkeypatch, tmp_path):
+    """Under pythonw nothing else would keep it - e.g. Settings' own messages."""
+    monkeypatch.setattr(tray_widget, "LOG_DIR", str(tmp_path / "logs"))
+    script = tmp_path / "settings_dialog.py"
+    script.write_text("import sys\nprint('printed', flush=True)\nsys.exit('the error')\n")
+    app._start_helper(str(script), "settings")
+    assert app._children[0].wait(timeout=30) == 1
+    logged = (tmp_path / "logs" / "settings_dialog.stderr.log").read_text()
+    assert "printed" in logged and "the error" in logged
+
+
 def test_a_request_from_the_update_window_opens_settings_once(app, monkeypatch, tmp_path):
     request = tmp_path / ".settings.request"
     request.write_text("video,audio\n")
