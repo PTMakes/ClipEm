@@ -20,6 +20,8 @@ An edit project (JSON, saved per clip by clip_browser.py) is:
      "master_db": 0,                  # gain on the mix (the first audio track) only
      "crop": null,                    # or {"x", "y", "w", "h"}: the part of the frame
                                       # to keep, in source pixels (even numbers)
+     "sources": null,                 # "auto": the Full Editor's sub-tracks are its
+                                      # default; "chosen": the user picked them
      "clip_start": 0.0,               # where the clip sits on the timeline
      "fade_in": 0.0,                  # the whole picture, from and to black
      "fade_out": 0.0,
@@ -130,8 +132,12 @@ CUSTOM_HEIGHTS = (2160, 1440, 1080, 720, 480)
 CUSTOM_FPS = (120, 60, 30, 24)
 CUSTOM_VIDEO_KBPS = (1000, 2500, 4000, 6000, 8000, 12000, 16000, 25000, 40000, 60000)
 CUSTOM_AUDIO_KBPS = 192
-FULL_CRF = 16
-FULL_PRESET = "medium"
+# Settings > Clip Editor. A CRF for the x264 export, a QP for hardware's.
+EXPORT_QUALITY = {"best": 16, "high": 20, "smaller": 24}
+EXPORT_SPEEDS = ("fast", "medium", "slow")
+NVENC_PRESETS = {"fast": "p3", "medium": "p5", "slow": "p7"}
+AMF_QUALITY = {"fast": "speed", "medium": "balanced", "slow": "quality"}
+DEFAULT_EXPORT = {"encoder": "x264", "device": None, "ffmpeg": None, "quality": "best", "speed": "medium"}
 FULL_AUDIO_KBPS = 256
 TRACK_AUDIO_KBPS = 192
 PREVIEW_AUDIO_KBPS = 160
@@ -314,6 +320,7 @@ def default_project(info):
         ],
         "master_db": 0.0,
         "crop": None,
+        "sources": None,
         "clip_start": 0.0,
         "fade_in": 0.0,
         "fade_out": 0.0,
@@ -495,7 +502,9 @@ def normalize_project(project, info, assets=None):
     master_db = round(_clamp(_number(project.get("master_db")), MIN_MASTER_DB, MAX_MASTER_DB), 2)
     fade_in, fade_out = _fades(project, duration)
     return {"version": PROJECT_VERSION, "keep": keep, "tracks": tracks, "master_db": master_db,
-            "crop": normalize_crop(project.get("crop"), info), "clip_start": clip_start, "fade_in": fade_in,
+            "crop": normalize_crop(project.get("crop"), info),
+            "sources": project.get("sources") if project.get("sources") in ("auto", "chosen") else None,
+            "clip_start": clip_start, "fade_in": fade_in,
             "fade_out": fade_out, "layers": layers, "assets": used_assets(layers, assets or {})}
 
 
@@ -919,12 +928,50 @@ def is_multitrack(project, info):
     return len(info["audio"]) + len(sound_layers(project)) > 1
 
 
-def build_graph(project, info, video_height=None, fps=None, audio="tracks", with_video=True):
+def normalize_export(saved):
+    """Settings' export choices, defaults filled in for anything unusable."""
+    saved = saved if isinstance(saved, dict) else {}
+    export = dict(DEFAULT_EXPORT)
+    if saved.get("quality") in EXPORT_QUALITY:
+        export["quality"] = saved["quality"]
+    if saved.get("speed") in EXPORT_SPEEDS:
+        export["speed"] = saved["speed"]
+    return export
+
+
+def _video_args(export, kbps=None):
+    """ffmpeg's arguments for this encoder: at a bitrate, or else at the
+    constant quality settings asked for."""
+    encoder, speed = export["encoder"], export["speed"]
+    quality = str(EXPORT_QUALITY[export["quality"]])
+    rate = ["-b:v", f"{kbps}k", "-maxrate", f"{int(kbps * 1.5)}k", "-bufsize", f"{kbps * 2}k"] if kbps else []
+    if encoder == "nvenc":
+        return ["-c:v", "h264_nvenc", "-preset", NVENC_PRESETS[speed], "-rc", "vbr"] + (
+            rate or ["-cq", quality, "-b:v", "0"])
+    if encoder == "amf":
+        return ["-c:v", "h264_amf", "-quality", AMF_QUALITY[speed]] + (
+            ["-rc", "vbr_peak"] + rate if rate else ["-rc", "cqp", "-qp_i", quality, "-qp_p", quality])
+    if encoder == "qsv":
+        return ["-c:v", "h264_qsv", "-preset", speed] + (rate or ["-global_quality", quality])
+    if encoder == "vaapi":
+        return ["-c:v", "h264_vaapi"] + (["-rc_mode", "VBR"] + rate if rate else ["-rc_mode", "CQP", "-qp", quality])
+    if encoder == "videotoolbox":
+        return ["-c:v", "h264_videotoolbox"] + (rate or ["-q:v", str(100 - int(quality))])
+    return ["-c:v", "libx264", "-preset", speed] + (rate or ["-crf", quality])
+
+
+def _hardware_input_args(export):
+    """What has to come before the inputs: VA-API's device."""
+    return ["-vaapi_device", export["device"]] if export["encoder"] == "vaapi" and export.get("device") else []
+
+
+def build_graph(project, info, video_height=None, fps=None, audio="tracks", with_video=True, upload=False):
     """(filter_complex, video label, [audio labels]) for an export.
 
     audio: "tracks" - the rebuilt mix, then every other track (MKV);
            "mix" - the rebuilt mix only (MP4); None - no audio (pass 1).
-    with_video=False leaves the video out (vout is None): for measuring audio."""
+    with_video=False leaves the video out (vout is None): for measuring audio.
+    upload: the picture ends up on the graphics card, for VA-API."""
     graph = _Graph()
     duration = timeline_end(project, info)
     keep = project["keep"]
@@ -953,7 +1000,7 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
             post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
         if fps:
             post.append(f"fps={fps:g}")
-        post.append("format=yuv420p")
+        post += ["format=nv12", "hwupload"] if upload else ["format=yuv420p"]
         vout = graph.label("vout")
         graph.add([video], post, [vout])
 
@@ -1055,14 +1102,17 @@ def _base(ffmpeg):
     return [ffmpeg, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats"]
 
 
-def full_quality_commands(ffmpeg, source, project, info, out_mkv, out_mp4):
+def full_quality_commands(ffmpeg, source, project, info, out_mkv, out_mp4, export=None):
     """Commands for a full-quality export: near-lossless H.264 into an MKV
     with every track (when there's more than one), then the MP4 with just
     the mix, copied out of it. Returns [(command, label, weight)]."""
+    export = export or DEFAULT_EXPORT
+    ffmpeg = export.get("ffmpeg") or ffmpeg
     multi = is_multitrack(project, info)
-    inputs = input_args(source, project)
-    graph, vout, audio_outs = build_graph(project, info, audio="tracks" if multi else "mix")
-    video_args = ["-c:v", "libx264", "-preset", FULL_PRESET, "-crf", str(FULL_CRF)]
+    inputs = _hardware_input_args(export) + input_args(source, project)
+    graph, vout, audio_outs = build_graph(project, info, audio="tracks" if multi else "mix",
+                                          upload=export["encoder"] == "vaapi")
+    video_args = _video_args(export)
     if not multi:
         cmd = _base(ffmpeg) + [*inputs, "-filter_complex", graph, "-map", f"[{vout}]"]
         for label in audio_outs:
@@ -1129,13 +1179,25 @@ def custom_settings(info, height, fps, video_kbps):
     }
 
 
-def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog):
-    """Two-pass H.264 at settings' bitrate, so the size is predictable."""
+def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog, export=None):
+    """Two-pass H.264 at settings' bitrate, so the size is predictable - with
+    x264: hardware encoders make one pass, which lands near it."""
+    export = export or DEFAULT_EXPORT
+    ffmpeg = export.get("ffmpeg") or ffmpeg
     height = settings["height"] if settings["height"] != cropped_info(info, project)["height"] else None
     fps = settings["fps"] if info["fps"] and settings["fps"] < info["fps"] - 0.5 else None
-    video_args = ["-c:v", "libx264", "-preset", "medium", "-b:v", f"{settings['video_kbps']}k",
-                  "-maxrate", f"{int(settings['video_kbps'] * 1.5)}k",
-                  "-bufsize", f"{settings['video_kbps'] * 2}k", "-passlogfile", passlog]
+    if export["encoder"] != "x264":
+        inputs = _hardware_input_args(export) + input_args(source, project)
+        graph, vout, audio_outs = build_graph(project, info, video_height=height, fps=fps, audio="mix",
+                                              upload=export["encoder"] == "vaapi")
+        cmd = _base(ffmpeg) + [*inputs, "-filter_complex", graph, "-map", f"[{vout}]"]
+        for label in audio_outs:
+            cmd += ["-map", f"[{label}]"]
+        cmd += _video_args(export, settings["video_kbps"])
+        if audio_outs:
+            cmd += ["-c:a", "aac", "-b:a", f"{settings['audio_kbps'] or DISCORD_AUDIO_KBPS}k"]
+        return [(cmd + ["-movflags", "+faststart", "-f", "mp4", out_mp4], "Encoding", 1.0)]
+    video_args = _video_args(export, settings["video_kbps"]) + ["-passlogfile", passlog]
     inputs = input_args(source, project)
     graph1, vout1, _ = build_graph(project, info, video_height=height, fps=fps, audio=None)
     pass1 = _base(ffmpeg) + [*inputs, "-filter_complex", graph1, "-map", f"[{vout1}]"] + video_args + [
@@ -1151,10 +1213,10 @@ def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
     return [(pass1, "Analysing", 0.4), (pass2, "Encoding", 0.6)]
 
 
-def discord_commands(ffmpeg, source, project, info, out_mp4, passlog):
+def discord_commands(ffmpeg, source, project, info, out_mp4, passlog, export=None, target_mb=DISCORD_TARGET_MB):
     """Two-pass H.264 so the size lands just under Discord's limit."""
-    settings = discord_settings(cropped_info(info, project), kept_duration(project))
-    return two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog)
+    settings = discord_settings(cropped_info(info, project), kept_duration(project), target_mb)
+    return two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog, export)
 
 
 # ---------------------------------------------------------------------------
@@ -1327,16 +1389,17 @@ class ExportJob:
     def running(self):
         return self.status["state"] == "running"
 
-    def start(self, steps, outputs, total_seconds, cleanup=(), on_done=None):
+    def start(self, steps, outputs, total_seconds, cleanup=(), on_done=None, fallback=None):
         """steps: [(command, label, weight)] writing to the partial paths in
         outputs ({partial: final}). on_done([final paths]) runs once they're
-        all in place. Returns False if one is already running."""
+        all in place. fallback: steps to try if those fail (a hardware encoder
+        that won't open). Returns False if one is already running."""
         with self._lock:
             if self.running():
                 return False
             self._cancel = False
             self.status = {"state": "running", "message": "Starting...", "progress": 0.0, "files": []}
-        threading.Thread(target=self._run, args=(steps, outputs, total_seconds, cleanup, on_done),
+        threading.Thread(target=self._run, args=(steps, outputs, total_seconds, cleanup, on_done, fallback),
                          daemon=True).start()
         return True
 
@@ -1346,12 +1409,21 @@ class ExportJob:
             if self._proc and self._proc.poll() is None:
                 self._proc.terminate()
 
-    def _run(self, steps, outputs, total_seconds, cleanup, on_done=None):
+    def _run_steps(self, steps, total_seconds):
         done_weight = 0.0
+        for cmd, label, weight in steps:
+            self._step(cmd, label, done_weight, weight, total_seconds)
+            done_weight += weight
+
+    def _run(self, steps, outputs, total_seconds, cleanup, on_done=None, fallback=None):
         try:
-            for cmd, label, weight in steps:
-                self._step(cmd, label, done_weight, weight, total_seconds)
-                done_weight += weight
+            try:
+                self._run_steps(steps, total_seconds)
+            except RuntimeError as exc:
+                if not fallback:
+                    raise
+                self._log(f"Export with the chosen encoder failed, using x264 instead: {exc}")
+                self._run_steps(fallback, total_seconds)
             for partial, final in outputs.items():
                 os.replace(partial, final)
             if on_done:

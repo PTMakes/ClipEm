@@ -220,3 +220,35 @@ def test_a_stopped_child_tray_frees_its_lock_at_once(tmp_path, monkeypatch):
     assert time.monotonic() - started < 3  # not stop_tray_widget's whole 5 s wait
     assert clipem_common.acquire_instance_lock(str(lock))
 
+
+
+def _lock(tmp_path, pid, age=0):
+    lock = tmp_path / "app.lock"
+    lock.write_text(str(pid))
+    os.utime(lock, (time.time() - age, time.time() - age))
+    return str(lock)
+
+
+def test_a_pid_reused_since_the_lock_was_written_doesnt_hold_it(tmp_path):
+    # An unclean exit, a reboot, and now the pid is some system process.
+    lock = _lock(tmp_path, os.getppid(), age=3600)
+    assert not clipem_common.holds_lock(os.getppid(), lock, process_start=lambda pid: time.time() - 60)
+
+
+def test_the_process_that_wrote_the_lock_holds_it(tmp_path):
+    lock = _lock(tmp_path, os.getppid())
+    assert clipem_common.holds_lock(os.getppid(), lock, process_start=lambda pid: time.time() - 3600)
+
+
+def test_a_process_of_unknown_age_is_taken_at_its_word(tmp_path):
+    lock = _lock(tmp_path, os.getppid())
+    assert clipem_common.holds_lock(os.getppid(), lock, process_start=lambda pid: None)
+
+
+def test_a_dead_process_holds_nothing(tmp_path):
+    assert not clipem_common.holds_lock(2 ** 22 + 1, _lock(tmp_path, 2 ** 22 + 1), process_start=lambda pid: 0)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="needs Windows' process times")
+def test_windows_knows_when_a_process_started():
+    assert abs(clipem_common._windows_process_start(os.getpid()) - time.time()) < 3600

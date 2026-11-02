@@ -166,5 +166,52 @@ def available(system=None):
     return found + [(X264, None)]
 
 
+# ffmpeg's names, for the clip editor's exports.
+FFMPEG_NAMES = {
+    X264: "libx264",
+    NVENC: "h264_nvenc",
+    AMF: "h264_amf",
+    QSV: "h264_qsv",
+    VAAPI: "h264_vaapi",
+    VIDEOTOOLBOX: "h264_videotoolbox",
+}
+
+
+def bundled_ffmpeg(app_dir, system=None):
+    """ClipEm's own ffmpeg, or None."""
+    system = system or platform.system()
+    folder = {"Windows": "Windows", "Linux": "Linux"}.get(system)
+    path = os.path.join(app_dir, folder or "", "ffmpeg", "bin", "ffmpeg.exe" if system == "Windows" else "ffmpeg")
+    return path if folder and os.path.isfile(path) else None
+
+
+def ffmpeg_encoders(ffmpeg, run=subprocess.run):
+    """The names of the encoders this ffmpeg was built with."""
+    try:
+        out = run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True, errors="replace",
+                  timeout=10, **({"creationflags": 0x08000000} if os.name == "nt" else {})).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {parts[1] for parts in map(str.split, out.splitlines()) if len(parts) >= 2}
+
+
+def export_options(bundled, system_ffmpeg=None, found=None, run=subprocess.run):
+    """[(encoder, device, label, ffmpeg)] the clip editor can export with, x264
+    last: what this PC has that some ffmpeg here can use. ClipEm's own is fully
+    static, so on Linux hardware needs the system's ffmpeg (system_ffmpeg)."""
+    if system_ffmpeg is None:
+        system_ffmpeg = shutil.which("ffmpeg")
+    found = available() if found is None else found
+    ffmpegs = [path for path in dict.fromkeys((bundled, system_ffmpeg)) if path]
+    known = {path: ffmpeg_encoders(path, run) for path in ffmpegs}
+    options = []
+    for encoder, device in found:
+        for path in ffmpegs:
+            if encoder == X264 or FFMPEG_NAMES[encoder] in known[path]:
+                options.append((encoder, device, LABELS[encoder], bundled if encoder == X264 else path))
+                break
+    return options
+
+
 def encoder_for_obs_id(obs_id):
     return next((encoder for encoder, known in OBS_IDS.items() if known == obs_id), None)

@@ -49,6 +49,7 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(1, INSTALLER_DIR)
 import bug_report  # noqa: E402
+import clip_move  # noqa: E402
 import color_picker  # noqa: E402
 import dark_theme  # noqa: E402
 import detection_help  # noqa: E402
@@ -84,6 +85,7 @@ from autostart import (  # noqa: E402
     write_window_desktop_entry,
 )
 from clipem_common import (  # noqa: E402
+    APP_DIR,
     OBS_RESTART_FLAG,
     REOPEN_EDITOR_FLAG,
     acquire_instance_lock,
@@ -106,6 +108,7 @@ LOCK_PATH = os.path.join(SCRIPT_DIR, ".settings.lock")
 # Written by a second launch (the tray menu's Settings clicked again) to ask
 # the open dialog to come to the front.
 RAISE_PATH = os.path.join(SCRIPT_DIR, ".settings.raise")
+TAB_REQUEST = "tab="  # among --highlight's keys: the page to open on
 RAISE_POLL_MS = 300
 # A wheel turn over a combobox this soon after scrolling the page scrolls
 # the page on, instead of changing the combobox.
@@ -284,7 +287,11 @@ def watch_for_reopen(root):
                 request = ""
             bring_to_front(root)
             if hasattr(root, "highlight_settings"):
-                root.highlight_settings(request.split(","))  # "raise" names no setting
+                keys = request.split(",")
+                for key in keys:
+                    if key.startswith(TAB_REQUEST):
+                        root.layout["show_tab"](key[len(TAB_REQUEST):])
+                root.highlight_settings(keys)  # "raise" names no setting
         root.after(RAISE_POLL_MS, check)
 
     root.after(RAISE_POLL_MS, check)
@@ -329,6 +336,7 @@ def main():
     # Close along with the tray widget that opened this, however it ends.
     exit_with_parent(parent_pid_from_args(sys.argv[1:]))
     highlight = highlight_from_args(sys.argv[1:])
+    start_tab = next((key[len(TAB_REQUEST):] for key in highlight if key.startswith(TAB_REQUEST)), None)
     if not acquire_instance_lock(LOCK_PATH):
         log.info("Settings dialog already open; asking it to come to the front.")
         try:
@@ -342,7 +350,7 @@ def main():
     except OSError:
         pass
     # Saving new colors (or Dark Mode) reopens the window, built with them.
-    tab = open_dialog(None, highlight)
+    tab = open_dialog(start_tab, highlight)
     while tab is not None:
         tab = open_dialog(tab)
 
@@ -972,6 +980,7 @@ def open_dialog(start_tab=None, highlight=()):
 
     def on_devices(result, exc):
         result = result if exc is None else {}
+        fill_export_encoders(result.get("export_encoders") or [], result.get("detected") or [])
         fill_encoders(result.get("encoders")
                       or [(setup.encoders.X264, None, setup.encoders.LABELS[setup.encoders.X264])])
         devices["displays"] = result.get("displays") or [{
@@ -988,9 +997,14 @@ def open_dialog(start_tab=None, highlight=()):
 
     # Display/audio detection shells out (PowerShell on Windows) and can take
     # a few seconds - as in Setup, it runs while the window is up.
-    run_in_background(root, lambda: {"displays": setup.list_displays(), "audio": setup.list_audio_devices(),
-                                     "encoders": setup.list_encoders()},
-                      on_devices)
+    def find_devices():
+        ffmpeg = setup.encoders.bundled_ffmpeg(APP_DIR)
+        found = setup.encoders.available()
+        return {"displays": setup.list_displays(), "audio": setup.list_audio_devices(),
+                "encoders": setup.list_encoders(), "detected": found,
+                "export_encoders": setup.encoders.export_options(ffmpeg, found=found)}
+
+    run_in_background(root, find_devices, on_devices)
 
     # --- Which editor the tray's editor item opens: ClipEm's own, the user's
     # (editor_install.py), or none at all.
@@ -1062,6 +1076,67 @@ def open_dialog(start_tab=None, highlight=()):
             editor_row.grid_remove()
 
     show_editor_choice()
+
+    # --- How ClipEm's editor exports and opens: read by clip_browser.py as it
+    # needs them, so they apply without restarting anything.
+    section("Editor Exports", TAB_EDITOR)
+    saved_export = run_config.get("editor_export") if isinstance(run_config.get("editor_export"), dict) else {}
+    export_detected_var = tk.StringVar(value="Detecting...")
+    tk.Label(frame, text="Detected encoder:").grid(row=next_row, column=0, sticky="w")
+    tk.Label(frame, textvariable=export_detected_var, fg=dark_theme.MUTED).grid(
+        row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    next_row += 1
+    export_encoder_combo = combo_row("Export encoder:", 34)
+    export_encoder_combo.set("Detecting encoders...")
+    export_choices = [setup.encoders.X264]
+    tk.Label(frame, text="Hardware is faster, but makes bigger files. If it fails, the export uses x264 instead.",
+             fg=dark_theme.MUTED).grid(row=next_row, column=1, sticky="w", padx=(px(6), 0))
+    next_row += 1
+    quality_labels = {"best": "Best (largest files)", "high": "High", "smaller": "Smaller files"}
+    speed_labels = {"fast": "Fast", "medium": "Medium", "slow": "Slow (smaller files)"}
+    quality_combo = combo_row("Full quality export:", 20)
+    quality_combo.configure(state="readonly", values=list(quality_labels.values()))
+    quality_combo.set(quality_labels.get(saved_export.get("quality"), quality_labels["best"]))
+    speed_combo = combo_row("Encoding speed:", 20)
+    speed_combo.configure(state="readonly", values=list(speed_labels.values()))
+    speed_combo.set(speed_labels.get(saved_export.get("speed"), speed_labels["medium"]))
+    discord_mb_var = tk.StringVar(value=str(run_config.get("editor_discord_mb") or obs_config.DISCORD_TARGET_MB))
+    tk.Label(frame, text="Discord export size:").grid(row=next_row, column=0, sticky="w")
+    discord_row = tk.Frame(frame)
+    discord_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    tk.Spinbox(discord_row, textvariable=discord_mb_var, from_=1, to=500, width=5).pack(side="left")
+    tk.Label(discord_row, text="MB").pack(side="left", padx=(px(4), 0))
+    next_row += 1
+
+    section("Editor Behavior", TAB_EDITOR)
+    open_in_labels = {"last": "The last mode used", "trim": "Trim", "full": "Full Editor"}
+    open_in_combo = combo_row("Open clips in:", 20)
+    open_in_combo.configure(state="readonly", values=list(open_in_labels.values()))
+    open_in_combo.set(open_in_labels.get(run_config.get("editor_open_in"), open_in_labels["last"]))
+    sub_tracks_var = tk.BooleanVar(value=run_config.get("editor_sub_tracks", True) is not False)
+    tk.Checkbutton(frame, text="Start the Full Editor on the sub-tracks (Mic, Desktop, apps) instead of the Mix",
+                   variable=sub_tracks_var).grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+    asset_days_var = tk.StringVar(value=str(run_config.get("editor_asset_days") or 30))
+    tk.Label(frame, text="Delete unused imports after:").grid(row=next_row, column=0, sticky="w")
+    asset_row = tk.Frame(frame)
+    asset_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(2))
+    tk.Spinbox(asset_row, textvariable=asset_days_var, from_=1, to=3650, width=5).pack(side="left")
+    tk.Label(asset_row, text="days").pack(side="left", padx=(px(4), 0))
+    next_row += 1
+
+    def fill_export_encoders(options, found):
+        """options: encoders.export_options(); found: what this PC has."""
+        best = found[0] if found else (setup.encoders.X264, None)
+        usable = {encoder for encoder, _device, _label, _ffmpeg in options}
+        note = "" if best[0] in usable else " (no ffmpeg here can use it - install one with it to export with it)"
+        export_detected_var.set(setup.encoders.LABELS[best[0]] + note)
+        export_choices[:] = [encoder for encoder, _device, _label, _ffmpeg in options] or [setup.encoders.X264]
+        labels = [setup.encoders.LABELS[encoder] for encoder in export_choices]
+        export_encoder_combo.configure(state="readonly", values=labels)
+        wanted = saved_export.get("encoder", setup.encoders.X264)
+        export_encoder_combo.current(export_choices.index(wanted if wanted in export_choices
+                                                         else setup.encoders.X264))
 
     section("Appearance", TAB_TRAY)
     saved_dark, saved_colors = dark_theme.theme_from_config(run_config)
@@ -1745,7 +1820,7 @@ def open_dialog(start_tab=None, highlight=()):
             text=(
                 "Downloads ClipEm, OBS and the tray widget's packages again and replaces the "
                 "installed copies - for when something is broken or missing. Your clips aren't "
-                "touched.\n\nThis closes OBS and the tray icon - clips not saved yet are lost."
+                "touched.\n\nThis closes OBS and the tray icon - the current replay buffer is not saved."
             ),
         ).pack(anchor="w")
         keep_obs_var = tk.BooleanVar(value=True)
@@ -1908,12 +1983,24 @@ def open_dialog(start_tab=None, highlight=()):
         if values and values[0] > 0:
             # Never longer than the (possibly just changed) replay buffer.
             obs_settings["clip_reexport"].update(target_mb=values[0], crop_seconds=min(values[1], buffer_seconds))
+        editor_numbers = {}
+        for key, var, label in (("editor_discord_mb", discord_mb_var, "The Discord export size"),
+                                ("editor_asset_days", asset_days_var, "The days to keep unused imports")):
+            text = var.get().strip()
+            if not text.isdigit() or int(text) < 1:
+                popups.showerror("Clip Editor", f"{label} must be a whole number, 1 or more.", parent=root)
+                return
+            editor_numbers[key] = int(text)
+        clip_transfer = None
         if obs_settings["clip_folder"] != initial_obs_settings["clip_folder"]:
             # OBS won't start the replay buffer into a folder that isn't there.
             try:
                 os.makedirs(obs_settings["clip_folder"], exist_ok=True)
             except OSError as exc:
                 popups.showerror("Clip Folder", f"Couldn't create the clip folder: {exc}", parent=root)
+                return
+            clip_transfer = ask_clip_transfer(initial_obs_settings["clip_folder"], obs_settings["clip_folder"])
+            if clip_transfer == "cancel":
                 return
         if chosen_sound["path"]:
             # A plain file OBS's script reads on every clip - takes effect
@@ -1939,6 +2026,14 @@ def open_dialog(start_tab=None, highlight=()):
             run_config["custom_editor_path"] = editor_path_var.get().strip()
             run_config["clip_editor"] = editor_kind_var.get()
             run_config["clip_editors_disabled"] = bool(editors_off_var.get())
+            quality = next(k for k, v in quality_labels.items() if v == quality_combo.get())
+            speed = next(k for k, v in speed_labels.items() if v == speed_combo.get())
+            encoder = (export_choices[export_encoder_combo.current()] if export_encoder_combo.current() >= 0
+                       else saved_export.get("encoder", setup.encoders.X264))
+            run_config["editor_export"] = {"encoder": encoder, "quality": quality, "speed": speed}
+            run_config.update(editor_numbers)
+            run_config["editor_open_in"] = next(k for k, v in open_in_labels.items() if v == open_in_combo.get())
+            run_config["editor_sub_tracks"] = bool(sub_tracks_var.get())
             for key, var in menu_item_vars.items():  # read by the tray menu
                 run_config[key] = bool(var.get())
             appearance = (bool(dark_mode_var.get()), custom_colors())
@@ -1960,6 +2055,77 @@ def open_dialog(start_tab=None, highlight=()):
         except Exception as exc:
             popups.showerror("Save Failed", f"Couldn't save settings: {exc}")
             return
+        if clip_transfer:
+            run_clip_transfer(clip_transfer, initial_obs_settings["clip_folder"], obs_settings["clip_folder"],
+                              lambda: finish_save(outcome))
+        else:
+            finish_save(outcome)
+
+    def ask_clip_transfer(old, new):
+        """What to do with the clips left in the old folder: "move", "copy",
+        None (leave them), or "cancel" (don't save yet)."""
+        if clip_move.same_folder(old, new):
+            return None
+        clips = clip_move.list_clips(old)
+        if not clips:
+            return None
+        size = clip_move.bytes_needed(clips) / 1e9
+        choice = popups.askchoice(
+            "Clip Folder",
+            f"Your old clip folder has {len(clips)} clip file{'' if len(clips) == 1 else 's'} ({size:.1f} GB):\n"
+            f"{old}\n\nMove them to the new folder, copy them there, or leave them where they are?",
+            [("Move", "move"), ("Copy", "copy"), ("Leave Them", "leave"), ("Cancel", "cancel")], "move", parent=root)
+        if choice in (None, "cancel"):
+            return "cancel"
+        if choice == "leave":
+            return None
+        problem = clip_move.room_problem(clips, new, choice == "move")
+        if problem:
+            popups.showerror("Clip Folder", problem, parent=root)
+            return "cancel"
+        return choice
+
+    def run_clip_transfer(action, old, new, done):
+        """Moves or copies the clips behind a status line, then done()."""
+        for child in button_frame.winfo_children():
+            child.config(state="disabled")
+        doing = "Moving" if action == "move" else "Copying"
+        shared = {"bytes": 0, "total": 0, "running": True}
+        status_var.set(f"{doing} clips...")
+
+        def show_progress():
+            if not shared["running"]:
+                return
+            if shared["total"]:
+                status_var.set(f"{doing} clips... {shared['bytes'] * 100 // shared['total']}%")
+            root.after(200, show_progress)
+
+        def work():
+            def progress(count, total):
+                shared.update(bytes=count, total=total)
+
+            return clip_move.transfer(old, new, action == "move", os.path.join(APP_DIR, "cache", "edits"),
+                                      os.path.join(APP_DIR, "cache", "exports.json"), progress)
+
+        def finished(result, exc):
+            shared["running"] = False
+            status_var.set("")
+            if exc is not None:
+                popups.showwarning("Clip Folder", f"Couldn't finish: {exc}", parent=root)
+            elif result["skipped"] or result["failed"]:
+                lines = [f"{len(result['skipped'])} already in the new folder, so left where they are."
+                         if result["skipped"] else ""]
+                lines += [f"{name}: {why}" for name, why in result["failed"][:5]]
+                popups.showwarning("Clip Folder", f"{result['done']} done.\n" + "\n".join(filter(None, lines)),
+                                   parent=root)
+            for child in button_frame.winfo_children():
+                child.config(state="normal")
+            done()
+
+        run_in_background(root, work, finished)
+        root.after(200, show_progress)
+
+    def finish_save(outcome):
         if outcome == "unchanged":
             root.destroy()
             return

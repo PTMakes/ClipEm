@@ -157,6 +157,44 @@ def pid_alive(pid):
     return True
 
 
+def _windows_process_start(pid):
+    """When a process started, in seconds since the epoch; None if unknown."""
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.OpenProcess.restype = wintypes.HANDLE
+    kernel32.GetProcessTimes.argtypes = (wintypes.HANDLE,) + (ctypes.c_void_p,) * 4
+    kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    handle = kernel32.OpenProcess(0x1000, False, pid)  # PROCESS_QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        times = [wintypes.FILETIME() for _ in range(4)]
+        if not kernel32.GetProcessTimes(handle, *(ctypes.byref(t) for t in times)):
+            return None
+    finally:
+        kernel32.CloseHandle(handle)
+    ticks = (times[0].dwHighDateTime << 32) | times[0].dwLowDateTime  # 100 ns since 1601
+    return ticks / 10_000_000 - 11644473600
+
+
+def holds_lock(pid, lock_path, process_start=None):
+    """Whether pid, read from lock_path, is really the process that wrote it.
+    Windows reuses PIDs soon, so after an unclean exit and a reboot the pid can
+    be some system process: one started after the lock was written isn't its
+    writer, and left standing it would block every launch from then on."""
+    if not pid_alive(pid):
+        return False
+    if sys.platform != "win32" and process_start is None:
+        return True
+    started = (process_start or _windows_process_start)(pid)
+    try:
+        return started is None or started <= os.path.getmtime(lock_path) + 2  # file times are coarse
+    except OSError:
+        return False
+
+
 def release_instance_lock(lock_path):
     """Removes lock_path if this process holds it (not if a newer instance
     has taken it over since)."""
@@ -401,7 +439,7 @@ def acquire_instance_lock(lock_path):
             old_pid = int(f.read().strip())
     except (ValueError, OSError):
         old_pid = None
-    if old_pid and old_pid != os.getpid() and pid_alive(old_pid):
+    if old_pid and old_pid != os.getpid() and holds_lock(old_pid, lock_path):
         return False
 
     with open(lock_path, "w", encoding="utf-8") as f:

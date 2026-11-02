@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 
 import pytest
 
@@ -463,3 +464,90 @@ def test_no_settings_tab_overflows_or_scrolls(fake_obs_config, monkeypatch):
     except tk.TclError:
         pytest.skip("no display")
     assert _tab_overflow(monkeypatch) == {}
+
+
+def _button(root, text):
+    import tkinter as tk
+
+    return next(w for w in _widgets(root) if isinstance(w, tk.Button) and w.cget("text") == text)
+
+
+def _save_with_a_new_clip_folder(monkeypatch, tmp_path, choice):
+    """Presses Default, then Save, answering the clip folder question."""
+    old, new = tmp_path / "old-clips", tmp_path / "new-clips"
+    old.mkdir()
+    (old / "a.mp4").write_bytes(b"clip")
+    monkeypatch.setattr(settings_dialog.obs_config, "load_clip_folder", lambda: str(old))
+    monkeypatch.setattr(settings_dialog.obs_config, "DEFAULT_CLIPS_DIR", str(new))
+    monkeypatch.setattr(settings_dialog, "APP_DIR", str(tmp_path))
+    asked, saved = [], []
+    monkeypatch.setattr(settings_dialog.popups, "askchoice",
+                        lambda title, message, buttons, default, parent=None: asked.append(message) or choice)
+    monkeypatch.setattr(settings_dialog, "save_obs_settings", lambda obs, initial: saved.append(obs) or "applied")
+    monkeypatch.setattr(settings_dialog.popups, "showinfo", lambda *args, **kwargs: None)
+
+    def look(root):
+        root.layout["show_tab"]("Clip Output")
+        root.update()
+        _button(root, "Default").invoke()
+        _button(root, "Save").invoke()
+        for _ in range(100):
+            if not root.winfo_exists():
+                return
+            root.update()
+            time.sleep(0.01)
+
+    import tkinter as tk
+
+    try:
+        _in_settings(monkeypatch, look)
+    except tk.TclError:
+        pass  # Save closed the window
+    return old, new, asked, saved
+
+
+@pytest.mark.parametrize("choice, stays, arrives", [("move", False, True), ("copy", True, True), ("leave", True, False)])
+def test_a_new_clip_folder_offers_the_old_ones_clips(fake_obs_config, monkeypatch, tmp_path, choice, stays, arrives):
+    old, new, asked, saved = _save_with_a_new_clip_folder(monkeypatch, tmp_path, choice)
+    assert len(asked) == 1 and "1 clip file" in asked[0] and saved
+    assert (old / "a.mp4").exists() is stays and (new / "a.mp4").exists() is arrives
+
+
+def test_cancelling_the_clip_folder_question_saves_nothing(fake_obs_config, monkeypatch, tmp_path):
+    old, new, asked, saved = _save_with_a_new_clip_folder(monkeypatch, tmp_path, "cancel")
+    assert asked and not saved and (old / "a.mp4").exists() and not (new / "a.mp4").exists()
+
+
+def test_editor_settings_are_on_the_clip_editor_page_and_saved(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def look(root):
+        root.layout["show_tab"]("Clip Editor")
+        root.update()
+        seen["labels"] = {w.cget("text") for w in _widgets(root) if isinstance(w, tk.Label) and w.winfo_ismapped()}
+        monkeypatch.setattr(settings_dialog, "save_obs_settings", lambda obs, initial: "unchanged")
+        _button(root, "Save").invoke()
+
+    try:
+        _in_settings(monkeypatch, look)
+    except tk.TclError:
+        pass  # Save closed the window
+    assert {"Editor Exports", "Editor Behavior", "Export encoder:", "Detected encoder:", "Open clips in:",
+            "Discord export size:", "Delete unused imports after:"} <= seen["labels"]
+    config = settings_dialog.load_run_config()
+    assert config["editor_export"] == {"encoder": "x264", "quality": "best", "speed": "medium"}
+    assert config["editor_sub_tracks"] is True and config["editor_open_in"] == "last"
+    assert config["editor_discord_mb"] == 20 and config["editor_asset_days"] == 30
+
+
+def test_a_request_can_open_a_page(fake_obs_config, monkeypatch):
+    opened = []
+    monkeypatch.setattr(sys, "argv", ["settings_dialog.py", "--highlight", "tab=Clip Editor"])
+    monkeypatch.setattr(settings_dialog, "exit_with_parent", lambda pid: None)
+    monkeypatch.setattr(settings_dialog, "acquire_instance_lock", lambda path: True)
+    monkeypatch.setattr(settings_dialog, "ensure_desktop_entry", lambda: None)
+    monkeypatch.setattr(settings_dialog, "open_dialog", lambda tab=None, highlight=(): opened.append(tab))
+    settings_dialog.main()
+    assert opened == ["Clip Editor"]

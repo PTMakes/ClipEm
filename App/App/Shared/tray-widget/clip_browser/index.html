@@ -31,6 +31,7 @@
       </div>
       <div class="spacer"></div>
       <span id="status" role="status"></span>
+      <button id="open-settings" title="Open ClipEm Settings">Settings</button>
       <button id="undo" title="Undo (Ctrl+Z)" disabled>Undo</button>
       <button id="redo" title="Redo (Ctrl+Shift+Z)" disabled>Redo</button>
       <button id="reset" title="Undo every edit to this clip" disabled>Reset</button>
@@ -97,19 +98,17 @@
         <button id="play" class="icon" title="Play / pause (Space)" aria-label="Play">&#9654;</button>
         <span id="time" class="mono"></span>
         <span id="kept-length" class="muted"></span>
-        <div id="mode" role="group" aria-label="Editing mode">
-          <button id="mode-trim" class="toggle" title="Trim the clip: just the video and the Mix track">Trim</button>
-          <button id="mode-multi" class="toggle" title="Edit every track, add video and audio tracks, and import files">Multi-track</button>
-        </div>
         <div id="layer-tools" hidden>
-          <button id="add-video">+ Video track</button>
-          <button id="add-audio" title="Add an empty audio track">+ Audio track</button>
           <button id="import" title="Add a video, picture or sound file at the playhead - or drop files here">Import...</button>
           <button id="show-assets" class="toggle" title="Everything you've imported">Assets</button>
           <input id="import-file" type="file" multiple hidden accept="video/*,audio/*,image/*,.mkv,.flv">
         </div>
         <div class="spacer"></div>
         <span class="muted hint" title="Hold Alt while dragging on a stereo track to select just its left (top) or right (bottom) channel - a volume change there only affects that side.">Drag on the timeline to select &middot; drag the handles to trim &middot; Alt-drag a stereo track for one channel</span>
+        <div id="mode" role="group" aria-label="Editing mode">
+          <button id="mode-trim" class="toggle" title="Trim the clip: just the video and the Mix track">Trim</button>
+          <button id="mode-multi" class="toggle" title="Edit every track, add video and audio tracks, and import files">Full Editor</button>
+        </div>
       </div>
       <div id="timeline-scroll">
         <div id="timeline"></div>

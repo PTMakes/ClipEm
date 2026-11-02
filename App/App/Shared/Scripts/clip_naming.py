@@ -96,10 +96,9 @@ def date_text(settings, when):
 
 
 def date_parts(date_format):
-    """The six DATE_PARTS codes in a date format's order, any it doesn't have
-    after them. Anything else in it (a saved "dd.MM.yyyy"'s dots) goes."""
-    found = (_SAME_DATE_PART.get(code, code) for code in _ANY_DATE_CODE.findall(date_format))
-    return list(dict.fromkeys([*found, *(code for code, _label in DATE_PARTS)]))
+    """The DATE_PARTS codes a date format has, in its order. Anything else in
+    it (a saved "dd.MM.yyyy"'s dots) goes."""
+    return list(dict.fromkeys(_SAME_DATE_PART.get(code, code) for code in _ANY_DATE_CODE.findall(date_format)))
 
 
 def upgrade(saved):
@@ -150,7 +149,9 @@ def validate(settings):
             return "The starting number can't be negative, and numbers are padded to at most 12 digits."
         if settings["date"]:
             sample = format_date(datetime.datetime(2026, 1, 2, 3, 4, 5), settings["date_format"])
-            if not sample.strip() or sample == settings["date_format"]:
+            if not sample.strip():
+                return "Pick at least one part of the date, or turn Date and time off."
+            if sample == settings["date_format"]:
                 return "The date format doesn't contain any date or time codes (like yyyy or hh)."
         suffixes = (settings["small_suffix"], settings["tracks_suffix"], settings["extra_suffix"])
         if not all(suffixes) or len(set(suffixes)) != len(suffixes):

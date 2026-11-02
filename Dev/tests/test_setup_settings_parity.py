@@ -34,6 +34,11 @@ OBS_SETTINGS = {
 }
 # Only in Settings: name -> why.
 SETTINGS_ONLY = {
+    "editor_export": "How ClipEm's editor exports: asked for where it matters, not in Setup",
+    "editor_discord_mb": "Likewise",
+    "editor_open_in": "Likewise",
+    "editor_sub_tracks": "Likewise",
+    "editor_asset_days": "Likewise",
     "dark_mode": "Appearance: nothing to choose before ClipEm has been used",
     "custom_colors": "Appearance: nothing to choose before ClipEm has been used",
 }

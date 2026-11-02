@@ -293,7 +293,7 @@ def test_export_needs_a_new_enough_ffmpeg(server, editor):
 def test_export_starts_the_job_with_safe_names(server, editor, monkeypatch):
     started = []
     monkeypatch.setattr(editor.export_job, "start",
-                        lambda steps, outputs, total, cleanup=(), on_done=None: started.append((steps, outputs, total)))
+                        lambda steps, outputs, total, cleanup=(), on_done=None, fallback=None: started.append((steps, outputs, total)))
     clips = server.folder_fn()
     open(os.path.join(clips, "a-edit.mp4"), "w").close()
     status, _h, _body = _post(server, "api/export", {"name": "a.mp4", "preset": "full"})
@@ -394,7 +394,7 @@ def test_exports_point_back_to_their_clip(tmp_path):
 
 def test_export_as_goes_where_picked_and_can_be_shown(server, editor, tmp_path, monkeypatch):
     started = []
-    monkeypatch.setattr(editor.export_job, "start", lambda steps, outputs, total, cleanup=(), on_done=None:
+    monkeypatch.setattr(editor.export_job, "start", lambda steps, outputs, total, cleanup=(), on_done=None, fallback=None:
                         started.append((outputs, on_done)))
     monkeypatch.setattr(editor, "exports_path", str(tmp_path / "exports.json"))
     elsewhere = tmp_path / "elsewhere"

@@ -5,6 +5,7 @@ import json
 import sys
 import types
 
+import pytest
 from conftest import TRAY_WIDGET_DIR
 
 sys.modules.setdefault("websocket", types.ModuleType("websocket"))  # obsws_client's only dependency
@@ -197,3 +198,103 @@ def test_the_monitor_leaves_streams_alone_when_clips_arent_named_after_apps():
                                         names_clips=lambda: False, publish=published.append)
     monitor.tick()
     assert published == [None]
+
+
+def _window(app, fullscreen=False, active=False, title="", pid=None):
+    return {"pid": pid, "app": app, "title": title, "screen": "DP-1", "fullscreen": fullscreen, "active": active}
+
+
+def test_a_fullscreen_game_beats_everything_even_silent():
+    active = app_audio.ActiveApp()
+    streams = [_stream("spotify", "Spotify"), _stream("firefox", "Firefox"), _stream("other", "Other App")]
+    assert active.update(streams, 0, [_window("mygame", fullscreen=True)]) == "mygame"
+
+
+def test_a_focused_window_with_sound_beats_sound_alone():
+    active = app_audio.ActiveApp()
+    streams = [_stream("other", "Other App"), _stream("mygame", "My Game")]
+    assert active.update(streams, 0, [_window("mygame", active=True)]) == "My Game"
+
+
+def test_a_silent_focused_window_beats_music_but_not_another_app_playing():
+    active = app_audio.ActiveApp()
+    assert active.update([_stream("spotify", "Spotify")], 0, [_window("mygame", active=True)]) == "mygame"
+    assert active.update([_stream("firefox", "Firefox")], 1, [_window("mygame", active=True)]) == "mygame"
+    assert active.update([_stream("other", "Other App")], 2, [_window("mygame", active=True)]) == "Other App"
+
+
+@pytest.mark.parametrize("app", ["discord", "spotify"])
+def test_clicking_on_chat_doesnt_make_it_the_game(app):
+    active = app_audio.ActiveApp()
+    streams = [_stream(app, app.title()), _stream("mygame", "My Game")]
+    assert active.update(streams, 0, [_window(app, active=True)]) == "My Game"
+
+
+def test_a_focused_silent_browser_isnt_what_a_clip_is_of():
+    assert app_audio.ActiveApp().update([], 0, [_window("firefox", active=True)]) is None
+
+
+@pytest.mark.parametrize("app", ["plasmashell", "krunner", "obs", "clipem-editor"])
+def test_the_desktop_and_clipem_arent_apps(app):
+    assert app_audio.ActiveApp().update([], 0, [_window(app, fullscreen=True, active=True)]) is None
+
+
+def test_a_protons_window_is_named_by_its_title():
+    active = app_audio.ActiveApp()
+    streams = [_stream("wine64-preloader", "wine64-preloader")._replace(pid=7)]
+    windows = [_window("steam_app_1422450", fullscreen=True, title="Deadlock", pid=7)]
+    assert active.update(streams, 0, windows) == "Deadlock"
+
+
+def test_a_window_and_its_sound_are_matched_by_process():
+    active = app_audio.ActiveApp()
+    streams = [_stream("other", "Other App"), _stream("gamebin", "Nice Name")._replace(pid=7)]
+    assert active.update(streams, 0, [_window("org.studio.game", active=True, pid=7)]) == "Nice Name"
+
+
+def test_a_windows_class_is_shortened_when_nothing_else_names_it():
+    assert app_audio.ActiveApp().update([], 0, [_window("org.kde.dolphin", active=True)]) == "dolphin"
+
+
+def test_of_two_fullscreen_windows_the_one_seen_last_wins():
+    active = app_audio.ActiveApp()
+    active.update([], 0, [_window("first", fullscreen=True)])
+    assert active.update([], 5, [_window("second", fullscreen=True)]) == "second"
+
+
+def test_of_two_fullscreen_windows_seen_together_the_top_one_wins():
+    windows = [_window("bottom", fullscreen=True), _window("top", fullscreen=True)]
+    assert app_audio.ActiveApp().update([], 0, windows) == "top"
+
+
+def test_a_window_can_ask_to_go_by_its_title():
+    windows = [{**_window("cs2", fullscreen=True, title="Counter-Strike 2"), "use_title": True}]
+    assert app_audio.ActiveApp().update([_stream("cs2", "cs2")], 0, windows) == "Counter-Strike 2"
+
+
+@pytest.mark.parametrize("app", ["explorer", "applicationframehost", "searchhost"])
+def test_the_windows_shell_isnt_an_app(app):
+    assert app_audio.ActiveApp().update([], 0, [_window(app, active=True)]) is None
+
+
+def test_a_fullscreen_game_lasts_through_an_alt_tab_but_not_for_ever():
+    active = app_audio.ActiveApp()
+    active.update([], 0, [_window("mygame", fullscreen=True)])
+    streams = [_stream("spotify", "Spotify")]
+    assert active.update(streams, app_audio.ACTIVE_HOLD_SECONDS, []) == "mygame"
+    assert active.update(streams, app_audio.ACTIVE_HOLD_SECONDS + 1, []) == "Spotify"
+
+
+def test_the_monitor_ranks_what_is_on_screen():
+    published = []
+    monitor = app_audio.AppTrackMonitor(FakeRecorder(), list_streams=lambda: [_stream("spotify", "Spotify")],
+                                        enabled=lambda: False, names_clips=lambda: True, publish=published.append,
+                                        windows=lambda: [_window("mygame", fullscreen=True)])
+    monitor.tick()
+    assert published == ["mygame"]
+
+
+def test_streams_know_their_process():
+    text = json.dumps([{"index": 1, "corked": False, "properties": {
+        "application.process.binary": "game", "application.process.id": "4242"}}])
+    assert app_audio.parse_pactl_streams(text)[0].pid == 4242

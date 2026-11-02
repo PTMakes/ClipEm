@@ -822,9 +822,40 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
 
 /* Trim / Multi-track, and what Multi-track adds. */
 #mode, #layer-tools { display: flex; align-items: center; gap: 4px; }
-#mode button { line-height: 24px; }
+#mode button { padding: 0 10px; line-height: 24px; }
 #layer-tools[hidden] { display: none; }
 #layer-tools button { padding: 0 8px; line-height: 24px; font-size: 12px; }
+
+/* The playhead bar's row has room for it, beside the bar. */
+.scrub-row { align-items: end; }
+button.add-track { align-self: flex-start; padding: 0 8px; font-size: 12px; line-height: 20px; }
+.add-track-row { margin-top: 2px; }
+button.remove-track { align-self: flex-start; padding: 0 8px; font-size: 12px; line-height: 20px; }
+button.remove-track:hover:not(:disabled) { background: var(--cut); border-color: var(--cut); color: #fff; }
+
+/* Mix or Desktop left for its sub-tracks: its name and the way back. */
+.collapsed-row .row-head { flex-direction: row; align-items: center; justify-content: flex-start; gap: 8px; }
+.collapsed-row .title-line { flex: none; }
+.collapsed-row .shift-line > span { display: none; } /* "Use": room for the buttons */
+.collapsed-row button { white-space: nowrap; }
+
+input[type="number"] {
+  box-sizing: border-box;
+  width: 46px;
+  padding: 1px 4px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--lane);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+input[type="number"]:focus { outline: 1px solid var(--accent); }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 .layer-title {
   flex: 1;
@@ -926,12 +957,10 @@ button.toggle[aria-pressed="true"] { background: var(--accent); border-color: va
   background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.28) 0 4px, transparent 4px 8px);
   pointer-events: none;
 }
-.shift-line input[type="number"] { width: 62px; }
 .asset-row { display: inline-flex; align-items: center; gap: 2px; }
 
 .item-field { display: inline-flex; align-items: center; gap: 4px; }
 .item-field input[type="range"] { width: 90px; }
-.item-field input[type="number"] { width: 58px; }
 button.asset { max-width: 280px; overflow: hidden; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 /* The track whose effects the panel shows. */

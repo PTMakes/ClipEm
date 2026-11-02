@@ -597,7 +597,7 @@ def _ask_about_update(changes, notes=""):
     tkinter.Label(
         frame, justify="left",
         text=("Updating keeps all of your settings. Restarting closes and reopens\n"
-              "OBS and the tray icon - clips not saved yet are lost."),
+              "OBS and the tray icon - the current replay buffer is not saved."),
     ).pack(anchor="w", pady=(0, 12))
     for text, value in (
         ("Update and restart now", UPDATE_NOW),

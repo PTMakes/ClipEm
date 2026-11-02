@@ -68,16 +68,21 @@ import clip_edit  # noqa: E402
 import clip_naming  # noqa: E402 - Scripts/clip_naming.py
 import editor_install  # noqa: E402
 import editor_window  # noqa: E402
+import encoders  # noqa: E402
 import obs_config  # noqa: E402
 import obs_install  # noqa: E402
 import ui_colors  # noqa: E402
 from autostart import applications_dir, window_desktop_entry, write_window_desktop_entry  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
+    SETTINGS_REQUEST_PATH,
+    TRAY_LOCK_PATH,
     acquire_instance_lock,
     exit_with_parent,
+    is_tray_widget_process,
     load_json,
     load_run_config,
+    pid_alive,
     release_instance_lock,
     setup_logging,
     write_json_atomic,
@@ -104,8 +109,11 @@ EDITS_DIR = os.path.join(CACHE_DIR, "edits")
 # it is (clip_edit.probe_asset) - projects keep working if the original moves.
 ASSETS_DIR = os.path.join(CACHE_DIR, "assets")
 ASSET_ID_RE = re.compile(r"^[0-9a-f]{32}\.[a-z0-9]{2,5}$")
-# An import no saved edit uses goes after this long (prune_assets).
+# An import no saved edit uses goes after this long (prune_assets), unless
+# Settings says otherwise.
 ASSET_KEEP_DAYS = 30
+EDITOR_SETTINGS_TAB = "Clip Editor"
+OPEN_IN = ("last", "trim", "full")
 TRACK_AUDIO_DIR = os.path.join(CACHE_DIR, "track-audio")
 PEAKS_DIR = os.path.join(CACHE_DIR, "peaks")
 PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
@@ -389,6 +397,18 @@ class Editor:
                 f in self._features() for f in clip_edit.CHANNEL_FILTERS)
         return self._can_channels
 
+    def export_choice(self):
+        """Settings' export choices, with the encoder's device and ffmpeg
+        if this PC still has it (a GPU can be swapped) - else x264."""
+        saved = load_run_config().get("editor_export")
+        export = clip_edit.normalize_export(saved)
+        wanted = saved.get("encoder") if isinstance(saved, dict) else None
+        if wanted and wanted != encoders.X264 and self.ffmpeg:
+            for encoder, device, _label, ffmpeg in encoders.export_options(self.ffmpeg):
+                if encoder == wanted:
+                    export.update(encoder=encoder, device=device, ffmpeg=ffmpeg)
+        return export
+
     def can_layer(self):
         """Whether it has what added video tracks and fades of the picture need."""
         return bool(self.ffmpeg) and all(f in self._features() for f in clip_edit.LAYER_FILTERS)
@@ -627,6 +647,9 @@ class Editor:
             project["solo"] = [index for index in solo if isinstance(index, int) and not isinstance(index, bool)]
         stem = os.path.splitext(os.path.basename(clip_path))[0]
         name = clip_edit.clean_name(out_name)
+        export = self.export_choice()
+        plain = dict(export, encoder=encoders.X264, device=None, ffmpeg=None)  # what a failed hardware export falls back on
+        fallback = None
         exact = name if name and name != stem else None
         if preset == "custom":
             custom = custom or {}
@@ -640,13 +663,20 @@ class Editor:
                 mp4 = clip_edit.unique_path(folder, exact or f"{stem}-{label}", ".mp4")
             partial = os.path.join(os.path.dirname(mp4), f".{os.path.basename(mp4)}.partial")
             os.makedirs(CACHE_DIR, exist_ok=True)
-            steps = clip_edit.two_pass_commands(self.ffmpeg, source, project, info, settings, partial, PASSLOG_PATH)
+            steps = clip_edit.two_pass_commands(self.ffmpeg, source, project, info, settings, partial, PASSLOG_PATH,
+                                                export)
+            fallback = clip_edit.two_pass_commands(self.ffmpeg, source, project, info, settings, partial,
+                                                   PASSLOG_PATH, plain)
             outputs, cleanup = {partial: mp4}, [PASSLOG_PATH]
         elif preset == "discord":
             mp4 = clip_edit.unique_path(folder, exact or f"{stem}-discord", ".mp4")
             partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
             os.makedirs(CACHE_DIR, exist_ok=True)
-            steps = clip_edit.discord_commands(self.ffmpeg, source, project, info, partial, PASSLOG_PATH)
+            target_mb = discord_target_mb()
+            steps = clip_edit.discord_commands(self.ffmpeg, source, project, info, partial, PASSLOG_PATH, export,
+                                               target_mb)
+            fallback = clip_edit.discord_commands(self.ffmpeg, source, project, info, partial, PASSLOG_PATH, plain,
+                                                  target_mb)
             outputs, cleanup = {partial: mp4}, [PASSLOG_PATH]
         else:
             mp4 = clip_edit.unique_path(folder, exact or f"{stem}-edit", ".mp4")
@@ -654,14 +684,18 @@ class Editor:
             mkv = clip_naming.tracks_path(os.path.join(folder, mp4_stem + ".mp4"))
             mp4_partial = os.path.join(folder, f".{os.path.basename(mp4)}.partial")
             mkv_partial = os.path.join(folder, f".{os.path.basename(mkv)}.partial")
-            steps = clip_edit.full_quality_commands(self.ffmpeg, source, project, info, mkv_partial, mp4_partial)
+            steps = clip_edit.full_quality_commands(self.ffmpeg, source, project, info, mkv_partial, mp4_partial,
+                                                    export)
+            fallback = clip_edit.full_quality_commands(self.ffmpeg, source, project, info, mkv_partial, mp4_partial,
+                                                       plain)
             outputs = {mp4_partial: mp4}
             if clip_edit.is_multitrack(project, info):
                 outputs[mkv_partial] = mkv
             cleanup = []
         log.info(f"Exporting {os.path.basename(clip_path)} ({preset}) to {', '.join(outputs.values())}")
         self.export_job.start(steps, outputs, clip_edit.kept_duration(project), cleanup=cleanup,
-                              on_done=lambda files: self.record_export(clip_path, files))
+                              on_done=lambda files: self.record_export(clip_path, files),
+                              fallback=fallback if export["encoder"] != encoders.X264 else None)
         return self.export_job.status
 
 
@@ -686,6 +720,42 @@ def export_as_target(path, clip_path, source):
     return path
 
 
+def discord_target_mb():
+    """Settings' size for "Export for Discord"."""
+    size = load_run_config().get("editor_discord_mb")
+    return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else clip_edit.DISCORD_TARGET_MB
+
+
+def editor_options():
+    """What Settings > Clip Editor tells the page."""
+    config = load_run_config()
+    return {"open_in": config.get("editor_open_in") if config.get("editor_open_in") in OPEN_IN else "last",
+            "sub_tracks": config.get("editor_sub_tracks", True) is not False}
+
+
+def asset_keep_days():
+    days = load_run_config().get("editor_asset_days")
+    return days if isinstance(days, int) and not isinstance(days, bool) and days > 0 else ASSET_KEEP_DAYS
+
+
+def tray_running():
+    try:
+        with open(TRAY_LOCK_PATH, encoding="utf-8") as f:
+            pid = int(f.read().strip())
+    except (OSError, ValueError):
+        return False
+    return pid_alive(pid) and is_tray_widget_process(pid)
+
+
+def open_settings():
+    """Has the tray widget open Settings on the editor's page - only it has
+    what Settings needs to run, on every platform. False if it isn't running."""
+    if not tray_running():
+        return False
+    write_text_atomic(SETTINGS_REQUEST_PATH, f"tab={EDITOR_SETTINGS_TAB}")
+    return True
+
+
 def public_asset(asset):
     """An asset as the page sees it: not where it's kept."""
     return {key: value for key, value in asset.items() if key != "path"}
@@ -703,9 +773,11 @@ def project_payload(clip, source, info, project, missing):
                         "channels": clip_edit.channel_count(info, t["index"])} for t in info["audio"]],
         },
         "project": project,
-        "discord": clip_edit.discord_settings(clip_edit.cropped_info(info, project), clip_edit.kept_duration(project)),
+        "discord": clip_edit.discord_settings(clip_edit.cropped_info(info, project), clip_edit.kept_duration(project),
+                                              discord_target_mb()),
         "custom": clip_edit.custom_options(clip_edit.cropped_info(info, project)),
         "missing": missing,
+        "editor": editor_options(),
     }
 
 
@@ -1122,8 +1194,14 @@ class Handler(BaseHTTPRequestHandler):
                     # The export options follow the crop (a cropped clip is smaller).
                     sized = clip_edit.cropped_info(info, project)
                     self._json({"project": project,
-                                "discord": clip_edit.discord_settings(sized, clip_edit.kept_duration(project)),
+                                "discord": clip_edit.discord_settings(sized, clip_edit.kept_duration(project),
+                                                                      discord_target_mb()),
                                 "custom": clip_edit.custom_options(sized)})
+            elif route == "api/settings":
+                if open_settings():
+                    self._json({"ok": True})
+                else:
+                    self._json({"error": "Settings opens from ClipEm's tray icon, which isn't running."}, 409)
             elif route == "api/asset-delete":
                 try:
                     self.server.editor.remove_asset(body.get("id"))
@@ -1456,7 +1534,7 @@ def main():
             signal.signal(signum, lambda _sig, _frame: threading.Thread(
                 target=quit_editor, args=(server,), daemon=True).start())
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    threading.Thread(target=server.editor.prune_assets, args=(ASSET_KEEP_DAYS,), daemon=True).start()
+    threading.Thread(target=server.editor.prune_assets, args=(asset_keep_days(),), daemon=True).start()
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:

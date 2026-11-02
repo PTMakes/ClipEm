@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 from conftest import TRAY_WIDGET_DIR
@@ -943,3 +944,96 @@ def test_an_intro_before_the_moved_clip_exports_with_real_ffmpeg(tmp_path):
     assert near(_pixel(ffmpeg, mp4, 2.8), (254, 0, 0))  # the clip, once the intro has ended
     assert near(_pixel(ffmpeg, mp4, 3.6), (254, 0, 0))  # the slide hasn't reached the middle
     assert near(_pixel(ffmpeg, mp4, 4.7), (0, 0, 254))  # and now it has
+
+
+X264 = dict(clip_edit.DEFAULT_EXPORT)
+
+
+@pytest.mark.parametrize("export, kbps, expected", [
+    ({}, None, ["-c:v", "libx264", "-preset", "medium", "-crf", "16"]),
+    ({"quality": "smaller", "speed": "slow"}, None, ["-c:v", "libx264", "-preset", "slow", "-crf", "24"]),
+    ({}, 1000, ["-c:v", "libx264", "-preset", "medium", "-b:v", "1000k", "-maxrate", "1500k", "-bufsize", "2000k"]),
+    ({"encoder": "nvenc"}, None, ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", "16", "-b:v", "0"]),
+    ({"encoder": "vaapi"}, None, ["-c:v", "h264_vaapi", "-rc_mode", "CQP", "-qp", "16"]),
+    ({"encoder": "amf"}, 1000, ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "vbr_peak", "-b:v", "1000k",
+                                "-maxrate", "1500k", "-bufsize", "2000k"]),
+])
+def test_each_encoders_arguments(export, kbps, expected):
+    assert clip_edit._video_args({**X264, **export}, kbps) == expected
+
+
+def test_a_full_export_keeps_its_old_settings_by_default():
+    project = clip_edit.normalize_project({}, WIDE)
+    (cmd, _label, _weight), = clip_edit.full_quality_commands("ffmpeg", "/c.mp4", project, WIDE, "/o.mkv", "/o.mp4")
+    assert cmd[cmd.index("-c:v"):cmd.index("-c:v") + 6] == ["-c:v", "libx264", "-preset", "medium", "-crf", "16"]
+
+
+def test_a_vaapi_export_uses_its_ffmpeg_and_device_and_uploads_the_picture():
+    project = clip_edit.normalize_project({}, WIDE)
+    export = {**X264, "encoder": "vaapi", "device": "/dev/dri/renderD128", "ffmpeg": "/usr/bin/ffmpeg"}
+    (cmd, _label, _weight), = clip_edit.full_quality_commands("clipem-ffmpeg", "/c.mp4", project, WIDE, "/o.mkv",
+                                                              "/o.mp4", export)
+    assert cmd[0] == "/usr/bin/ffmpeg"
+    assert cmd.index("-vaapi_device") < cmd.index("-i")
+    assert "format=nv12,hwupload" in cmd[cmd.index("-filter_complex") + 1]
+
+
+def test_hardware_makes_one_pass_at_the_size_asked_for():
+    project = clip_edit.normalize_project({}, WIDE)
+    steps = clip_edit.discord_commands("ffmpeg", "/c.mp4", project, WIDE, "/o.mp4", "/log", {**X264, "encoder": "nvenc"},
+                                       target_mb=50)
+    assert len(steps) == 1 and "-pass" not in steps[0][0] and "h264_nvenc" in steps[0][0]
+
+
+def test_a_chosen_size_changes_a_discord_export():
+    project = clip_edit.normalize_project({}, WIDE)
+    small = clip_edit.discord_commands("ffmpeg", "/c.mp4", project, WIDE, "/o.mp4", "/log", target_mb=10)[1][0]
+    large = clip_edit.discord_commands("ffmpeg", "/c.mp4", project, WIDE, "/o.mp4", "/log", target_mb=50)[1][0]
+    rate = lambda cmd: int(cmd[cmd.index("-b:v") + 1].rstrip("k"))  # noqa: E731
+    assert rate(large) > rate(small)
+
+
+def test_a_bad_export_choice_is_the_default():
+    assert clip_edit.normalize_export({"quality": "x", "speed": 3}) == clip_edit.DEFAULT_EXPORT
+    assert clip_edit.normalize_export(None) == clip_edit.DEFAULT_EXPORT
+
+
+def test_a_project_remembers_who_chose_the_sources():
+    assert clip_edit.normalize_project({"sources": "chosen"}, WIDE)["sources"] == "chosen"
+    assert clip_edit.normalize_project({"sources": "x"}, WIDE)["sources"] is None
+
+
+class _Lines:
+    def __init__(self):
+        self.stderr = ""
+        self.stdout = iter(())
+        self.returncode = 0
+
+    def wait(self):
+        return self.returncode
+
+    def poll(self):
+        return self.returncode
+
+
+def test_a_failed_hardware_export_falls_back(tmp_path):
+    out = tmp_path / "out.partial"
+    final = tmp_path / "out.mp4"
+    ran = []
+
+    def popen(cmd, **kwargs):
+        ran.append(cmd[0])
+        proc = _Lines()
+        proc.stderr = __import__("io").StringIO("no such device")
+        if cmd[0] == "hardware":
+            proc.returncode = 1
+        else:
+            out.write_bytes(b"x")
+        return proc
+
+    job = clip_edit.ExportJob(popen=popen)
+    job.start([(["hardware"], "Encoding", 1.0)], {str(out): str(final)}, 1, fallback=[(["x264"], "Encoding", 1.0)])
+    deadline = time.monotonic() + 5
+    while job.running() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert ran == ["hardware", "x264"] and job.status["state"] == "done" and final.exists()

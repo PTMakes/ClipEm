@@ -5,17 +5,18 @@
     "sections": {
       "New Features": [
         "Clip names: drag the parts into any order, turn each one on or off, and add the game or app you were playing.",
-        "Clip editor: choose Trim mode for quick cuts on the video and Mix, or Multi-track mode for every track.",
-        "Multi-track mode adds video and audio tracks. Import videos, pictures and sound with Import or by dropping files on the tracks.",
+        "Clip editor: Trim for quick cuts on the video and Mix, or the Full Editor for every track.",
+        "The Full Editor adds video and audio tracks. Import videos, pictures and sound with Import or by dropping files on the tracks.",
         "Move, trim, split and layer items on the timeline, and set their volume, opacity, size and position. Drag pictures right on the video.",
         "Move the clip along the timeline to fit an intro before it or an outro after it.",
         "Add fade ins and outs to items, tracks and the whole picture, and crossfade or slide transitions to items.",
         "The Assets list shows what you've imported and deletes what's unused. Unused files also go by themselves after 30 days."
       ],
       "Improvements": [
+        "Game names in clips: on KDE and Windows, ClipEm now prefers the fullscreen or focused app on the screen OBS captures, so music and chat don't win.",
         "File names no longer have spaces. New clips look like Replay-2026-10-25-21-50-07-Deadlock.",
-        "The date is now six dropdowns: put year, month, day, hour, minute and second in any order.",
-        "Between Parts shows the current character, with a Reset button. It's added for you, so the name boxes and suffixes no longer need hyphens. Each clip name option has a Reset button, and your settings update automatically.",
+        "The date is now six dropdowns: put year, month, day, hour, minute and second in any order, or set any of them to None.",
+        "Between Parts shows the current character, with a Reset button. It's added for you, so the name boxes and suffixes no longer need hyphens. Reset All puts every clip name option back, and your settings update automatically.",
         "Exports include added tracks in the mix and as their own tracks in the .mkv."
       ]
     },

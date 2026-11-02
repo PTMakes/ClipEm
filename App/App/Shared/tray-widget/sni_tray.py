@@ -110,6 +110,12 @@ class _ClipEmInterface(ServiceInterface):
             threading.Thread(target=callback, args=(bool(visible),), daemon=True).start()
 
     @method()
+    def WindowsChanged(self, windows: "s"):
+        callback = self._icon.windows_changed_callback
+        if callback is not None:
+            callback(windows)  # only notes them
+
+    @method()
     def MouseMoved(self, screen: "s"):
         callback = self._icon.mouse_moved_callback
         if callback is not None:
@@ -365,6 +371,8 @@ class Icon:
         self.obs_window_callback = None
         # The name of the screen the mouse is moving on (input_activity.py).
         self.mouse_moved_callback = None
+        # The focused and fullscreen windows, as JSON (kde_windows.py).
+        self.windows_changed_callback = None
         self._sni_iface = None
         self._menu_iface = None
         self._stop_event = None

@@ -126,6 +126,11 @@ def showinfo(title, message, parent=None, **_options):
 showwarning = showerror = showinfo
 
 
+def askchoice(title, message, buttons, default, parent=None):
+    """One of buttons [(label, result)]; None for Escape or the close button."""
+    return _dialog(title, message, buttons, parent, default, None)
+
+
 def askyesno(title, message, parent=None, **_options):
     return _dialog(title, message, [("Yes", True), ("No", False)], parent, True, False)
 

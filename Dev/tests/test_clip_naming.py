@@ -199,9 +199,10 @@ def test_the_form_gives_back_what_it_was_given(form):
 @pytest.mark.parametrize("date_format, expected", [
     ("yyyyMMddhhmmss", ["yyyy", "MM", "dd", "hh", "mm", "ss"]),
     ("ssmmhhddMMyyyy", ["ss", "mm", "hh", "dd", "MM", "yyyy"]),
-    ("dd.MM.yyyy", ["dd", "MM", "yyyy", "hh", "mm", "ss"]),
-    ("%H-%M yy", ["hh", "mm", "yyyy", "MM", "dd", "ss"]),
-    ("yyyy-yyyy", ["yyyy", "MM", "dd", "hh", "mm", "ss"]),
+    ("dd.MM.yyyy", ["dd", "MM", "yyyy"]),
+    ("%H-%M yy", ["hh", "mm", "yyyy"]),
+    ("yyyy-yyyy", ["yyyy"]),
+    ("", []),
 ])
 def test_a_date_format_becomes_the_six_parts(date_format, expected):
     assert clip_naming.date_parts(date_format) == expected
@@ -232,6 +233,33 @@ def test_picking_a_date_part_in_use_swaps_the_two_dropdowns(form):
 
 def naming_labels():
     return [label for _code, label in clip_naming.DATE_PARTS]
+
+
+def test_none_can_be_picked_many_times_and_is_left_out(form):
+    shown = form()
+    shown._date_vars[3].set("None")
+    shown._date_vars[4].set("None")
+    shown._date_vars[5].set("None")
+    assert _picks(shown) == ["Year", "Month", "Day", "None", "None", "None"]
+    assert shown.get()["date_format"] == "yyyyMMdd"
+    assert clip_naming.stem(shown.get(), WHEN) == "Replay-2026-10-25"
+
+
+def test_a_part_picked_on_a_none_leaves_none_where_it_was(form):
+    shown = form(naming(date_format="yyyyMMdd"))
+    assert _picks(shown) == ["Year", "Month", "Day", "None", "None", "None"]
+    shown._date_vars[5].set("Year")
+    assert _picks(shown) == ["None", "Month", "Day", "None", "None", "Year"]
+    assert shown.get()["date_format"] == "MMddyyyy"
+
+
+def test_a_date_of_nothing_but_none_says_so(form):
+    shown = form()
+    for var in shown._date_vars:
+        var.set("None")
+    assert shown.get()["date_format"] == ""
+    assert clip_naming.validate(shown.get()) and "at least one part" in shown._preview.cget("text")
+    assert clip_naming.validate(naming(date=False, date_format="")) is None
 
 
 def test_a_date_part_swapped_back_again_is_where_it_began(form):
@@ -281,24 +309,13 @@ def test_a_real_drag_on_a_handle_reorders_the_parts(form):
     assert shown.get()["order"] == ["app", "prefix", "id", "date"]
 
 
-def _resets(shown):
-    """Every Reset button in the form, top to bottom."""
+def _buttons(widget):
     found = []
-
-    def walk(widget):
-        for child in widget.winfo_children():
-            if child.winfo_class() == "Button" and child.cget("text") == "Reset":
-                found.append(child)
-            walk(child)
-
-    walk(shown)
+    for child in widget.winfo_children():
+        if child.winfo_class() == "Button":
+            found.append(child)
+        found += _buttons(child)
     return found
-
-
-def test_a_bad_separator_is_shown(form):
-    shown = form(naming(separator="_"))
-    shown.vars["separator"].set(" ")
-    assert "Between Parts" in shown._preview.cget("text")
 
 
 @pytest.mark.parametrize("changes", [{}, {"id": "guid"}, {"id": "number"}])
@@ -322,29 +339,16 @@ def test_the_form_opens_on_a_folder_of_clips_it_named(tmp_path, changes):
         root.destroy()
 
 
-def test_every_item_has_a_reset(form):
-    assert len(_resets(form())) == 6  # the four parts, the suffixes, the separator
+def test_the_only_reset_is_reset_all(form):
+    assert [button.cget("text") for button in _buttons(form())] == ["Reset All"]
 
 
-def test_each_reset_puts_back_only_its_own_item(form):
-    changed = naming(order=["app", "date", "id", "prefix"], prefix="Clip", prefix_on=False, separator="_",
-                     date=False, date_format="ssmmhhddMMyyyy", id="guid", number_start=7, number_digits=2,
-                     app=False, small_suffix="s", tracks_suffix="t", extra_suffix="e")
-    groups = [("prefix", "prefix_on"), ("id", "number_start", "number_digits"), ("date", "date_format"), ("app",)]
-    groups += [("small_suffix", "tracks_suffix", "extra_suffix"), ("separator",)]
-    for number, keys in enumerate(groups):
-        shown = form(changed)
-        _resets(_FormOrder(shown))[number].invoke()
-        expected = dict(changed, **{key: clip_naming.DEFAULTS[key] for key in keys})
-        assert shown.get() == expected, keys
+def test_reset_all_puts_back_everything_order_too(form):
+    shown = form(naming(order=["app", "date", "id", "prefix"], prefix="Clip", prefix_on=False, separator="_",
+                        date=False, date_format="ssmm", id="guid", number_start=7, number_digits=2, app=False,
+                        small_suffix="s", tracks_suffix="t", extra_suffix="e"))
+    _buttons(shown)[0].invoke()
+    assert shown.get() == clip_naming.DEFAULTS
+    assert _picks(shown) == [label for _code, label in clip_naming.DATE_PARTS]
+    assert [shown._rows[key][2].grid_info()["row"] for key in clip_naming.PARTS] == [0, 1, 2, 3]
 
-
-class _FormOrder:
-    """A form's children with its parts in PARTS order, then the rest."""
-
-    def __init__(self, shown):
-        self.shown = shown
-
-    def winfo_children(self):
-        fields = [self.shown._rows[key][2] for key in clip_naming.PARTS]
-        return fields + [child for child in self.shown.winfo_children() if child not in fields]

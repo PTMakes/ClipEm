@@ -4,7 +4,7 @@
 // handles, a cut tool, and one lane per audio track for volume changes,
 // muting and shifting - and the exports. The project (see clip_edit.py)
 // is saved as it changes; clip_browser.py turns it into ffmpeg commands.
-// Trim mode shows the video and the Mix; Multi-track mode every track, plus
+// Trim mode shows the video and the Mix; the Full Editor every track, plus
 // added video and audio tracks (layers.js).
 //
 // Preview: the video plays muted and each audio track plays from its own
@@ -34,6 +34,8 @@ const ed = {
   showUnused: false, // lanes for app slots nothing was recorded on
   mode: "trim", // or "multi" (layers.js)
   layers: [], // the added tracks
+  sources: "auto", // whose Mix and Desktop choice this is: "auto" or "chosen" (layers.js)
+  editor: { open_in: "last", sub_tracks: true }, // Settings > Clip Editor
   clip_start: 0, // where the clip sits on the timeline
   fade_in: 0, // of the whole picture, from black
   fade_out: 0,
@@ -188,7 +190,7 @@ function loadKeep(keep) {
 
 function project() {
   return { version: 2, keep: keepRanges(), tracks: ed.tracks, master_db: ed.master_db, crop: ed.crop || null,
-    clip_start: ed.clip_start, fade_in: ed.fade_in, fade_out: ed.fade_out, layers: ed.layers };
+    sources: ed.sources, clip_start: ed.clip_start, fade_in: ed.fade_in, fade_out: ed.fade_out, layers: ed.layers };
 }
 
 // The exported video's height before any scaling: the crop's, or the clip's.
@@ -202,7 +204,8 @@ function keptLength() {
 
 function snapshot() {
   return JSON.stringify({ trim: ed.trim, cuts: ed.cuts, tracks: ed.tracks, master_db: ed.master_db,
-    crop: ed.crop || null, clip_start: ed.clip_start, fade_in: ed.fade_in, fade_out: ed.fade_out, layers: ed.layers });
+    crop: ed.crop || null, sources: ed.sources, clip_start: ed.clip_start, fade_in: ed.fade_in,
+    fade_out: ed.fade_out, layers: ed.layers });
 }
 
 function restore(snap) {
@@ -212,12 +215,14 @@ function restore(snap) {
   ed.tracks = data.tracks;
   ed.master_db = data.master_db || 0;
   ed.crop = data.crop || null;
+  ed.sources = data.sources || "auto";
   ed.clip_start = data.clip_start || 0;
   ed.fade_in = data.fade_in || 0;
   ed.fade_out = data.fade_out || 0;
   ed.layers = data.layers || [];
   ed.region = null;
   if (ed.item && !findItem(ed.item)) ed.item = null;
+  syncSources();
 }
 
 // An edit made in one go (a click) - or, with beginEdit/endEdit, one made
@@ -367,7 +372,8 @@ async function loadEditor(name) {
   ed.item = null;
   ed.showAssets = false;
   // Added tracks only show in Multi-track mode - don't hide this clip's.
-  ed.mode = ed.layers.length || ed.clip_start ? "multi" : loadMode();
+  ed.editor = data.editor || ed.editor;
+  ed.mode = ed.layers.length || ed.clip_start ? "multi" : loadMode(ed.editor.open_in);
   ed.canCrop = !!data.can_crop;
   ed.canLayer = !!data.can_layer;
   ed.discord = data.discord;
@@ -387,6 +393,10 @@ async function loadEditor(name) {
   ed.history = [];
   ed.future = [];
   ed.pending = null;
+  // Muted with no say as to who by: an edit from before there was one.
+  const muted = ed.tracks.some((t) => (t.index === 0 || t.index === DESKTOP) && t.muted);
+  ed.sources = data.project.sources || (muted ? "chosen" : "auto");
+  syncSources();
   setupAudio(name);
   renderDetails();
   for (const track of ed.info.tracks) loadPeaks(name, track.index, token);
@@ -458,7 +468,9 @@ function renderToolbar() {
 
 // Nothing changed - in one track, or (no index) in the whole clip.
 function isUnedited(index) {
-  const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && !t.muted && !t.regions.length &&
+  // The Full Editor's own choice of sub-tracks isn't an edit.
+  const auto = (t) => ed.sources === "auto" && (t.index === 0 || t.index === DESKTOP);
+  const plain = (t) => !t.volume_db && !t.offset && !hasEffects(t) && (!t.muted || auto(t)) && !t.regions.length &&
     !t.fade_in && !t.fade_out;
   if (index !== undefined) return plain(trackOf(index));
   const [start, end] = ed.trim;
@@ -479,6 +491,8 @@ function resetEdits() {
     ed.fade_out = 0;
     ed.item = null;
     ed.selection = null;
+    ed.sources = "auto";
+    syncSources();
   });
 }
 
@@ -531,7 +545,7 @@ function renderTimeline() {
   // The top video track first, as it sits over the ones below it.
   const added = (kind) => (multi ? ed.layers.filter((l) => l.kind === kind).map(layerRow) : []);
   timeline.replaceChildren(scrubRow(), ...added("video").reverse(), videoRow(),
-    ...shown.map((t) => audioRow(t.index)), ...added("audio"));
+    ...shown.map((t) => audioRow(t.index)), ...added("audio"), ...(multi ? [addAudioRow()] : []));
   for (const track of shown) drawWaveform(track.index);
   drawItemWaves();
   syncEffects();
@@ -596,7 +610,9 @@ function scrubRow() {
   lane.title = "Drag to move the playhead";
   lane.append(el("div", "playhead scrub-head"));
   lane.addEventListener("pointerdown", dragPlayhead);
-  row.append(el("div", "row-head"), lane);
+  const head = el("div", "row-head");
+  if (ed.mode === "multi") head.append(addVideoButton());
+  row.append(head, lane);
   return row;
 }
 
@@ -639,7 +655,7 @@ function scrubSeek(t) {
 function videoRow() {
   const row = el("div", "row video-row");
   const head = el("div", "row-head");
-  head.append(el("strong", null, "Video"), el("span", "muted small", "Trim & cut"));
+  head.append(el("strong", null, "Clip Video"), el("span", "muted small", "Trim & cut"));
   if (ed.mode === "multi") head.append(clipStartLine());
   const at = mark();
   if (at !== null) head.append(extraToggle(at));
@@ -712,7 +728,7 @@ function mixSourceLine() {
     const button = el("button", "toggle", label);
     button.title = title;
     button.setAttribute("aria-pressed", String(trackOf(0).muted === value));
-    button.addEventListener("click", () => change(() => { trackOf(0).muted = value; }));
+    button.addEventListener("click", () => chooseSources(() => { trackOf(0).muted = value; }));
     line.append(button);
   }
   return line;
@@ -738,7 +754,7 @@ function desktopSourceLine() {
     // with the Mix track on, neither is selected, and picking one turns the
     // Mix track off so the choice is what's heard.
     button.setAttribute("aria-pressed", String(trackOf(0).muted && trackOf(DESKTOP).muted === value));
-    button.addEventListener("click", () => change(() => {
+    button.addEventListener("click", () => chooseSources(() => {
       trackOf(0).muted = true;
       trackOf(DESKTOP).muted = value;
     }));
@@ -755,6 +771,16 @@ function audioRow(index) {
   const titleLine = el("div", "title-line");
   const title = el("strong", null, isMaster(index) ? "Mix" : trackTitle(index));
   titleLine.append(title);
+  // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo;
+  // Desktop's, with app tracks, is its Desktop Mix / App Tracks choice.
+  const desktopChoice = ed.info.split && index === DESKTOP && hasAppTracks();
+  // Left for its sub-tracks: nothing of it to edit, just the way back.
+  if (ed.mode === "multi" && track.muted && (isMaster(index) || desktopChoice)) {
+    row.classList.add("collapsed-row");
+    head.append(titleLine, isMaster(index) ? mixSourceLine() : desktopSourceLine());
+    row.append(head, el("div"));
+    return row;
+  }
   if (isMaster(index)) {
     head.title = "Mic + Desktop, as recorded.";
   } else if (outOfMix(index) && !track.muted && !ed.solo.size) {
@@ -765,7 +791,9 @@ function audioRow(index) {
   const mute = el("button", "toggle", "M");
   mute.title = "Mute this track";
   mute.setAttribute("aria-pressed", String(track.muted));
-  mute.addEventListener("click", () => change(() => { track.muted = !track.muted; }));
+  mute.addEventListener("click", () => (index === DESKTOP ? chooseSources : change)(() => {
+    track.muted = !track.muted;
+  }));
   const solo = el("button", "toggle", "S");
   solo.title = "Play - and export - only the soloed tracks";
   solo.setAttribute("aria-pressed", String(ed.solo.has(index)));
@@ -775,9 +803,6 @@ function audioRow(index) {
     renderTimeline();
     renderExportBar();
   });
-  // The Mix lane's mute is its Mix track / Sub-tracks choice, and it has no solo;
-  // Desktop's, with app tracks, is its Desktop Mix / App Tracks choice.
-  const desktopChoice = ed.info.split && index === DESKTOP && hasAppTracks();
   if (!isMaster(index)) titleLine.append(...(desktopChoice ? [solo] : [mute, solo]));
   // Mono, Noise gate and Level: set in the panel below the timeline (renderFx),
   // so the track's row keeps its height.
@@ -2171,6 +2196,7 @@ $("toggle-unused").addEventListener("click", () => {
 $("undo").addEventListener("click", undo);
 $("redo").addEventListener("click", redo);
 $("reset").addEventListener("click", resetEdits);
+$("open-settings").addEventListener("click", () => api("api/settings", {}).catch((err) => setStatus(err.message, true)));
 
 // Space always plays/pauses - even with a button, slider, dropdown or clip
 // focused - except while typing text. Captured first so nothing else sees it.

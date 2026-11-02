@@ -6,6 +6,8 @@
 #   - FFmpeg  https://github.com/FFmpeg/FFmpeg          (pinned tag + commit)
 #   - x264    https://code.videolan.org/videolan/x264   (pinned commit)
 #   - zlib    https://github.com/madler/zlib            (pinned commit, for PNG)
+#   - nv-codec-headers, AMF  (pinned commits; headers only, Windows' NVENC and
+#     AMF exports: the drivers' own DLLs are loaded when they're used)
 #
 # Targets (both fully static - no runtime dependencies on the user's system):
 #   linux-x86_64    native build
@@ -45,9 +47,11 @@ FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
 ZLIB_COMMIT="51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"  # zlib v1.3.1
+NV_HEADERS_COMMIT="f2053071ea93137255b6dcf42e9b4c9e0965a44e"
+AMF_COMMIT="57ee0cfb0e1a08d9041f77435653794c1b012be0"  # AMF v1.5.3
 # ClipEm's own build revision: bump it whenever FFMPEG_COMMON_FLAGS change, so
 # the archives get new names (and hashes) and installs pick the new build up.
-BUILD_REV="r4"
+BUILD_REV="r5"
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEV_DIR/dist/ffmpeg"
@@ -91,6 +95,8 @@ echo "=== Fetching FFmpeg $FFMPEG_TAG, x264 and zlib ==="
 fetch https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_COMMIT" "$WORK_DIR/src/ffmpeg"
 fetch https://code.videolan.org/videolan/x264.git "$X264_COMMIT" "$WORK_DIR/src/x264"
 fetch https://github.com/madler/zlib.git "$ZLIB_COMMIT" "$WORK_DIR/src/zlib"
+fetch https://github.com/FFmpeg/nv-codec-headers.git "$NV_HEADERS_COMMIT" "$WORK_DIR/src/nv-codec-headers"
+fetch https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git "$AMF_COMMIT" "$WORK_DIR/src/amf"
 
 # Guard against the tag having been moved upstream.
 tag_commit="$(git ls-remote https://github.com/FFmpeg/FFmpeg.git "refs/tags/$FFMPEG_TAG^{}" | awk '{print $1}')"
@@ -146,7 +152,8 @@ build_target() {  # <name> <host-triplet-or-empty>
     # Plain pkg-config: the distro's <host>-pkg-config wrapper overrides
     # PKG_CONFIG_LIBDIR and would miss the x264 built into $prefix.
     ffmpeg_flags+=(--target-os=mingw32 --arch=x86_64 --cross-prefix="$host-"
-      --pkg-config=pkg-config --extra-ldflags="-static -static-libgcc")
+      --pkg-config=pkg-config --extra-ldflags="-static -static-libgcc"
+      --enable-ffnvcodec --enable-nvenc --enable-amf --enable-encoder=h264_nvenc,h264_amf)
   else
     ffmpeg_flags+=(--extra-ldflags="-static" --extra-ldexeflags="-static")
   fi
@@ -158,6 +165,11 @@ build_target() {  # <name> <host-triplet-or-empty>
   (cd "$WORK_DIR/$name/zlib" \
     && CHOST="$host" CFLAGS="-O2 -fPIC" ./configure --static --prefix="$prefix" \
     && make -j"$JOBS" libz.a && make install)
+  if [[ -n "$host" ]]; then
+    make -C "$WORK_DIR/src/nv-codec-headers" PREFIX="$prefix" install
+    mkdir -p "$prefix/include/AMF"
+    cp -a "$WORK_DIR/src/amf/amf/public/include/." "$prefix/include/AMF/"
+  fi
 
   echo -e "\n=== Building FFmpeg $FFMPEG_TAG ($name) ==="
   (cd "$WORK_DIR/$name/ffmpeg" \
@@ -173,6 +185,8 @@ This ffmpeg was built for ClipEm from unmodified official sources:
   FFmpeg $FFMPEG_TAG  https://github.com/FFmpeg/FFmpeg  commit $FFMPEG_COMMIT
   x264             https://code.videolan.org/videolan/x264  commit $X264_COMMIT
   zlib             https://github.com/madler/zlib  commit $ZLIB_COMMIT
+  nv-codec-headers https://github.com/FFmpeg/nv-codec-headers  commit $NV_HEADERS_COMMIT
+  AMF              https://github.com/GPUOpen-LibrariesAndSDKs/AMF  commit $AMF_COMMIT
 Licensed under the GNU GPL (see LICENSE.txt). The exact source code is
 published next to this download as ffmpeg-$VERSION-$BUILD_REV-source.tar.gz, and the
 build script is Dev/build/build-ffmpeg.sh in the ClipEm repository.
@@ -223,7 +237,8 @@ package windows-x86_64 ffmpeg.exe "$WINDOWS_ARCHIVE"
 echo -e "\n=== Source archive (GPL) ==="
 rm -f "$SOURCE_ARCHIVE"
 tar --sort=name --owner=0 --group=0 --numeric-owner --exclude=.git \
-  -C "$WORK_DIR/src" -cf - ffmpeg x264 zlib | gzip -n > "$SOURCE_ARCHIVE"
+  --exclude=amf/Thirdparty --exclude=amf/amf/doc -C "$WORK_DIR/src" -cf - ffmpeg x264 zlib nv-codec-headers amf \
+  | gzip -n > "$SOURCE_ARCHIVE"
 echo "Wrote $SOURCE_ARCHIVE"
 
 rm -rf "$WORK_DIR/linux-x86_64" "$WORK_DIR/windows-x86_64"

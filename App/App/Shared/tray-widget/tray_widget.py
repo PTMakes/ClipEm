@@ -54,6 +54,7 @@ import editor_window  # noqa: E402
 import obs_config  # noqa: E402
 import obs_process  # noqa: E402
 import obs_window  # noqa: E402
+import win_windows  # noqa: E402
 from app_audio import AppTrackMonitor, replay_buffer_seconds  # noqa: E402
 from app_recorder import AppRecorder  # noqa: E402
 from app_window import use_windows_app_id  # noqa: E402
@@ -73,11 +74,18 @@ from clipem_common import (  # noqa: E402
 )
 from disk_space import DiskSpaceMonitor, format_size  # noqa: E402
 from input_activity import InputActivity  # noqa: E402
+from kde_windows import KdeWindows  # noqa: E402
 from mic_check import EVENT_SUBSCRIPTIONS, MicCheck  # noqa: E402
 from obs_crash import ObsCrashWatch  # noqa: E402
 from obs_notices import ObsPlugin  # noqa: E402
 from obsws_client import ObsWebSocketConnectionLost, ObsWebSocketError, connect_with_retry  # noqa: E402
-from stuck_screen import DisplayChoice, PipeWireStreamWatch, StuckScreenMonitor  # noqa: E402
+from stuck_screen import (  # noqa: E402
+    DisplayChoice,
+    PipeWireStreamWatch,
+    StuckScreenMonitor,
+    find_capture_source,
+    program_scene_name,
+)
 from tray_tracks import ClipFinisher, clip_post  # noqa: E402 - clip_post: Scripts/clip_post.py
 
 log = setup_logging("tray")
@@ -359,7 +367,8 @@ class TrayApp:
         self.disk_space = DiskSpaceMonitor(self._notify, fallback_dir=obs_config.load_clip_folder)
         self.mic_check = MicCheck(self._notify)
         self.app_recorder = AppRecorder(seconds=replay_buffer_seconds)
-        self.app_tracks = AppTrackMonitor(self.app_recorder)
+        self.kde_windows = KdeWindows(log)
+        self.app_tracks = AppTrackMonitor(self.app_recorder, windows=self._windows_source())
         self.clip_finisher = ClipFinisher(self.app_recorder)
         self.clip_folder = ClipFolderWatch(
             self._notify,
@@ -375,6 +384,18 @@ class TrayApp:
         if hasattr(self.icon, "obs_window_callback"):  # sni_tray (Linux)
             self.icon.obs_window_callback = self._on_obs_window_reported
             self.icon.mouse_moved_callback = self.input_activity.mouse_moved
+            self.icon.windows_changed_callback = self.kde_windows.windows_changed
+
+    def _windows_source(self):
+        """What's on the captured screen, for clip names."""
+        if sys.platform != "win32":
+            return self.kde_windows.on_captured_screen
+
+        def find_screen():
+            return win_windows.captured_monitor(
+                self.client, lambda client: find_capture_source(client, program_scene_name(client)))
+
+        return win_windows.WinWindows(log, find_screen).on_captured_screen
 
     def _build_menu(self):
         return pystray.Menu(
@@ -810,6 +831,7 @@ class TrayApp:
                 self.icon.update_menu()
 
                 self.input_activity.start(getattr(self.icon, "bus_name", None))
+                self.kde_windows.start(getattr(self.icon, "bus_name", None))
                 self.stuck_screen.tick(self.client, self._stuck_check_enabled, self._black_check_enabled)
                 self.disk_space.tick(self.client, self._disk_space_warnings_enabled,
                                      self.replay_active or self.recording_active, self.recording_active, record_bytes)
@@ -893,6 +915,7 @@ if __name__ == "__main__":
         app.stop_children()
         app.obs_window.stop()
         app.input_activity.stop()
+        app.kde_windows.stop()
         # The icon is gone: end the process now, rather than waiting on
         # whatever else is still running in it (a menu action closing OBS,
         # a stuck D-Bus or websocket call) - that left a python3 running in

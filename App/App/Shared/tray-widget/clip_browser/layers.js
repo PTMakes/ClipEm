@@ -1,6 +1,6 @@
 "use strict";
 
-// What Multi-track mode adds to the editor (editor.js): tracks of imported
+// What the Full Editor adds to the editor (editor.js): tracks of imported
 // video, pictures and sound over the clip, and fades. The project keeps them
 // in "layers" (see clip_edit.py), which the export lays over the clip; the
 // preview here does the same: pictures in #layers over the video, sound
@@ -74,9 +74,10 @@ function followTimeline(before) {
   ed.trim[1] = Math.min(ed.trim[1], duration());
 }
 
-// --- Trim and Multi-track modes ----------------------------------------------
+// --- Trim and the Full Editor ------------------------------------------------
 
-function loadMode() {
+function loadMode(openIn) {
+  if (openIn === "trim" || openIn === "full") return openIn === "full" ? "multi" : "trim";
   try {
     return localStorage.getItem(MODE_KEY) === "multi" ? "multi" : "trim";
   } catch (err) {
@@ -94,8 +95,29 @@ function setMode(mode) {
   ed.item = null;
   ed.fx = null;
   ed.showAssets = false;
+  if (syncSources()) scheduleSave();
   renderTimeline();
   renderPanel();
+}
+
+// The Full Editor works on what the Mix is made of: Mix and Desktop start on
+// their sub-tracks (Settings > Clip Editor can turn that off) until the user
+// picks for themselves. Back in Trim, the recorded Mix is what's trimmed.
+function syncSources() {
+  if (!ed.info || !ed.info.split || ed.sources !== "auto") return false;
+  const sub = ed.mode === "multi" && ed.editor.sub_tracks;
+  const apps = ed.tracks.some((t) => t.index > DESKTOP && !isUnused(t.index)); // not just empty app slots
+  const changed = trackOf(0).muted !== sub || trackOf(DESKTOP).muted !== (sub && apps);
+  trackOf(0).muted = sub;
+  trackOf(DESKTOP).muted = sub && apps;
+  return changed;
+}
+
+function chooseSources(fn) {
+  change(() => {
+    ed.sources = "chosen";
+    fn();
+  });
 }
 
 function renderModeBar() {
@@ -104,9 +126,27 @@ function renderModeBar() {
   $("mode-multi").setAttribute("aria-pressed", String(multi));
   $("layer-tools").hidden = !multi;
   $("show-assets").setAttribute("aria-pressed", String(ed.showAssets));
-  const needs = "Needs a newer ffmpeg - update ClipEm";
-  $("add-video").disabled = !ed.canLayer;
-  $("add-video").title = ed.canLayer ? "Add an empty video track on top" : needs;
+}
+
+// In the blank space beside the playhead bar, above the tracks.
+function addVideoButton() {
+  const add = el("button", "add-track", "+ Add Video Track");
+  add.disabled = !ed.canLayer;
+  add.title = ed.canLayer ? "Add an empty video track on top" : "Needs a newer ffmpeg - update ClipEm";
+  add.addEventListener("click", () => change(() => { newLayer("video"); }));
+  return add;
+}
+
+// Below every other track.
+function addAudioRow() {
+  const row = el("div", "row add-track-row");
+  const head = el("div", "row-head");
+  const add = el("button", "add-track", "+ Add Audio Track");
+  add.title = "Add an empty audio track";
+  add.addEventListener("click", () => change(() => { newLayer("audio"); }));
+  head.append(add);
+  row.append(head, el("div"));
+  return row;
 }
 
 // --- Adding ------------------------------------------------------------------
@@ -174,8 +214,6 @@ async function importFiles(files, at) {
 
 $("mode-trim").addEventListener("click", () => setMode("trim"));
 $("mode-multi").addEventListener("click", () => setMode("multi"));
-$("add-video").addEventListener("click", () => change(() => { newLayer("video"); }));
-$("add-audio").addEventListener("click", () => change(() => { newLayer("audio"); }));
 $("import").addEventListener("click", () => $("import-file").click());
 $("import-file").addEventListener("change", (e) => {
   const files = [...e.target.files];
@@ -384,15 +422,6 @@ function layerRow(layer) {
     hide.addEventListener("click", () => change(() => { layer.hidden = !layer.hidden; }));
     titleLine.append(hide);
   }
-  const remove = el("button", "toggle", "×");
-  remove.title = "Remove this track";
-  remove.addEventListener("click", () => change(() => {
-    const before = duration();
-    if (ed.item && layer.items.some((item) => item.id === ed.item)) ed.item = null;
-    ed.layers = ed.layers.filter((other) => other !== layer);
-    followTimeline(before);
-  }));
-  titleLine.append(remove);
 
   const volume = el("label", "slider-line");
   const slider = el("input");
@@ -412,7 +441,14 @@ function layerRow(layer) {
   resetOnDoubleClick(slider, 0);
   slider.title = "Volume of the whole track (double-click: 0 dB)";
   volume.append(el("span", "small muted", "Vol"), slider, value);
-  head.append(titleLine, volume);
+  const remove = el("button", "remove-track", "Remove Track");
+  remove.addEventListener("click", () => change(() => {
+    const before = duration();
+    if (ed.item && layer.items.some((item) => item.id === ed.item)) ed.item = null;
+    ed.layers = ed.layers.filter((other) => other !== layer);
+    followTimeline(before);
+  }));
+  head.append(titleLine, volume, remove);
 
   const lane = el("div", `lane layer-lane ${layer.kind}`);
   lane.dataset.layer = layer.id;

@@ -10,7 +10,8 @@ Streams are recorded whether or not they're paused, so the start of an app's
 sound isn't lost.
 
 The same check tells clip names (Scripts/clip_naming.py) which game or app is
-active: ActiveApp below.
+active: ActiveApp below, which on KDE and Windows also goes by what's on the screen OBS
+is capturing (kde_windows.py, win_windows.py).
 
 Apps playing sound: on Windows, the WASAPI sessions on the default output
 device (pycaw); on Linux, PulseAudio/PipeWire sink inputs (`pactl`), labelled
@@ -58,8 +59,9 @@ _app_key = obs_config.app_key
 
 # One audio stream of an app. handle: what the recorder captures it with (it
 # doesn't look inside) - on Linux ("pa", sink input index, the sink's monitor
-# source), on Windows ("win", pid of the app's main process).
-Stream = namedtuple("Stream", "key exe label handle corked")
+# source), on Windows ("win", pid of the app's main process). pid: the process
+# playing it, where the OS says.
+Stream = namedtuple("Stream", "key exe label handle corked pid", defaults=(None,))
 
 
 def is_ignored(exe, label=None):
@@ -150,7 +152,9 @@ def parse_pactl_streams(text, clients_text=None, sinks_text=None):
         if is_ignored(binary, label) or is_ignored(binary, props.get("application.name")):
             continue
         handle = ("pa", sink_input.get("index"), monitors.get(sink_input.get("sink")))
-        streams.append(Stream(_app_key(binary), binary, label, handle, bool(sink_input.get("corked"))))
+        pid = str(props.get("application.process.id") or "")
+        streams.append(Stream(_app_key(binary), binary, label, handle, bool(sink_input.get("corked")),
+                              int(pid) if pid.isdigit() else None))
     return streams
 
 
@@ -238,7 +242,7 @@ def _windows_streams():
             continue
         if previous and corked:
             continue
-        streams[key] = Stream(key, exe, label, ("win", _windows_root_pid(process)), corked)
+        streams[key] = Stream(key, exe, label, ("win", _windows_root_pid(process)), corked, process.pid)
     return list(streams.values())
 
 
@@ -274,34 +278,81 @@ BROWSER_APPS = {"firefox", "firefox-bin", "librewolf", "zen", "zen-bin", "chrome
                 "brave", "brave-browser", "msedge", "opera", "vivaldi", "vivaldi-bin"}
 BACKGROUND_APPS = {"discord", "discordcanary", "discordptb", "vesktop", "spotify", "teamspeak", "teamspeak3",
                    "ts3client_linux_amd64", "mumble", "slack", "teams", "ms-teams", "zoom", "skype", "telegram",
-                   "telegram-desktop", "signal", "signal-desktop", "element", "whatsapp", "vlc", "mpv"}
-# An app stays active this long after its last sound: games go quiet too.
+                   "telegram-desktop", "signal", "signal-desktop", "element", "whatsapp", "vlc", "mpv", "steam"}
+# Desktop parts a window can be focused on without being what a clip is of.
+SHELL_WINDOWS = {"plasmashell", "krunner", "kwin_wayland", "kwin_x11", "xwaylandvideobridge", "spectacle",
+                 "explorer", "applicationframehost", "searchhost", "startmenuexperiencehost",
+                 "shellexperiencehost", "textinputhost", "lockapp"}
+# Window classes that say nothing about the app: Proton's are "steam_app_<id>".
+# The window's title is the game's name for these.
+GENERIC_WINDOW_CLASSES = ("steam_app_", "steam_proton", "gamescope", "wine")
+# An app stays active this long after its last sound, or leaving the screen:
+# games go quiet too, and get alt-tabbed out of.
 ACTIVE_HOLD_SECONDS = 60
+# How likely each kind of app is to be what a clip is of, best first.
+RANK_FULLSCREEN, RANK_FOCUSED_SOUND, RANK_SOUND, RANK_FOCUSED, RANK_BROWSER, RANK_BACKGROUND = range(6)
+
+
+def window_label(window, stream):
+    """What to call a window's app: its title if its class says nothing (or
+    its report says to), the label its sound has, or the end of its class
+    ("org.kde.dolphin")."""
+    app, title = window["app"], str(window.get("title") or "").strip()
+    generic = app.lower().startswith(GENERIC_WINDOW_CLASSES) or app.lower().endswith(".exe")
+    if title and (generic or window.get("use_title")):
+        return title
+    return stream.label if stream else app.rsplit(".", 1)[-1]
 
 
 class ActiveApp:
-    """Which app a clip saved now is of: of those heard in the last
-    ACTIVE_HOLD_SECONDS, a game or other app before a browser before chat or
-    music - then whichever has been playing longest."""
+    """Which app a clip saved now is of. Of what's been seen in the last
+    ACTIVE_HOLD_SECONDS: a fullscreen window on the captured screen, then its
+    focused window if that's playing sound, then any app playing sound, then
+    that focused window even if it's silent, then a browser, then chat or
+    music - and of equals, the window seen last, or the app playing longest."""
 
     def __init__(self):
         self._heard = {}  # app key: [label, first heard, last heard]
+        self._shown = {}  # app key: [label, rank, last seen]
 
     @staticmethod
     def _rank(key):
-        return 2 if key in BACKGROUND_APPS else 1 if key in BROWSER_APPS else 0
+        return RANK_BACKGROUND if key in BACKGROUND_APPS else RANK_BROWSER if key in BROWSER_APPS else RANK_SOUND
 
-    def update(self, streams, now):
-        """Returns the active app's label, or None."""
+    def _see_windows(self, windows, playing, now):
+        for order, window in enumerate(windows):
+            key = _app_key(window["app"])
+            if key in SHELL_WINDOWS or is_ignored(key, window.get("title")):
+                continue
+            stream = next((s for s in playing if s.key == key or (s.pid and s.pid == window.get("pid"))), None)
+            if stream:
+                key = stream.key
+            if window.get("fullscreen"):
+                rank = RANK_FULLSCREEN
+            elif key in BACKGROUND_APPS:
+                continue  # chat doesn't become the game by being clicked on
+            elif stream:
+                rank = RANK_FOCUSED_SOUND
+            elif key in BROWSER_APPS:
+                continue
+            else:
+                rank = RANK_FOCUSED
+            # The higher of two windows seen together counts as seen later.
+            self._shown[key] = [window_label(window, stream), rank, now + order * 1e-6]
+
+    def update(self, streams, now, windows=()):
+        """Returns the active app's label, or None. windows: what's on the
+        captured screen (kde_windows.py), bottom to top."""
         self._heard = {key: entry for key, entry in self._heard.items() if now - entry[2] <= ACTIVE_HOLD_SECONDS}
-        for stream in streams:
-            if not stream.corked:
-                entry = self._heard.setdefault(stream.key, [stream.label, now, now])
-                entry[0], entry[2] = stream.label, now
-        if not self._heard:
-            return None
-        best = min(self._heard, key=lambda key: (self._rank(key), self._heard[key][1]))
-        return self._heard[best][0]
+        self._shown = {key: entry for key, entry in self._shown.items() if now - entry[2] <= ACTIVE_HOLD_SECONDS}
+        playing = [stream for stream in streams if not stream.corked]
+        for stream in playing:
+            entry = self._heard.setdefault(stream.key, [stream.label, now, now])
+            entry[0], entry[2] = stream.label, now
+        self._see_windows(windows, playing, now)
+        ranked = [(rank, -seen, 0.0, label) for label, rank, seen in self._shown.values()]
+        ranked += [(self._rank(key), 0.0, first, label) for key, (label, first, _last) in self._heard.items()]
+        return min(ranked, key=lambda entry: entry[:3])[3] if ranked else None
 
 
 def replay_buffer_seconds():
@@ -320,7 +371,8 @@ class AppTrackMonitor:
     def __init__(self, recorder, list_streams=list_audio_streams, monotonic=time.monotonic,
                  interval_seconds=CHECK_INTERVAL_SECONDS,
                  enabled=lambda: obs_config.load_tray_tracks() and obs_config.app_capture_supported(),
-                 names_clips=lambda: clip_naming.load()["app"], publish=clip_naming.publish_active_app):
+                 names_clips=lambda: clip_naming.load()["app"], publish=clip_naming.publish_active_app,
+                 windows=tuple):
         self._recorder = recorder
         self._list_streams = list_streams
         self._monotonic = monotonic
@@ -331,6 +383,7 @@ class AppTrackMonitor:
         self._was_enabled = False
         self._names_clips = names_clips
         self._publish = publish
+        self._windows = windows
         self._active = ActiveApp()
         self._published = ""  # None is a value: nothing's active
 
@@ -375,4 +428,4 @@ class AppTrackMonitor:
         if enabled:
             self._recorder.set_targets(app_targets(streams))
         if names_clips:
-            self._publish_active(self._active.update(streams, self._monotonic()))
+            self._publish_active(self._active.update(streams, self._monotonic(), self._windows()))
