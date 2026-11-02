@@ -66,6 +66,7 @@ import popups  # noqa: E402
 import reinstall  # noqa: E402
 import release_notes  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
+import ui_colors  # noqa: E402
 from app_window import ICON_DIR, SETTINGS_ICON, style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
     SHORTCUT_BROKEN,
@@ -1140,35 +1141,61 @@ def open_dialog(start_tab=None, highlight=()):
                                                          else setup.encoders.X264))
 
     section("Appearance", TAB_TRAY)
-    saved_dark, saved_colors = dark_theme.theme_from_config(run_config)
-    dark_mode_var = tk.BooleanVar(value=saved_dark)
-    tk.Checkbutton(
-        frame, text="Use Dark Mode", variable=dark_mode_var, command=lambda: show_colors(),
-    ).grid(row=next_row, column=0, columnspan=2, sticky="w")
-    next_row += 1
+    # Each theme keeps its own changed colors (run_config "custom_colors",
+    # by theme id); the rows show the theme the dropdown is on.
+    # chosen_colors[theme id][key] is what each row shows for it, by
+    # COLOR_SETTINGS key. Saved themes are written as soon as they're saved
+    # or deleted; the choice and the colors wait for Save, like the rest.
+    saved_custom = run_config.get("custom_colors") if isinstance(run_config.get("custom_colors"), dict) else {}
+    chosen_colors = {}
 
-    # Each mode keeps its own colors; the rows show the one Use Dark Mode is
-    # set to. chosen_colors[dark][key] is what each row shows, by
-    # dark_theme.COLOR_SETTINGS key.
-    def colors_by_key(dark, custom=None):
-        palette = dark_theme.colors_for(dark, custom)
-        return {key: palette[name] for key, _label, name, _css in dark_theme.COLOR_SETTINGS}
-
-    default_colors = {dark: colors_by_key(dark) for dark in (True, False)}
-    chosen_colors = {dark: colors_by_key(dark, saved_colors) for dark in (True, False)}
+    def theme_colors(theme_id):
+        if theme_id not in chosen_colors:
+            colors = ui_colors.theme_base(theme_id, run_config)[1]
+            changed = saved_custom.get(theme_id) if isinstance(saved_custom.get(theme_id), dict) else {}
+            colors.update({key: value.lower() for key, value in changed.items()
+                           if key in colors and ui_colors.is_hex_color(value)})
+            chosen_colors[theme_id] = colors
+        return chosen_colors[theme_id]
 
     def custom_colors():
-        """run_config's "custom_colors" for what the rows show: only the
-        colors that differ from the defaults."""
-        custom = {}
-        for dark in (True, False):
-            changed = {key: value for key, value in chosen_colors[dark].items()
-                       if value != default_colors[dark][key]}
+        """run_config's "custom_colors": each theme's colors that differ from
+        its own - for the themes shown here, and as saved for the rest."""
+        ids = {theme_id for theme_id, _label in ui_colors.theme_choices(run_config)}
+        custom = {theme_id: colors for theme_id, colors in saved_custom.items()
+                  if theme_id in ids and theme_id not in chosen_colors and colors}
+        for theme_id, colors in chosen_colors.items():
+            if theme_id not in ids:
+                continue  # deleted
+            base = ui_colors.theme_base(theme_id, run_config)[1]
+            changed = {key: value for key, value in colors.items() if value != base[key]}
             if changed:
-                custom[dark_theme.mode_key(dark)] = changed
+                custom[theme_id] = changed
         return custom
 
-    initial_appearance = (saved_dark, custom_colors())
+    theme_row = tk.Frame(frame)
+    theme_row.grid(row=next_row, column=0, columnspan=2, sticky="w")
+    next_row += 1
+    tk.Label(theme_row, text="Theme:").pack(side="left")
+    theme_combo = ttk.Combobox(theme_row, state="readonly", width=28)
+    theme_combo.pack(side="left", padx=(px(8), 0))
+    theme_ids = []
+    current_theme = {"id": ui_colors.configured_theme_id(run_config)}
+
+    def list_themes(selected):
+        choices = ui_colors.theme_choices(run_config)
+        theme_ids[:] = [theme_id for theme_id, _label in choices]
+        theme_combo.configure(values=[label for _id, label in choices])
+        current_theme["id"] = selected if selected in theme_ids else ui_colors.mode_key(True)
+        theme_combo.current(theme_ids.index(current_theme["id"]))
+        show_colors()
+
+    def on_theme_chosen(_event=None):
+        current_theme["id"] = theme_ids[theme_combo.current()]
+        show_colors()
+
+    theme_combo.bind("<<ComboboxSelected>>", on_theme_chosen)
+
     colors_label = tk.Label(frame, fg=dark_theme.MUTED, justify="left", wraplength=px(560))
     colors_label.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
     next_row += 1
@@ -1178,31 +1205,35 @@ def open_dialog(start_tab=None, highlight=()):
     color_vars, color_swatches = {}, {}
     per_column = (len(dark_theme.COLOR_SETTINGS) + 1) // 2
 
-    def shown_mode():
-        return bool(dark_mode_var.get())
+    def shown_colors():
+        return theme_colors(current_theme["id"])
 
     def show_color(key):
-        color = chosen_colors[shown_mode()][key]
+        color = shown_colors()[key]
         color_swatches[key].configure(background=color)
         if color_vars[key].get() != color:
             color_vars[key].set(color)
 
     def show_colors():
-        colors_label.config(text=f"{'Dark' if shown_mode() else 'Light'} Mode colors - click a square to pick "
-                                 "one, or type its hex code. Save applies them everywhere.")
+        if not color_vars:
+            return  # still being built
+        colors_label.config(text=f"{theme_combo.get()} colors - click a square to pick one, or type its hex "
+                                 "code. Save applies them everywhere.")
         for key in color_vars:
             show_color(key)
+        delete_button.configure(state="normal" if current_theme["id"].startswith(ui_colors.SAVED_PREFIX)
+                                else "disabled")
 
     def on_hex_typed(key):
         color = color_picker.normalize_hex(color_vars[key].get())
         if color:
-            chosen_colors[shown_mode()][key] = color
+            shown_colors()[key] = color
             color_swatches[key].configure(background=color)
 
     def pick_color(key, label):
-        color = color_picker.ask_color(root, chosen_colors[shown_mode()][key], f"{label} - ClipEm", px)
+        color = color_picker.ask_color(root, shown_colors()[key], f"{label} - ClipEm", px)
         if color:
-            chosen_colors[shown_mode()][key] = color
+            shown_colors()[key] = color
             show_color(key)
 
     for index, (key, label, _name, _css) in enumerate(dark_theme.COLOR_SETTINGS):
@@ -1222,13 +1253,72 @@ def open_dialog(start_tab=None, highlight=()):
         color_swatches[key] = swatch
 
     def reset_colors():
-        chosen_colors[shown_mode()] = dict(default_colors[shown_mode()])
+        chosen_colors[current_theme["id"]] = ui_colors.theme_base(current_theme["id"], run_config)[1]
         show_colors()
 
-    tk.Button(frame, text="Reset to Defaults", command=reset_colors).grid(
-        row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
+    def write_saved_themes(themes):
+        """Saved themes last whatever happens to the rest of this window."""
+        run_config["saved_themes"] = themes
+        config = load_run_config()
+        config["saved_themes"] = themes
+        save_run_config(config)
+
+    def save_theme():
+        name = popups.askstring("Save Theme", "A name for these colors:", parent=root)
+        name = (name or "").strip()
+        if not name:
+            return
+        if len(name) > ui_colors.MAX_THEME_NAME:
+            popups.showerror("Save Theme", f"Theme names can be up to {ui_colors.MAX_THEME_NAME} characters.",
+                             parent=root)
+            return
+        if name.lower() in {label.lower() for label, *_rest in ui_colors.THEMES.values()}:
+            popups.showerror("Save Theme", f"\"{name}\" is one of ClipEm's themes - pick another name.",
+                             parent=root)
+            return
+        themes = ui_colors.saved_themes(run_config)
+        if name in themes and not popups.askyesno("Save Theme", f"Replace your theme \"{name}\"?", parent=root):
+            return
+        source = current_theme["id"]
+        themes[name] = {"dark": ui_colors.theme_base(source, run_config)[0], "colors": dict(shown_colors())}
+        try:
+            write_saved_themes(themes)
+        except Exception as exc:
+            popups.showerror("Save Theme", f"Couldn't save the theme: {exc}", parent=root)
+            return
+        # The changes went into the new theme: the one they were made on
+        # goes back to how it was.
+        chosen_colors.pop(source, None)
+        new_id = ui_colors.saved_theme_id(name)
+        chosen_colors.pop(new_id, None)
+        saved_custom.pop(new_id, None)
+        list_themes(new_id)
+
+    def delete_theme():
+        theme_id = current_theme["id"]
+        name = theme_id.removeprefix(ui_colors.SAVED_PREFIX)
+        if not popups.askyesno("Delete Theme", f"Delete your theme \"{name}\"?", parent=root):
+            return
+        themes = ui_colors.saved_themes(run_config)
+        dark = themes.get(name, {}).get("dark", True)
+        themes.pop(name, None)
+        try:
+            write_saved_themes(themes)
+        except Exception as exc:
+            popups.showerror("Delete Theme", f"Couldn't delete the theme: {exc}", parent=root)
+            return
+        chosen_colors.pop(theme_id, None)
+        list_themes(ui_colors.mode_key(dark))
+
+    theme_buttons = tk.Frame(frame)
+    theme_buttons.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
     next_row += 1
-    show_colors()
+    tk.Button(theme_buttons, text="Reset to Defaults", command=reset_colors).pack(side="left")
+    tk.Button(theme_buttons, text="Save as Theme...", command=save_theme).pack(side="left", padx=(px(4), 0))
+    delete_button = tk.Button(theme_buttons, text="Delete Theme", command=delete_theme)
+    delete_button.pack(side="left", padx=(px(4), 0))
+    list_themes(current_theme["id"])
+    initial_appearance = (current_theme["id"], custom_colors())
 
     section("Tray Menu", TAB_TRAY)
     recording_item_var = tk.BooleanVar(value=bool(run_config.get("show_recording_item", True)))
@@ -2041,8 +2131,10 @@ def open_dialog(start_tab=None, highlight=()):
             run_config["editor_sub_tracks"] = bool(sub_tracks_var.get())
             for key, var in menu_item_vars.items():  # read by the tray menu
                 run_config[key] = bool(var.get())
-            appearance = (bool(dark_mode_var.get()), custom_colors())
-            run_config["dark_mode"], run_config["custom_colors"] = appearance
+            appearance = (current_theme["id"], custom_colors())
+            run_config["theme"], run_config["custom_colors"] = appearance
+            # What only knows dark from light (the tray menus, the editor's CSS) goes by this.
+            run_config["dark_mode"] = ui_colors.theme_base(current_theme["id"], run_config)[0]
             if not run_config["custom_colors"]:
                 del run_config["custom_colors"]
             run_config["clip_saved_notification"] = bool(clip_notification_var.get())

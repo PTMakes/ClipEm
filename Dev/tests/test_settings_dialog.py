@@ -554,3 +554,144 @@ def test_a_request_can_open_a_page(fake_obs_config, monkeypatch):
     monkeypatch.setattr(settings_dialog, "open_dialog", lambda tab=None, highlight=(): opened.append(tab))
     settings_dialog.main()
     assert opened == ["Clip Editor"]
+
+
+def _theme_combo(root):
+    from tkinter import ttk
+
+    return next(w for w in _widgets(root) if isinstance(w, ttk.Combobox) and "Halloween" in w.cget("values"))
+
+
+def _choose_theme(root, label):
+    combo = _theme_combo(root)
+    combo.current(list(combo.cget("values")).index(label))
+    combo.event_generate("<<ComboboxSelected>>")
+    root.update()
+
+
+def _appearance(monkeypatch, look, config=None, answers=()):
+    """look(root) on UI Customization, with run_config `config`; askstring
+    and askyesno answer from `answers` in turn. Returns run_config after."""
+    import tkinter as tk
+
+    if config is not None:
+        settings_dialog.save_run_config(config)
+    replies = list(answers)
+    monkeypatch.setattr(settings_dialog.popups, "askstring", lambda *a, **k: replies.pop(0))
+    monkeypatch.setattr(settings_dialog.popups, "askyesno", lambda *a, **k: replies.pop(0))
+    monkeypatch.setattr(settings_dialog.popups, "showerror", lambda title, message, **k: replies.append(message))
+    monkeypatch.setattr(settings_dialog, "save_obs_settings", lambda obs, initial: "unchanged")
+
+    def run(root):
+        root.layout["show_tab"]("UI Customization")
+        root.update()
+        look(root)
+
+    try:
+        _in_settings(monkeypatch, run)
+    except tk.TclError:
+        pass  # Save closed the window
+    return settings_dialog.load_run_config(), replies
+
+
+def test_the_theme_dropdown_offers_every_theme(fake_obs_config, monkeypatch):
+    seen = {}
+    config = {"saved_themes": {"Neon": {"dark": True, "colors": {"accent": "#00ff99"}}}}
+    _appearance(monkeypatch, lambda root: seen.update(values=list(_theme_combo(root).cget("values")),
+                                                      shown=_theme_combo(root).get()), config)
+    assert seen["values"] == ["Dark Mode", "Light Mode", "Halloween", "Christmas", "Neon"]
+    assert seen["shown"] == "Dark Mode"
+
+
+def test_an_old_light_mode_opens_on_light_mode(fake_obs_config, monkeypatch):
+    seen = []
+    _appearance(monkeypatch, lambda root: seen.append(_theme_combo(root).get()), {"dark_mode": False})
+    assert seen == ["Light Mode"]
+
+
+def test_choosing_a_theme_shows_its_colors_and_save_keeps_it(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    seen = {}
+
+    def look(root):
+        _choose_theme(root, "Halloween")
+        entries = [w for w in _widgets(root) if isinstance(w, tk.Entry) and w.cget("font") == "TkFixedFont"]
+        seen["colors"] = {e.get() for e in entries}
+        _button(root, "Save").invoke()
+
+    config, _ = _appearance(monkeypatch, look, {})
+    assert settings_dialog.ui_colors.THEMES["halloween"][2]["accent"] in seen["colors"]
+    assert config["theme"] == "halloween" and config["dark_mode"] is True and "custom_colors" not in config
+
+
+def test_a_changed_color_is_kept_for_its_own_theme(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    def look(root):
+        _choose_theme(root, "Christmas")
+        entry = next(w for w in _widgets(root) if isinstance(w, tk.Entry) and w.get()
+                     == settings_dialog.ui_colors.THEMES["christmas"][2]["background"])
+        entry.delete(0, "end")
+        entry.insert(0, "#010203")
+        _choose_theme(root, "Light Mode")  # and back: still changed
+        _choose_theme(root, "Christmas")
+        _button(root, "Save").invoke()
+
+    config, _ = _appearance(monkeypatch, look, {"custom_colors": {"dark": {"wave": "#123456"}}})
+    assert config["theme"] == "christmas"
+    assert config["custom_colors"] == {"christmas": {"background": "#010203"}, "dark": {"wave": "#123456"}}
+
+
+def test_saving_a_theme_keeps_it_even_if_settings_are_cancelled(fake_obs_config, monkeypatch):
+    seen = {}
+
+    def look(root):
+        _choose_theme(root, "Halloween")
+        _button(root, "Save as Theme...").invoke()
+        root.update()
+        seen["shown"] = _theme_combo(root).get()
+        seen["delete"] = str(_button(root, "Delete Theme").cget("state"))
+        _button(root, "Cancel").invoke()
+
+    config, replies = _appearance(monkeypatch, look, {}, answers=["  Spooky  "])
+    assert seen == {"shown": "Spooky", "delete": "normal"} and not replies
+    saved = config["saved_themes"]["Spooky"]
+    assert saved["dark"] is True and saved["colors"] == dict(
+        settings_dialog.ui_colors.theme_base("halloween", {})[1])
+    assert "theme" not in config  # choosing it still waits for Save
+
+
+def test_a_theme_cant_take_a_built_in_name_and_replacing_one_is_asked(fake_obs_config, monkeypatch):
+    seen = []
+
+    def look(root):
+        _button(root, "Save as Theme...").invoke()  # "Christmas": refused
+        _button(root, "Save as Theme...").invoke()  # "Mine", already there: not replaced
+        seen.append(_theme_combo(root).get())
+
+    config, replies = _appearance(monkeypatch, look, {"saved_themes": {"Mine": {"dark": False, "colors": {}}}},
+                                  answers=["christmas", "Mine", False])
+    assert len(replies) == 1 and "one of ClipEm's themes" in replies[0]
+    assert config["saved_themes"] == {"Mine": {"dark": False, "colors": {}}} and seen == ["Dark Mode"]
+
+
+def test_deleting_a_theme(fake_obs_config, monkeypatch):
+    seen = {}
+
+    def look(root):
+        seen["opened_on"] = (_theme_combo(root).get(), str(_button(root, "Delete Theme").cget("state")))
+        _choose_theme(root, "Dark Mode")
+        seen["delete_on_dark"] = str(_button(root, "Delete Theme").cget("state"))
+        _choose_theme(root, "Paper")
+        _button(root, "Delete Theme").invoke()
+        seen["after"] = (_theme_combo(root).get(), list(_theme_combo(root).cget("values")))
+        _button(root, "Save").invoke()
+
+    config, _ = _appearance(monkeypatch, look, {"theme": "saved:Paper", "dark_mode": False,
+                                                "saved_themes": {"Paper": {"dark": False, "colors": {}}},
+                                                "custom_colors": {"saved:Paper": {"text": "#111111"}}},
+                            answers=[True])
+    assert seen["opened_on"] == ("Paper", "normal") and seen["delete_on_dark"] == "disabled"
+    assert seen["after"] == ("Light Mode", ["Dark Mode", "Light Mode", "Halloween", "Christmas"])
+    assert config["saved_themes"] == {} and config["theme"] == "light" and "custom_colors" not in config

@@ -1,8 +1,13 @@
 """ClipEm's colors: the clip editor's light and dark palettes
-(tray-widget/clip_browser/app.css, whose defaults these match) and the ones
-changed in Settings > UI Customization (run_config.json "custom_colors":
-{"dark"/"light": {key: "#rrggbb"}}, keys from COLOR_SETTINGS). No Tk here -
-dark_theme.py applies them to Tk windows, clip_browser.py to the editor page."""
+(tray-widget/clip_browser/app.css, whose defaults these match), the themes
+built on them (THEMES) and the user's own (run_config.json "saved_themes"),
+and the colors changed in Settings > UI Customization (run_config.json
+"custom_colors": {theme id: {key: "#rrggbb"}}, keys from COLOR_SETTINGS).
+run_config.json "theme" is the chosen theme's id - without it, "dark_mode"
+picks Dark or Light Mode; "dark_mode" is kept as the theme's base mode, for
+whatever only knows dark from light (the tray menus, app.css's blocks). No
+Tk here - dark_theme.py applies them to Tk windows, clip_browser.py to the
+editor page."""
 
 PALETTES = {
     True: dict(BG="#15151a", PANEL="#1e1e25", TEXT="#f4f4f6", MUTED="#9a9aa6", LINE="#2e2e38",
@@ -40,9 +45,80 @@ COLOR_SETTINGS = (
 )
 
 
+# Themes that come with ClipEm: id -> (label, dark base, colors by
+# COLOR_SETTINGS key - the rest are the base mode's).
+THEMES = {
+    "dark": ("Dark Mode", True, {}),
+    "light": ("Light Mode", False, {}),
+    "halloween": ("Halloween", True, {
+        "background": "#120e0b", "panel": "#1d1712", "text": "#f6ede2", "muted": "#a8937c",
+        "line": "#3a2b1e", "accent": "#ff7518", "on_accent": "#1a0e04", "hover": "#2a2018",
+        "selected": "#4a2810", "error": "#d43b2a", "track": "#2b2119", "wave": "#a463e0",
+        "lane": "#1f1813", "playhead": "#b56cff", "player_bg": "#000000", "boost": "#7cc142",
+        "warn": "#e8a317",
+    }),
+    "christmas": ("Christmas", True, {
+        "background": "#0e1611", "panel": "#152019", "text": "#f6f4ee", "muted": "#9fb2a4",
+        "line": "#25382b", "accent": "#c8102e", "on_accent": "#ffffff", "hover": "#1d2b22",
+        "selected": "#3d1a20", "error": "#ff5c5c", "track": "#1c2a21", "wave": "#d4af37",
+        "lane": "#16221a", "playhead": "#f2d16b", "player_bg": "#000000", "boost": "#2fa463",
+        "warn": "#d4af37",
+    }),
+}
+SAVED_PREFIX = "saved:"  # a saved theme's id: SAVED_PREFIX + its name
+MAX_THEME_NAME = 40
+
+
 def mode_key(dark):
-    """custom_colors' key for a mode."""
+    """custom_colors' key for a mode - its theme's id."""
     return "dark" if dark else "light"
+
+
+def saved_theme_id(name):
+    return SAVED_PREFIX + name
+
+
+def saved_themes(config):
+    """run_config's "saved_themes" - {name: {"dark": bool, "colors": {key:
+    "#rrggbb"}}} - with anything malformed left out."""
+    saved = config.get("saved_themes")
+    themes = {}
+    for name, theme in (saved.items() if isinstance(saved, dict) else ()):
+        if not isinstance(name, str) or not name.strip() or not isinstance(theme, dict):
+            continue
+        colors = theme.get("colors") if isinstance(theme.get("colors"), dict) else {}
+        themes[name] = {"dark": bool(theme.get("dark", True)),
+                        "colors": {key: colors[key].lower() for key, _label, _name, _css in COLOR_SETTINGS
+                                   if is_hex_color(colors.get(key))}}
+    return themes
+
+
+def theme_choices(config):
+    """[(id, label)] for the Theme dropdown: ClipEm's, then the user's by name."""
+    return ([(theme_id, label) for theme_id, (label, _dark, _colors) in THEMES.items()]
+            + [(saved_theme_id(name), name) for name in sorted(saved_themes(config), key=str.lower)])
+
+
+def theme_base(theme_id, config):
+    """(dark, colors by COLOR_SETTINGS key) of a theme before any custom
+    colors: every key, from the theme's own colors or its base mode's."""
+    if theme_id in THEMES:
+        _label, dark, colors = THEMES[theme_id]
+    else:
+        theme = saved_themes(config).get(theme_id.removeprefix(SAVED_PREFIX), {"dark": True, "colors": {}})
+        dark, colors = theme["dark"], theme["colors"]
+    palette = PALETTES[dark]
+    return dark, {key: colors.get(key, palette[name]) for key, _label, name, _css in COLOR_SETTINGS}
+
+
+def configured_theme_id(config):
+    """The chosen theme's id: run_config's "theme" if it still exists, else
+    Dark or Light Mode by "dark_mode"."""
+    theme_id = config.get("theme")
+    if isinstance(theme_id, str) and (theme_id in THEMES or (
+            theme_id.startswith(SAVED_PREFIX) and theme_id.removeprefix(SAVED_PREFIX) in saved_themes(config))):
+        return theme_id
+    return mode_key(bool(config.get("dark_mode", True)))
 
 
 def is_hex_color(value):
@@ -89,10 +165,21 @@ def css_overrides(dark, custom_colors=None):
 
 
 def theme_from_config(config):
-    """(Settings > Use Dark Mode, its custom colors) from a loaded
-    run_config - dark with none for anything unset or malformed."""
+    """(dark, custom colors) for the chosen theme from a loaded run_config,
+    for colors_for() and css_overrides(): the theme's base mode, and its
+    colors with the user's changes on top, as that mode's custom colors -
+    dark with none for anything unset or malformed."""
+    theme_id = configured_theme_id(config)
+    dark, colors = theme_base(theme_id, config)
     custom = config.get("custom_colors")
-    return bool(config.get("dark_mode", True)), custom if isinstance(custom, dict) else {}
+    changed = (custom.get(theme_id) if isinstance(custom, dict) else None) or {}
+    if isinstance(changed, dict):
+        colors.update({key: value.lower() for key, value in changed.items()
+                       if key in colors and is_hex_color(value)})
+    palette = PALETTES[dark]
+    differ = {key: value for key, _label, name, _css in COLOR_SETTINGS
+              if (value := colors[key]) != palette[name]}
+    return dark, ({mode_key(dark): differ} if differ else {})
 
 
 def configured_theme():

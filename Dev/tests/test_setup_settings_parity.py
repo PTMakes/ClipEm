@@ -41,6 +41,8 @@ SETTINGS_ONLY = {
     "editor_asset_days": "Likewise",
     "dark_mode": "Appearance: nothing to choose before ClipEm has been used",
     "custom_colors": "Appearance: nothing to choose before ClipEm has been used",
+    "theme": "Appearance: nothing to choose before ClipEm has been used",
+    "saved_themes": "Appearance: the user's own themes, made in Settings",
 }
 # Only in Setup's calls, not an option: name -> why.
 SETUP_ONLY = {

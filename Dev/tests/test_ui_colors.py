@@ -1,6 +1,7 @@
 import os
 import re
 
+import pytest
 import ui_colors
 from conftest import TRAY_WIDGET_DIR
 
@@ -51,3 +52,60 @@ def test_theme_from_config_ignores_malformed_colors():
 def test_mix():
     assert ui_colors.mix("#000000", "#ffffff", 0.5) == "#808080"
     assert ui_colors.mix("#2080ec", "#2080ec", 0.3) == "#2080ec"
+
+
+def _luminance(color):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(int(color[i:i + 2], 16)) for i in (1, 3, 5))
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def _contrast(a, b):
+    light, dark = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (light + 0.05) / (dark + 0.05)
+
+
+@pytest.mark.parametrize("theme_id", ["halloween", "christmas"])
+def test_the_seasonal_themes_are_dark_complete_and_readable(theme_id):
+    label, dark, colors = ui_colors.THEMES[theme_id]
+    assert dark is True and label
+    assert set(colors) == {key for key, *_rest in ui_colors.COLOR_SETTINGS}
+    assert all(ui_colors.is_hex_color(value) for value in colors.values())
+    # WCAG AA for text: on the background, on panels, and on the accent's buttons.
+    for text, under in (("text", "background"), ("text", "panel"), ("on_accent", "accent"),
+                        ("muted", "background")):
+        minimum = 4.5 if text != "muted" else 3.0
+        assert _contrast(colors[text], colors[under]) >= minimum, (theme_id, text, under)
+
+
+def test_a_theme_is_its_colors_with_the_users_changes_on_top():
+    dark, custom = ui_colors.theme_from_config({"theme": "halloween",
+                                                "custom_colors": {"halloween": {"wave": "#ABCDEF"},
+                                                                  "dark": {"wave": "#000000"}}})
+    palette = ui_colors.colors_for(dark, custom)
+    assert dark is True and palette["WAVE"] == "#abcdef"
+    assert palette["ACCENT"] == ui_colors.THEMES["halloween"][2]["accent"]
+    assert palette["TRACK_EDGE"] == ui_colors.PALETTES[True]["TRACK_EDGE"]  # not offered: the base mode's
+    assert "--accent: #ff7518;" in ui_colors.css_overrides(dark, custom)
+
+
+def test_without_a_theme_dark_mode_decides_as_before():
+    assert ui_colors.configured_theme_id({}) == "dark"
+    assert ui_colors.configured_theme_id({"dark_mode": False}) == "light"
+    assert ui_colors.configured_theme_id({"theme": "nope", "dark_mode": False}) == "light"
+    # A saved theme that's gone (deleted, the dialog cancelled) falls back too.
+    assert ui_colors.configured_theme_id({"theme": "saved:Gone"}) == "dark"
+
+
+def test_a_saved_theme_has_its_own_base_and_colors():
+    config = {"theme": "saved:Paper", "saved_themes": {
+        "Paper": {"dark": False, "colors": {"accent": "#AA0000", "text": "red", "nope": "#000000"}},
+        "": {"dark": True}, "Broken": "x"}}
+    assert ui_colors.saved_themes(config) == {"Paper": {"dark": False, "colors": {"accent": "#aa0000"}}}
+    dark, custom = ui_colors.theme_from_config(config)
+    assert dark is False and ui_colors.colors_for(dark, custom)["ACCENT"] == "#aa0000"
+    assert ui_colors.theme_choices(config)[-1] == ("saved:Paper", "Paper")
+    assert [label for _id, label in ui_colors.theme_choices({})] == ["Dark Mode", "Light Mode", "Halloween",
+                                                                      "Christmas"]
