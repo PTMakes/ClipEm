@@ -449,12 +449,20 @@ async function loadTheme() {
   document.dispatchEvent(new Event("clipem-theme"));
 }
 
+// The file a clip is edited from (clip_browser.file_to_edit): its
+// "-extra.mkv", else its "-tracks.mkv", else the clip - or null if it isn't listed.
+function editSource(clips, name) {
+  const clip = clips.find((c) => c.name === name);
+  return clip ? clip.extra_file || clip.tracks_file || clip.name : null;
+}
+
 async function loadClips() {
   try {
     const data = await api("api/clips");
     const newest = data.clips[0] && data.clips[0].name;
     const hadNewest = state.clips[0] && state.clips[0].name;
     const first = state.clips.length === 0 && state.selected === null;
+    const loaded = state.selected && editSource(state.clips, state.selected);
     state.clips = data.clips;
     state.folder = data.folder;
     const folderBox = $("folder-path");
@@ -466,6 +474,12 @@ async function loadClips() {
       state.selected = null;
       if (newest) select(newest);
       else renderDetails();
+    } else if (loaded !== editSource(state.clips, state.selected)) {
+      // Its "-extra.mkv"/"-tracks.mkv" was finished after it was opened
+      // (they're written just after the clip): open it again from that.
+      const name = state.selected;
+      state.selected = null; // or select() takes it as already open
+      select(name);
     } else {
       if (!first && newest && newest !== hadNewest) setStatus(`New clip: ${newest}`);
       renderDetails();

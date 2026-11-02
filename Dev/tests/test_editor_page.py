@@ -185,3 +185,38 @@ def test_a_plain_clip_plays_itself(tmp_path, page):
     tools.js("select('Replay-y.mp4')")
     assert tools.wait_for("player.readyState >= 1 && isFinite(player.duration)")
     assert tools.js("player.currentSrc").endswith("/media/Replay-y.mp4")
+
+
+@pytest.mark.parametrize("copy", ["extra", "tracks"])
+def test_a_clip_opened_before_its_copy_is_finished_is_opened_again_from_it(tmp_path, page, copy):
+    """The clip is listed (and may be opened - the newest is, by itself)
+    before its "-extra.mkv" or "-tracks.mkv" is finished, then the clip is
+    cut down to the press: the editor has to move over to the copy."""
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    folder = tmp_path / "clips"
+    folder.mkdir()
+    post_clip_save(staging)  # Replay-x.mp4 (cut at 5 s) and Replay-x-extra.mkv (8 s)
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(staging / "Replay-x-extra.mkv"), "-map", "0:v",
+                    "-map", "0:a:0", "-c", "copy", str(folder / "Replay-x.mp4")], check=True)  # as OBS saved it
+    tools = page(folder)
+    assert tools.wait_for("state.selected === 'Replay-x.mp4' && player.readyState >= 1"), "it didn't open"
+    assert tools.js("player.currentSrc").endswith("/media/Replay-x.mp4")
+    if copy == "extra":
+        os.replace(staging / "Replay-x-extra.mkv", folder / "Replay-x-extra.mkv")
+        os.replace(staging / "Replay-x.mp4", folder / "Replay-x.mp4")  # cut at the press
+        wanted, mark = "/media/Replay-x-extra.mkv", 5
+    else:
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(staging / "Replay-x-extra.mkv"), "-map", "0", "-c", "copy",
+                        "-metadata", "CLIPEM_MARK=", str(folder / "Replay-x-tracks.mkv")], check=True)
+        wanted, mark = None, None
+    # The list is polled every few seconds.
+    if not tools.wait_for("ed.info && ed.info.tracks.length === 3 && player.readyState >= 1", seconds=20):
+        pytest.fail("the editor stayed on the clip: " + tools.js(
+            "JSON.stringify({selected: state.selected, src: player.currentSrc, clips: state.clips,"
+            " tracks: ed.info && ed.info.tracks.length, status: document.getElementById('status').textContent})"))
+    assert tools.js("state.selected") == "Replay-x.mp4"
+    if wanted:
+        assert tools.js("player.currentSrc").endswith(wanted)
+        assert tools.js("ed.info.mark") == pytest.approx(mark, abs=0.05)
+        assert tools.js("player.duration") == pytest.approx(tools.js("ed.info.duration"), abs=0.15)

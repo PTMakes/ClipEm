@@ -16,18 +16,19 @@
       "Improvements": [
         "Game names prefer the fullscreen or focused app on screen (KDE, Windows).",
         "No spaces in file names: Replay-2026-10-25-21-50-07-Deadlock.",
-        "The date is six dropdowns, in any order, each of which can be None.",
+        "The date is six dropdowns, in any order, each optional.",
         "Between Parts is added for you (no hyphens needed), with Reset; Reset All resets every name option.",
-        "Exports include added tracks, in the mix and in the .mkv.",
+        "Exports include added tracks in the mix and .mkv.",
         "Settings pages fit without scrolling on Windows."
       ],
       "Fixes": [
         "App tracks no longer miss the start of a clip, even while OBS restarts.",
-        "ClipEm's clip sound no longer gets a track or names the clip.",
+        "ClipEm's clip sound and Windows notifications no longer get a track or name the clip.",
+        "A clip opened before its tracks are saved gets them.",
         "Clip names can't be just spaces.",
         "A malformed OBS clip hotkey falls back to the default.",
         "Setup's file check says when it lists only some problems.",
-        "Windows: a restart no longer waits on a launch that has closed."
+        "Windows: restarts no longer wait on a closed launch."
       ]
     },
     "new_settings": [

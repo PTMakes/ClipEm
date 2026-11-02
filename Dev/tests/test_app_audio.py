@@ -85,6 +85,12 @@ def test_clipems_own_clip_sound_is_never_an_app():
     assert not app_audio.is_ignored("brave", "Brave") and not app_audio.is_ignored("game", "")
 
 
+def test_windows_notification_sounds_are_never_an_app():
+    """They're all played by the shell (Discord's, Windows Update's...)."""
+    assert app_audio.is_ignored("ShellExperienceHost.exe", "Windows Shell Experience Host")
+    assert not app_audio.is_ignored("Discord.exe", "Discord")
+
+
 def test_an_app_updated_while_it_runs_is_still_the_same_app():
     text = json.dumps([{"index": 1, "corked": False, "properties": {"application.process.binary": "brave (deleted)",
                                                                    "application.name": "Brave"}}])
