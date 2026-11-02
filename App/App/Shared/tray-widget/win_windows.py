@@ -8,7 +8,7 @@ window keeps its title bar, however much of the monitor it overhangs).
 
 The captured screen is the "monitor_id" OBS's screen capture is set to: OBS's
 own picker saves the path EnumDisplayDevices gives for a monitor, but it can
-also be its GDI name ("\\.\DISPLAY1"), so a window's report has both. If it
+also be its GDI name ("\\\\.\\DISPLAY1"), so a window's report has both. If it
 can't be told, or OBS is capturing a window or game, every screen counts.
 
 Nothing's kept: a window's title goes no further unless it's what a clip ends

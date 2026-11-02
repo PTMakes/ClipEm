@@ -198,3 +198,109 @@ def test_leftover_staging_from_a_crashed_update_is_cleared(install):
     publish(_shared_zip(NEW_FILES))
     assert updater.apply_update()[0]
     assert not os.path.exists(os.path.join(shared, updater.STAGING_DIR_NAME))
+
+
+def _untouched(shared):
+    assert _read(shared, "VERSION") == OLD_VERSION
+    assert _read(shared, "Installer/run.py") == "old run.py"
+    assert _read(shared, "OBS-Config/basic.ini") == "user's OBS settings"
+    assert not os.path.exists(os.path.join(shared, updater.STAGING_DIR_NAME))
+    assert not os.path.exists(os.path.join(shared, updater.BACKUP_DIR_NAME))
+
+
+@pytest.mark.parametrize("evil", ["Shared/../../evil.py", "Elsewhere/evil.py"])
+def test_a_signed_package_with_an_unsafe_path_is_never_extracted(install, tmp_path, evil):
+    shared, publish = install
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("Shared/VERSION", NEW_VERSION)
+        zf.writestr(evil, "evil")
+    publish(buf.getvalue())
+
+    ok, message = updater.apply_update()
+
+    assert not ok and "unsafe path" in message
+    _untouched(shared)
+    assert not (tmp_path / "evil.py").exists() and not (tmp_path / "Elsewhere").exists()
+
+
+def test_a_package_too_big_to_be_real_is_refused(install, monkeypatch):
+    shared, publish = install
+    monkeypatch.setattr(updater, "MAX_ZIP_UNCOMPRESSED_BYTES", 8)
+    publish(_shared_zip(NEW_FILES))
+    ok, message = updater.apply_update()
+    assert not ok and "larger than expected" in message
+    _untouched(shared)
+
+
+def test_a_package_without_shared_is_refused(install):
+    shared, publish = install
+    publish(_shared_zip({}))  # an empty zip passes validate_zip, but has nothing in it
+    ok, message = updater.apply_update()
+    assert not ok and "unexpected layout" in message
+    _untouched(shared)
+
+
+def test_a_package_without_a_version_is_refused(install):
+    shared, publish = install
+    publish(_shared_zip({"Installer/run.py": "new run.py"}))
+    ok, message = updater.apply_update()
+    assert not ok and "(None)" in message
+    _untouched(shared)
+
+
+def test_a_corrupt_download_with_the_right_hash_keeps_the_old_version(install):
+    shared, publish = install
+    publish(b"not a zip")
+    ok, message = updater.apply_update()
+    assert not ok and message.startswith("Update failed (previous version kept)")
+    _untouched(shared)
+
+
+def test_a_failed_swap_keeps_the_old_version(install, monkeypatch):
+    shared, publish = install
+    publish(_shared_zip(NEW_FILES))
+    real_replace = os.replace
+
+    def replace(src, dst):
+        if os.path.basename(src) == "VERSION" and updater.STAGING_DIR_NAME in src:
+            raise OSError("disk full")
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(updater.os, "replace", replace)
+    ok, message = updater.apply_update()
+    assert not ok and "disk full" in message
+    _untouched(shared)
+    assert _read(shared, "tray-widget/tray_widget.py") == "old tray"
+
+
+def test_a_manifest_for_another_platform_changes_nothing(install):
+    shared, _publish = install
+    ok, message = updater.apply_update({"version": NEW_VERSION})
+    assert not ok and message.startswith("Could not get a trusted update manifest")
+    _untouched(shared)
+
+
+def test_an_unreachable_manifest_changes_nothing(install):
+    shared, _publish = install  # nothing published: the "server" has no such file
+    ok, message = updater.apply_update()
+    assert not ok and message.startswith("Could not get a trusted update manifest")
+    _untouched(shared)
+
+
+def test_an_unsigned_manifest_passed_in_is_still_hash_checked(install):
+    """run.py hands over the manifest it already fetched: the download is checked against it."""
+    shared, publish = install
+    publish(_shared_zip(NEW_FILES))
+    entry = {"url": SHARED_URL, "sha256": "1" * 64}
+    ok, message = updater.apply_update({"version": NEW_VERSION, "windows": {"shared": entry}, "linux": {"shared": entry}})
+    assert not ok and "Checksum mismatch" in message
+    _untouched(shared)
+
+
+def test_a_leftover_backup_from_a_crashed_update_is_cleared(install):
+    shared, publish = install
+    _write(shared, f"{updater.BACKUP_DIR_NAME}/VERSION", "from a crash")
+    publish(_shared_zip(NEW_FILES))
+    assert updater.apply_update()[0]
+    assert not os.path.exists(os.path.join(shared, updater.BACKUP_DIR_NAME))

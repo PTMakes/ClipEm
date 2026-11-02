@@ -5,7 +5,7 @@ import time
 import pytest
 
 pytest.importorskip("tkinter")
-from conftest import TRAY_WIDGET_DIR  # noqa: E402
+from conftest import TRAY_WIDGET_DIR, show_window  # noqa: E402
 
 sys.path.insert(0, TRAY_WIDGET_DIR)
 import obs_config  # noqa: E402
@@ -121,8 +121,7 @@ def _in_settings(monkeypatch, look):
         pytest.skip("no display")
 
     def run(root, *_args):
-        root.deiconify()
-        root.update()
+        show_window(root)
         look(root)
         root.destroy()
 
@@ -239,16 +238,22 @@ def test_badges_push_no_setting_out_of_the_window(fake_obs_config, monkeypatch):
 
     def look(root):
         layout = root.layout
-        root.geometry(f"{layout['size'][0]}x{layout['size'][1]}")
+        show_window(root, layout["size"])
         root.update()
         root.highlight_settings(list(layout["highlights"]))
         for tab in layout["tabs"]:
             layout["show_tab"](tab)
-            root.update()
-            root.update()
-            for card in layout["page"].winfo_children():
-                if card.winfo_ismapped() and card.body.winfo_reqwidth() > card.body.winfo_width():
-                    over[tab] = card.body.winfo_reqwidth() - card.body.winfo_width()
+            # Settings widens itself to fit; the window manager takes a moment to do it.
+            deadline = time.monotonic() + 3
+            while True:
+                root.update()
+                widest = max((card.body.winfo_reqwidth() - card.body.winfo_width()
+                              for card in layout["page"].winfo_children() if card.winfo_ismapped()), default=0)
+                if widest <= 0 or time.monotonic() > deadline:
+                    break
+                time.sleep(0.01)
+            if widest > 0:
+                over[tab] = widest
 
     _in_settings(monkeypatch, look)
     assert over == {}
@@ -330,7 +335,7 @@ def test_new_badges_cover_no_text(fake_obs_config, monkeypatch):
 
     def look(root):
         layout = root.layout
-        root.geometry(f"{layout['size'][0]}x{layout['size'][1]}")
+        show_window(root, layout["size"])
         root.highlight_settings(list(layout["highlights"]))
         badges = {item["badge"]: key for key, item in layout["highlighted"].items()}
         for tab in layout["tabs"]:
@@ -434,9 +439,7 @@ def _tab_overflow(monkeypatch):
         layout = root.layout
         canvas, page = layout["canvas"], layout["page"]
         width, height = layout["size"]
-        root.deiconify()
-        root.geometry(f"{width}x{height}")
-        root.update()
+        show_window(root, (width, height))
         for tab in layout["tabs"]:
             if tab == "All":
                 continue

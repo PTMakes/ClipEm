@@ -17,7 +17,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
-from conftest import TRAY_WIDGET_DIR
+from conftest import TRAY_WIDGET_DIR, fake_program
 
 sys.path.insert(0, TRAY_WIDGET_DIR)
 import clip_browser  # noqa: E402
@@ -485,16 +485,9 @@ def test_editor_label_and_command():
     assert editor_install.editor_command("/usr/bin/kdenlive", "/c/a.mkv", "Linux") == ["/usr/bin/kdenlive", "/c/a.mkv"]
 
 
-def _fake_editor(tmp_path, script):
-    exe = tmp_path / "editor"
-    exe.write_text("#!/bin/sh\n" + script)
-    exe.chmod(0o755)
-    return str(exe)
-
-
 def test_open_in_editor_reports_an_editor_that_dies(tmp_path, monkeypatch):
     monkeypatch.setattr(editor_install, "EDITOR_LOG_PATH", str(tmp_path / "editor.log"))
-    exe = _fake_editor(tmp_path, 'echo "cannot open display" >&2\nexit 2\n')
+    exe = fake_program(tmp_path, "editor", "cannot open display", 2)
     with pytest.raises(editor_install.EditorError, match="cannot open display"):
         editor_install.open_in_editor(exe, "/clips/a.mkv", system="Linux")
 

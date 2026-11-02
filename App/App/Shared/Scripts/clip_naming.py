@@ -158,7 +158,7 @@ def validate(settings):
             return "The addon suffixes must all be set, and be different."
         if any(clean(suffix) != suffix for suffix in suffixes):
             return 'Suffixes can\'t contain < > : " / \\ | ? *'
-        if not ((settings["prefix_on"] and settings["prefix"]) or settings["date"] or settings["id"] != ID_NONE):
+        if not ((settings["prefix_on"] and settings["prefix"].strip()) or settings["date"] or settings["id"] != ID_NONE):
             return "Clip names need at least a prefix, a date or a number."
     except (KeyError, TypeError, ValueError) as exc:
         return f"Invalid setting ({exc})."

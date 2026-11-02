@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds and publishes a ClipEm release.
 #
-#   1. Preflight - tools, signing key, version checks, lint + tests. Nothing is
+#   1. Preflight - tools, signing key, version checks, lint + tests (here,
+#      then on the Windows test VM - see test-windows.sh). Nothing is
 #      modified if any of these fail. Then the clip editor's screenshot (for
 #      the website and Setup) is retaken if the editor changed since the last
 #      one (screenshot_editor.py), and any uncommitted changes are
@@ -20,16 +21,19 @@
 #   6. Commit    - "Update <version>", then (asked first) push main and
 #                  publish the draft release, which tags the pushed commit.
 #
-# Usage: ./release.sh [--allow-dirty] [--no-upload] [--AutoUploadOn] [--dev] [patch|minor|major|X.Y.Z]
+# Usage: ./release.sh [--allow-dirty] [--no-upload] [--auto-upload] [--skip-windows-tests] [--dev] [patch|minor|major|X.Y.Z]
 #   (bump defaults to "patch")
 #   -h, --help     show this help and exit
 #   --allow-dirty  build from uncommitted changes without committing them
 #                  first (the build info records it)
 #   --no-upload    stop after step 3 - for a dry run; nothing is published
-#   --AutoUploadOn answer yes to the "Upload ... now?" question (the draft
+#   --auto-upload  answer yes to the "Upload ... now?" question (the draft
 #                  release, or the dev prerelease with --dev) so the run
 #                  needs no terminal for it. The final "Push main and
 #                  publish" question is still asked: that one goes live.
+#   --skip-windows-tests  don't run the tests on the Windows VM - needed
+#                  when it's off or nobody is logged in on it, which
+#                  otherwise stops the release (test-windows.sh)
 #   --dev          a test build of HEAD for the "Latest" update channel:
 #                  version <next>-dev.<UTC timestamp>, uploaded over the
 #                  rolling "dev" prerelease. Nothing is committed and the
@@ -41,6 +45,7 @@ ALLOW_DIRTY=0
 UPLOAD=1
 AUTO_UPLOAD=0
 DEV=0
+WINDOWS_TESTS=1
 BUMP="patch"
 for arg in "$@"; do
   case "$arg" in
@@ -50,8 +55,9 @@ for arg in "$@"; do
       exit 0 ;;
     --allow-dirty) ALLOW_DIRTY=1 ;;
     --no-upload) UPLOAD=0 ;;
-    --AutoUploadOn) AUTO_UPLOAD=1 ;;
+    --auto-upload) AUTO_UPLOAD=1 ;;
     --dev) DEV=1 ;;
+    --skip-windows-tests) WINDOWS_TESTS=0 ;;
     -*) echo "Unknown option: $arg" >&2; exit 1 ;;
     *) BUMP="$arg" ;;
   esac
@@ -199,7 +205,7 @@ fi
 # Preflight, lint/tests, shared, Linux OBS, ffmpeg, Python, manifest,
 # Windows installer, portable bundle, signing - plus the optional ones
 # (editor screenshot for a real release; upload; website + commit for a real release).
-STEP_TOTAL=$((10 + (DEV == 0 ? 1 : 0) + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
+STEP_TOTAL=$((10 + WINDOWS_TESTS + (DEV == 0 ? 1 : 0) + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
 
 VERSION_MANIFEST="$WEBSITE_UPDATES/install-manifest.json"
 [[ -f "$VERSION_MANIFEST" ]] || die "Current manifest not found: $VERSION_MANIFEST"
@@ -260,6 +266,11 @@ if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q -rs
 fi
 tail -n 1 "$TEST_LOG"
 grep '^SKIPPED' "$TEST_LOG" || true  # why any test was skipped
+
+if [[ "$WINDOWS_TESTS" == 1 ]]; then
+  step "Tests on Windows"
+  "$SCRIPT_DIR/test-windows.sh" || die "Windows tests FAILED - see $DIST_DIR/windows-tests (--skip-windows-tests skips them)"
+fi
 
 # A dev build leaves the source tree alone, so it keeps the last screenshot.
 if [[ "$DEV" == 0 ]]; then
@@ -450,9 +461,9 @@ RELEASE_FILES=(
 if [[ "$DEV" == 1 ]]; then upload_target="the \"dev\" prerelease"; else upload_target="a draft GitHub release $TAG"; fi
 if [[ "$AUTO_UPLOAD" == 1 ]]; then
   answer=y
-  echo "--AutoUploadOn: uploading $new_version to $upload_target without asking."
+  echo "--auto-upload: uploading $new_version to $upload_target without asking."
 else
-  [[ -t 0 ]] || die "No terminal to confirm the upload - nothing was published (or pass --AutoUploadOn). Release files: $RELEASE_DIR"
+  [[ -t 0 ]] || die "No terminal to confirm the upload - nothing was published (or pass --auto-upload). Release files: $RELEASE_DIR"
   read -rp "Upload $new_version to $upload_target now? [y/N] " answer
 fi
 if [[ ! "$answer" =~ ^[Yy] ]]; then

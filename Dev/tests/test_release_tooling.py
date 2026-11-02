@@ -150,6 +150,7 @@ def _tree(root, files):
         path.chmod(mode)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="releases are built on Linux: Windows has no executable bit to keep")
 def test_shared_zip_is_deterministic(tmp_path):
     files = {
         "Shared/VERSION": ("1.2.3", 0o644),
@@ -186,6 +187,7 @@ def test_shared_zip_passes_the_updaters_checks(tmp_path):
         updater.validate_zip(zf)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="releases are built on Linux: Windows has no executable bit to keep")
 def test_portable_bundle_layout_and_exec_bits(tmp_path):
     import io
     import tarfile
@@ -477,3 +479,332 @@ def test_manifests_are_uploaded_last(tmp_path):
     ordered = [f.name for f in release_common._ordered_uploads(tmp_path / n for n in names)]
     assert ordered[:2] == ["clipem-shared-1.4.0.zip", "build-info.json"]
     assert set(ordered[2:]) == {"install-manifest.json", "install-manifest.json.sig"}
+
+
+# --- Upstream pins: what a release trusts ------------------------------------
+
+def test_a_first_time_pin_is_the_publishers_digest(monkeypatch, capsys):
+    monkeypatch.setattr(generate_install_manifest, "sha256_of_url", lambda url: pytest.fail("no need to download"))
+    pins = {}
+    entry = generate_install_manifest.pinned_upstream(pins, "https://x/a", "ABC123")
+    assert entry == {"url": "https://x/a", "sha256": "abc123"} and pins == {"https://x/a": "abc123"}
+
+
+def test_without_a_published_digest_the_download_is_pinned_with_a_warning(monkeypatch, capsys):
+    monkeypatch.setattr(generate_install_manifest, "sha256_of_url", lambda url: "d1")
+    pins = {}
+    assert generate_install_manifest.pinned_upstream(pins, "https://x/a")["sha256"] == "d1"
+    assert pins == {"https://x/a": "d1"} and "WARNING" in capsys.readouterr().out
+
+
+def test_a_pin_is_kept_without_fetching_again(monkeypatch):
+    monkeypatch.setattr(generate_install_manifest, "sha256_of_url", lambda url: pytest.fail("already pinned"))
+    pins = {"https://x/a": "abc"}
+    assert generate_install_manifest.pinned_upstream(pins, "https://x/a")["sha256"] == "abc"
+    assert generate_install_manifest.pinned_upstream(pins, "https://x/a", "ABC")["sha256"] == "abc"
+
+
+def test_a_pin_the_publisher_disagrees_with_stops_the_release():
+    with pytest.raises(SystemExit, match="investigate before releasing"):
+        generate_install_manifest.pinned_upstream({"https://x/a": "abc"}, "https://x/a", "def")
+
+
+def test_a_broken_pins_file_stops_the_release_instead_of_dropping_every_pin(tmp_path, monkeypatch):
+    pins = tmp_path / "pins.json"
+    monkeypatch.setattr(generate_install_manifest, "PINS_PATH", pins)
+    assert generate_install_manifest.load_pins() == {}
+    pins.write_text('{"https://x/a": "abc"}')
+    assert generate_install_manifest.load_pins() == {"https://x/a": "abc"}
+    pins.write_text("{broken")
+    with pytest.raises(SystemExit, match="fix or restore it"):
+        generate_install_manifest.load_pins()
+
+
+def test_the_shipped_pins_are_real_digests():
+    pins = json.loads(generate_install_manifest.PINS_PATH.read_text())
+    assert pins and all(url.startswith("https://") and re.fullmatch("[0-9a-f]{64}", sha) for url, sha in pins.items())
+
+
+def test_a_new_github_asset_uses_its_published_digest(monkeypatch):
+    asked = []
+    monkeypatch.setattr(generate_install_manifest, "github_release_asset_digest",
+                        lambda repo, tag, asset: asked.append((repo, tag, asset)) or "ABC")
+    entry = generate_install_manifest.github_asset({}, "o/r", "v1", "a.zip")
+    assert entry == {"url": "https://github.com/o/r/releases/download/v1/a.zip", "sha256": "abc"}
+    assert asked == [("o/r", "v1", "a.zip")]
+
+
+def test_the_obs_asset_comes_from_obs(monkeypatch):
+    monkeypatch.setattr(generate_install_manifest, "github_release_asset_digest", lambda *a: "abc")
+    url = generate_install_manifest.github_obs_asset({}, "32.2.2", "obs.zip")["url"]
+    assert url == "https://github.com/obsproject/obs-studio/releases/download/32.2.2/obs.zip"
+
+
+def test_a_wheel_is_taken_from_pypi_universal_only(monkeypatch):
+    urls = [
+        {"packagetype": "sdist", "filename": "pip-1.tar.gz", "url": "https://x/s", "digests": {"sha256": "s"}},
+        {"packagetype": "bdist_wheel", "filename": "pip-1-cp312-win_amd64.whl", "url": "https://x/w",
+         "digests": {"sha256": "w"}},
+        {"packagetype": "bdist_wheel", "filename": "pip-1-py3-none-any.whl", "url": "https://x/any",
+         "digests": {"sha256": "ABC"}},
+    ]
+    monkeypatch.setattr(generate_install_manifest, "fetch_json", lambda url: {"urls": urls})
+    assert generate_install_manifest.pypi_wheel({}, "pip", "1") == {"url": "https://x/any", "sha256": "abc"}
+    monkeypatch.setattr(generate_install_manifest, "fetch_json", lambda url: {"urls": urls[:2]})
+    with pytest.raises(SystemExit, match="No py3-none-any wheel"):
+        generate_install_manifest.pypi_wheel({}, "pip", "1")
+
+
+def test_a_missing_artifact_stops_the_manifest(tmp_path):
+    args = type("Args", (), {"version": "1.2.3"})
+    with pytest.raises(SystemExit, match="File not found"):
+        generate_install_manifest.own_asset(args, str(tmp_path / "gone.zip"))
+
+
+def test_github_digests_come_from_the_api_or_the_release_notes(monkeypatch):
+    sha = "ab" * 32
+    releases = {
+        "v1": {"assets": [{"name": "other.zip", "digest": "sha256:" + "00" * 32},
+                          {"name": "a.zip", "digest": f"sha256:{sha}"}]},
+        "v2": {"assets": [{"name": "a.zip", "digest": "md5:xyz"}], "body": f"Files:\n  a.zip: {sha.upper()}\n"},
+        "v3": {"assets": [{"name": "a.zip"}], "body": None},
+        "v4": {"assets": [], "body": f"a.zip.sig: {sha}\nnot-a.zip: {sha}\n"},
+    }
+    monkeypatch.setattr(release_common, "fetch_json", lambda url: releases[url.rpartition("/")[2]])
+    assert release_common.github_release_asset_digest("o/r", "v1", "a.zip") == sha
+    assert release_common.github_release_asset_digest("o/r", "v2", "a.zip") == sha
+    assert release_common.github_release_asset_digest("o/r", "v3", "a.zip") is None
+    assert release_common.github_release_asset_digest("o/r", "v4", "a.zip") is None
+
+
+def test_a_failed_digest_lookup_is_no_digest(monkeypatch, capsys):
+    def offline(_url):
+        raise OSError("offline")
+
+    monkeypatch.setattr(release_common, "fetch_json", offline)
+    assert release_common.github_release_asset_digest("o/r", "v1", "a.zip") is None
+    assert "could not query GitHub" in capsys.readouterr().out
+
+
+# --- Keys ---------------------------------------------------------------------
+
+def test_every_shipped_copy_of_the_public_key_is_the_same_valid_key():
+    keys = release_common.shipped_public_keys()
+    assert len(keys) == 2 and len(set(keys.values())) == 1
+    assert len(ed25519_verify.decode_key_or_signature(next(iter(keys.values())))) == 32
+
+
+def _shipped_key(tmp_path, monkeypatch, value):
+    key_file, script = tmp_path / "signing_public_key.txt", tmp_path / "setup.sh"
+    key_file.write_text(value + "\n")
+    script.write_text(f'#!/bin/bash\n{release_common.LINUX_INSTALLER_KEY_PREFIX}{value}"\n')
+    monkeypatch.setattr(release_common, "PUBLIC_KEY_FILE", key_file)
+    monkeypatch.setattr(release_common, "LINUX_INSTALLER_SCRIPT", script)
+    return key_file, script
+
+
+def test_check_key_passes_when_everything_matches(tmp_path, monkeypatch, signing_key):
+    public = release_common.public_key_from_private(signing_key)
+    _shipped_key(tmp_path, monkeypatch, public)
+    assert release_common.check_key() == public
+
+
+def test_check_key_names_what_doesnt_match(tmp_path, monkeypatch, signing_key):
+    public = release_common.public_key_from_private(signing_key)
+    key_file, script = _shipped_key(tmp_path, monkeypatch, public)
+    script.write_text("no key here\n")
+    with pytest.raises(SystemExit) as exc:
+        release_common.check_key()
+    assert str(script) in str(exc.value) and str(key_file) not in str(exc.value)
+
+
+def test_check_key_needs_a_key_file(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPEM_SIGNING_KEY", str(tmp_path / "gone.pem"))
+    with pytest.raises(SystemExit, match="signing key not found"):
+        release_common.check_key()
+
+
+def test_a_missing_public_key_file_is_a_mismatch(tmp_path, monkeypatch):
+    _key_file, script = _shipped_key(tmp_path, monkeypatch, "abc")
+    monkeypatch.setattr(release_common, "PUBLIC_KEY_FILE", tmp_path / "gone")
+    assert release_common.shipped_public_keys() == {str(tmp_path / "gone"): "", str(script): "abc"}
+
+
+def test_a_key_that_isnt_ed25519_is_refused(tmp_path, monkeypatch):
+    if not shutil.which("openssl"):
+        pytest.skip("needs openssl")
+    key = tmp_path / "rsa.pem"
+    subprocess.run(["openssl", "genpkey", "-algorithm", "rsa", "-pkeyopt", "rsa_keygen_bits:1024", "-out", str(key)],
+                   check=True, capture_output=True)
+    with pytest.raises(SystemExit, match="not an Ed25519"):
+        release_common.public_key_from_private(key)
+
+
+def test_the_signing_key_defaults_to_the_users_config(monkeypatch):
+    monkeypatch.delenv("CLIPEM_SIGNING_KEY", raising=False)
+    assert str(release_common.signing_key_path()).endswith(os.path.join(".config", "clipem", "signing-key.pem"))
+
+
+def test_signing_writes_one_line_of_base64_beside_the_file(tmp_path, signing_key):
+    manifest = tmp_path / "m.json"
+    manifest.write_text("{}")
+    sig_path = release_common.sign_file(manifest)
+    assert sig_path == tmp_path / "m.json.sig"
+    assert len(ed25519_verify.decode_key_or_signature(sig_path.read_text())) == 64
+    assert sig_path.read_text().count("\n") == 1
+
+
+def test_signing_fails_loudly_without_its_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLIPEM_SIGNING_KEY", str(tmp_path / "gone.pem"))
+    manifest = tmp_path / "m.json"
+    manifest.write_text("{}")
+    if not shutil.which("openssl"):
+        pytest.skip("needs openssl")
+    with pytest.raises(subprocess.CalledProcessError):
+        release_common.sign_file(manifest)
+    assert not (tmp_path / "m.json.sig").exists()
+
+
+# --- GitHub --------------------------------------------------------------------
+
+class FakeGh:
+    """gh's answers by the words in its command line; records every call."""
+
+    def __init__(self, monkeypatch, answers=()):
+        self.calls = []
+        self.answers = dict(answers)
+        monkeypatch.setattr(release_common.shutil, "which", lambda name: f"/usr/bin/{name}")
+        monkeypatch.setattr(release_common.subprocess, "run", self.run)
+
+    def run(self, cmd, **_kwargs):
+        self.calls.append(cmd)
+        for words, answer in self.answers.items():
+            if all(word in cmd for word in words.split()):
+                return subprocess.CompletedProcess(cmd, *answer)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def commands(self):
+        return [" ".join(arg for arg in cmd[1:3]) for cmd in self.calls]
+
+
+def test_no_gh_stops_a_release(monkeypatch):
+    monkeypatch.setattr(release_common.shutil, "which", lambda name: None)
+    with pytest.raises(SystemExit, match="GitHub CLI"):
+        release_common.check_github()
+    with pytest.raises(SystemExit, match="GitHub CLI"):
+        release_common.release_exists("v1")
+
+
+def test_gh_must_be_logged_in_and_reach_the_repo(monkeypatch):
+    FakeGh(monkeypatch, {"auth status": (1, "", "no")})
+    with pytest.raises(SystemExit, match="isn't logged in"):
+        release_common.check_github()
+    FakeGh(monkeypatch, {"repo view": (1, "", "no such repo")})
+    with pytest.raises(SystemExit, match="no such repo"):
+        release_common.check_github()
+    FakeGh(monkeypatch)
+    release_common.check_github()
+
+
+def test_release_exists_tells_not_found_from_failure(monkeypatch):
+    FakeGh(monkeypatch)
+    assert release_common.release_exists("v1") is True
+    FakeGh(monkeypatch, {"release view": (1, "", "release not found")})
+    assert release_common.release_exists("v1") is False
+    FakeGh(monkeypatch, {"release view": (1, "", "HTTP 502")})
+    with pytest.raises(SystemExit, match="HTTP 502"):
+        release_common.release_exists("v1")
+
+
+def test_gh_failures_stop_the_release_with_its_message(monkeypatch):
+    FakeGh(monkeypatch, {"release upload": (1, "", "upload failed")})
+    with pytest.raises(SystemExit, match="upload failed"):
+        release_common._gh_ok("release", "upload", "v1")
+
+
+def _assets(tmp_path, *names):
+    files = []
+    for name in names:
+        (tmp_path / name).write_bytes(b"x")
+        files.append(tmp_path / name)
+    return files
+
+
+def test_a_release_is_a_draft_until_published(tmp_path, monkeypatch):
+    gh = FakeGh(monkeypatch)
+    release_common.upload_release("1.2.3", _assets(tmp_path, "a.zip"), "abc123")
+    cmd = gh.calls[0]
+    assert cmd[1:4] == ["release", "create", "v1.2.3"] and "--draft" in cmd
+    assert cmd[cmd.index("--notes") + 1] == "ClipEm 1.2.3"
+
+
+def test_publishing_tags_the_release_commit(monkeypatch):
+    gh = FakeGh(monkeypatch)
+    release_common.publish_release("1.2.3", "abc123")
+    cmd = gh.calls[0]
+    assert cmd[1:4] == ["release", "edit", "v1.2.3"]
+    assert cmd[cmd.index("--target") + 1] == "abc123" and "--draft=false" in cmd and "--latest" in cmd
+
+
+def test_the_first_dev_build_makes_the_prerelease(tmp_path, monkeypatch):
+    gh = FakeGh(monkeypatch, {"release view": (1, "", "release not found")})
+    release_common.upload_release("1.2.3-dev.5", _assets(tmp_path, "a.zip"), "abc123")
+    create = gh.calls[-1]
+    assert create[1:4] == ["release", "create", "dev"] and "--prerelease" in create and "--draft" not in create
+    assert "abc123" in create[create.index("--notes") + 1]
+
+
+def test_a_later_dev_build_replaces_the_assets_manifests_last_then_drops_stale_ones(tmp_path, monkeypatch):
+    files = _assets(tmp_path, "install-manifest.json", "new.zip")
+    assets = json.dumps({"assets": [{"name": "old.zip"}, {"name": "new.zip"}, {"name": "install-manifest.json"}]})
+    gh = FakeGh(monkeypatch, {"release view --json assets": (0, assets, "")})
+    release_common.upload_release("1.2.3-dev.5", files, "abc123")
+    uploads = [cmd for cmd in gh.calls if cmd[1:3] == ["release", "upload"]]
+    assert [[os.path.basename(arg) for arg in cmd if arg.startswith(str(tmp_path))] for cmd in uploads] == [
+        ["new.zip"], ["install-manifest.json"]]
+    assert all("--clobber" in cmd for cmd in uploads)
+    deletes = [cmd for cmd in gh.calls if cmd[1:3] == ["release", "delete-asset"]]
+    assert [cmd[4] for cmd in deletes] == ["old.zip"] and "--yes" in deletes[0]
+    assert gh.calls.index(uploads[-1]) < gh.calls.index(deletes[0])
+
+
+# --- The CLI release.sh runs ------------------------------------------------------
+
+def test_the_cli_checks_the_key_before_signing(tmp_path, monkeypatch, capsys):
+    order = []
+    monkeypatch.setattr(release_common, "check_key", lambda: order.append("check") or "pub")
+    monkeypatch.setattr(release_common, "sign_file", lambda f: order.append(f) or "sig")
+    release_common.main(["sign", "a", "b"])
+    assert order == ["check", "a", "b"]
+
+
+def test_the_cli_reports_whether_a_release_exists(monkeypatch):
+    monkeypatch.setattr(release_common, "release_exists", lambda tag: tag == "v1.2.3")
+    assert release_common.main(["release-exists", "1.2.3"]) == 0
+    assert release_common.main(["release-exists", "1.2.4"]) == 1
+
+
+def test_the_cli_prints_asset_urls(capsys):
+    release_common.main(["asset-url", "1.2.3", "a.zip"])
+    assert capsys.readouterr().out.strip() == release_common.release_asset_url("1.2.3", "a.zip")
+
+
+@pytest.mark.parametrize("command", [
+    ["zip-dir", "base", "top", "out"],
+    ["portable-bundle", "--shared-zip", "a", "--obs-install", "a", "--python-tar", "a", "--ffmpeg-tar", "a",
+     "--setup-script", "a", "--stage-dir", "a", "--out", "a"],
+    ["windows-offline-bundle", "--manifest", "a", "--shared-zip", "a", "--ffmpeg-zip", "a", "--vcruntime-zip", "a",
+     "--setup-script", "a", "--wheelhouse", "a", "--stage-dir", "a", "--out", "a"],
+], ids=lambda c: c[0])
+def test_reproducible_builds_need_their_timestamp(monkeypatch, command):
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    with pytest.raises(SystemExit, match="SOURCE_DATE_EPOCH"):
+        release_common.main(command)
+
+
+def test_the_atomic_json_helper_keeps_the_old_file_on_failure(tmp_path):
+    path = tmp_path / "pins.json"
+    path.write_text("old")
+    with pytest.raises(TypeError):
+        release_common.write_json_atomic(path, {"bad": object()})
+    assert path.read_text() == "old" and os.listdir(tmp_path) == ["pins.json"]

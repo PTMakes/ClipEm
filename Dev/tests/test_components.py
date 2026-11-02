@@ -164,10 +164,11 @@ def test_obs_version_falls_back_to_the_recorded_one(app, monkeypatch):
     app_dir, _archives, _downloads = app
     exe = app_dir / "Linux" / "obs-install" / "bin" / "obs"
     exe.parent.mkdir(parents=True)
-    exe.write_text("#!/bin/sh\necho 'OBS Studio - 32.2.2-modified'\n")
-    exe.chmod(0o755)
+    exe.write_text("")
+    answer = types.SimpleNamespace(stdout="OBS Studio - 32.2.2-modified\n")
+    monkeypatch.setattr(components.subprocess, "run", lambda *_a, **_k: answer)
     assert components.installed_obs_version("Linux") == "32.2.2"
-    exe.write_text("#!/bin/sh\nexit 1\n")
+    answer.stdout = ""
     (app_dir / "installed_versions.json").write_text(json.dumps({"obs": "31.0.0"}))
     assert components.installed_obs_version("Linux") == "31.0.0"
 
@@ -515,3 +516,200 @@ def test_install_orders_and_reports_what_the_caller_must_do(monkeypatch):
     calls.clear()
     assert components.install({}, {"packages": ["x"]}, log=print) == components.CONTINUE
     assert calls == ["packages"]
+
+
+@pytest.mark.parametrize("platform, system", [("win32", "Windows"), ("linux", "Linux"), ("darwin", None)])
+def test_only_windows_and_linux_are_managed(monkeypatch, platform, system):
+    monkeypatch.setattr(components.sys, "platform", platform)
+    assert components._system() == system
+
+
+def test_macos_has_nothing_to_check_or_install(monkeypatch):
+    monkeypatch.setattr(components, "_system", lambda: None)
+    assert components.check({"linux": {"obs": {}}}) == {}
+    assert components.install({}, {"obs": ("1", "2")}, print) == components.CONTINUE
+
+
+def test_no_plan_installs_nothing(monkeypatch):
+    monkeypatch.setattr(components, "_system", lambda: "Linux")
+    monkeypatch.setattr(components, "install_obs", lambda *a: pytest.fail("nothing planned"))
+    assert components.install({}, {}, print) == components.CONTINUE
+
+
+def test_python_exe_needs_the_python_to_be_there(app):
+    app_dir, _, _ = app
+    assert components.python_exe("Linux") is None and components.python_exe("Windows") is None
+    assert components.installed_python_version("Linux") is None
+    python = app_dir / "Linux" / "python" / "bin" / "python3"
+    python.parent.mkdir(parents=True)
+    python.write_text("")
+    assert components.python_exe("Linux") == str(python)
+    nested = app_dir / "Windows" / "Python" / "python-3.10" / "python.exe"
+    nested.parent.mkdir(parents=True)
+    nested.write_text("")
+    assert components.python_exe("Windows") == str(nested)
+
+
+def test_this_python_answers_for_itself(monkeypatch):
+    monkeypatch.setattr(components.subprocess, "run", lambda *a, **k: pytest.fail("no need to start it"))
+    assert components._query_python_version(components.sys.executable) == components.platform.python_version()
+
+
+@pytest.mark.parametrize("result, version", [
+    (types.SimpleNamespace(returncode=0, stdout="3.12.14\n"), "3.12.14"),
+    (types.SimpleNamespace(returncode=1, stdout="garbage"), None),
+])
+def test_another_python_is_asked(monkeypatch, tmp_path, result, version):
+    monkeypatch.setattr(components.subprocess, "run", lambda *a, **k: result)
+    assert components._query_python_version(str(tmp_path / "python")) == version
+
+
+def test_a_python_that_wont_run_has_no_version(monkeypatch, tmp_path):
+    def fail(*_args, **_kwargs):
+        raise OSError("not executable")
+
+    monkeypatch.setattr(components.subprocess, "run", fail)
+    assert components._query_python_version(str(tmp_path / "python")) is None
+
+
+def _obs_exe(system="Linux"):
+    exe = obs_install.obs_exe(system)
+    os.makedirs(os.path.dirname(exe), exist_ok=True)
+    with open(exe, "w") as f:
+        f.write("")
+    return exe
+
+
+def test_no_obs_has_no_version(app):
+    assert components.installed_obs_version("Linux") is None
+
+
+@pytest.mark.parametrize("stdout, version", [("OBS Studio - 32.2.2-modified\n", "32.2.2"), ("no version here", None)])
+def test_linux_asks_obs_its_version(app, monkeypatch, stdout, version):
+    _obs_exe()
+    monkeypatch.setattr(components.subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout=stdout))
+    assert components.installed_obs_version("Linux") == version
+
+
+def test_an_obs_that_wont_answer_uses_the_recorded_version(app, monkeypatch):
+    app_dir, _, _ = app
+    _obs_exe()
+
+    def fail(*_args, **_kwargs):
+        raise components.subprocess.TimeoutExpired("obs", 30)
+
+    (app_dir / "installed_versions.json").write_text('{"obs": "31.0.0"}')
+    monkeypatch.setattr(components.subprocess, "run", fail)
+    assert components.installed_obs_version("Linux") == "31.0.0"
+
+
+def test_the_tray_python_is_the_pinned_one_while_it_exists(app, monkeypatch, tmp_path):
+    deps = tmp_path / "tray-deps"
+    deps.mkdir()
+    monkeypatch.setattr(components, "_linux_tray_deps_dir", lambda: str(deps))
+    assert components._linux_tray_python() == components.sys.executable  # no pin, no bundled Python
+    pinned = tmp_path / "python3"
+    pinned.write_text("")
+    (deps / components.TRAY_PYTHON_PIN_FILENAME).write_text(f"{pinned}\n")
+    assert components._linux_tray_python() == str(pinned)
+    pinned.unlink()
+    assert components._linux_tray_python() == components.sys.executable
+
+
+def test_a_rebuilt_obs_is_never_a_downgrade(app, monkeypatch):
+    app_dir, _, _ = app
+    _obs_exe()
+    (app_dir / "installed_versions.json").write_text('{"obs_sha256": "old"}')
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: "33.0.0")
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    manifest = _manifest(linux_obs="https://x/linux-obs-install-32.2.2.tar.gz")
+    assert "obs" not in components.check(manifest, "Linux")
+
+
+def test_a_package_that_says_it_is_ffmpeg_but_has_no_binary_is_refused(app):
+    app_dir, archives, _ = app
+    archives["ffmpeg.tar.gz"] = lambda dest: _tar(dest, {"ffmpeg/readme": b"x"})
+    with pytest.raises(updater.UpdateError, match="has no"):
+        components.install_ffmpeg(_manifest(linux_ffmpeg="https://x/ffmpeg.tar.gz"), "Linux", lambda m: None)
+    assert sorted(n for n in os.listdir(app_dir / "Linux") if n.startswith(".")) == []
+
+
+def test_a_ffmpeg_package_with_anything_extra_is_refused(app):
+    _app_dir, archives, _ = app
+    archives["ffmpeg.tar.gz"] = lambda dest: _tar(dest, {"ffmpeg/bin/ffmpeg": b"x", "evil/file": b"x"})
+    with pytest.raises(updater.UpdateError, match="unexpected entries"):
+        components.install_ffmpeg(_manifest(linux_ffmpeg="https://x/ffmpeg.tar.gz"), "Linux", lambda m: None)
+
+
+def test_windows_ffmpeg_is_a_zip_checked_like_an_update(app):
+    app_dir, archives, _ = app
+    (app_dir / "Windows").mkdir()
+    archives["ffmpeg.zip"] = lambda dest: _zip(dest, {"elsewhere/ffmpeg.exe": "x"})
+    with pytest.raises(updater.UpdateError, match="unsafe path"):
+        components.install_ffmpeg(_manifest(windows_ffmpeg="https://x/ffmpeg.zip"), "Windows", lambda m: None)
+    archives["ffmpeg.zip"] = lambda dest: _zip(dest, {"ffmpeg/bin/ffmpeg.exe": "new"})
+    components.install_ffmpeg(_manifest(windows_ffmpeg="https://x/ffmpeg.zip"), "Windows", lambda m: None)
+    assert (app_dir / "Windows" / "ffmpeg" / "bin" / "ffmpeg.exe").read_text() == "new"
+
+
+def test_an_obs_package_without_obs_keeps_the_installed_one(app):
+    app_dir, archives, _ = app
+    exe = _obs_exe()
+    with open(exe, "w") as f:
+        f.write("installed")
+    archives["obs.tar.gz"] = lambda dest: _tar(dest, {"obs-install/readme": b"x"})
+    with pytest.raises(updater.UpdateError, match="has no"):
+        components.install_obs(_manifest(linux_obs="https://x/obs.tar.gz"), "Linux", lambda m: None)
+    with open(exe) as f:
+        assert f.read() == "installed"
+    assert not [n for n in os.listdir(app_dir / "Linux") if n.startswith(".obs")]
+
+
+def test_an_obs_package_with_anything_extra_is_refused(app):
+    _app_dir, archives, _ = app
+    archives["obs.tar.gz"] = lambda dest: _tar(dest, {"obs-install/bin/obs": b"x", "evil/file": b"x"})
+    with pytest.raises(updater.UpdateError, match="unexpected folders: evil"):
+        components.install_obs(_manifest(linux_obs="https://x/obs.tar.gz"), "Linux", lambda m: None)
+
+
+@pytest.mark.usefixtures("links")
+def test_deleting_a_folder_never_follows_its_links(tmp_path):
+    keep = tmp_path / "OBS-Config"
+    keep.mkdir()
+    (keep / "user.ini").write_text("mine")
+    folder = tmp_path / "obs-install"
+    folder.mkdir()
+    (folder / "config").symlink_to(keep)
+    components._clean(str(folder))
+    assert not folder.exists() and (keep / "user.ini").read_text() == "mine"
+
+
+def test_pip_is_called_how_it_needs_to_be(monkeypatch):
+    calls = []
+    monkeypatch.setattr(components, "install_requirements", lambda args, requirements: calls.append((args, requirements)))
+    requirements = os.path.join(components.SHARED_DIR, "r.txt")
+    components._pip_install("/python", requirements, lambda m: None, target="/deps", force=True)
+    args, _requirements = calls[0]
+    assert args[:4] == ["/python", "-m", "pip", "install"]
+    assert "--force-reinstall" in args and args[args.index("--target") + 1] == "/deps"
+    components._pip_install("/python", requirements, lambda m: None)
+    assert "--force-reinstall" not in calls[1][0] and "--target" not in calls[1][0]
+
+
+def test_windows_python_is_handed_to_a_script_once_clipem_exits(app, monkeypatch):
+    app_dir, _, _ = app
+    (app_dir / "Windows").mkdir()
+    started = []
+    monkeypatch.setattr(components, "LOG_DIR", str(app_dir / "logs"))
+    monkeypatch.setattr(components.subprocess, "CREATE_NO_WINDOW", 1, raising=False)
+    monkeypatch.setattr(components.subprocess, "CREATE_NEW_PROCESS_GROUP", 2, raising=False)
+    monkeypatch.setattr(components.subprocess, "Popen", lambda args, **kwargs: started.append((args, kwargs)))
+    components.start_windows_python_swap(["--boot", "--post-update"])
+    args, kwargs = started[0]
+    script = app_dir / "Windows" / ".python-update.ps1"
+    assert script.read_bytes().startswith(b"\xef\xbb\xbf")  # PowerShell needs the BOM to read UTF-8
+    assert args[args.index("-File") + 1] == str(script)
+    assert args[args.index("-WaitPid") + 1] == str(os.getpid())
+    assert args[args.index("-RunArgs") + 1].split("|")[1:] == ["--boot", "--post-update"]
+    assert kwargs["creationflags"] == 3

@@ -8,7 +8,7 @@ import types
 import zipfile
 
 import pytest
-from conftest import SCRIPTS_DIR
+from conftest import SCRIPTS_DIR, fake_program
 
 sys.modules.setdefault("obspython", types.ModuleType("obspython"))  # only exists inside OBS
 sys.path.insert(0, SCRIPTS_DIR)
@@ -53,12 +53,10 @@ def test_find_ffmpeg_prefers_bundled(tmp_path, monkeypatch):
 def test_reexport_failure_leaves_no_partial_file(tmp_path):
     clip = tmp_path / "clip.mp4"
     clip.write_text("not a video")
-    fake_ffmpeg = tmp_path / "ffmpeg"
-    fake_ffmpeg.write_text("#!/bin/sh\necho boom >&2\nexit 1\n")
-    fake_ffmpeg.chmod(0o755)
+    fake_ffmpeg = fake_program(tmp_path, "ffmpeg", "boom")
     logs = []
-    assert clip_reexport.reexport(str(fake_ffmpeg), str(clip), 10, 20, logs.append) is None
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["clip.mp4", "ffmpeg"]
+    assert clip_reexport.reexport(fake_ffmpeg, str(clip), 10, 20, logs.append) is None
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(["clip.mp4", os.path.basename(fake_ffmpeg)])
     assert "boom" in logs[0]
 
 
@@ -155,12 +153,10 @@ def test_process_clip_splits_before_the_smaller_copy(monkeypatch):
 def test_failed_split_leaves_the_clip_untouched(tmp_path):
     clip = tmp_path / "clip.mp4"
     clip.write_text("six tracks")
-    fake_ffmpeg = tmp_path / "ffmpeg"
-    fake_ffmpeg.write_text("#!/bin/sh\necho boom >&2\nexit 1\n")
-    fake_ffmpeg.chmod(0o755)
+    fake_ffmpeg = fake_program(tmp_path, "ffmpeg", "boom")
     logs = []
-    assert clip_reexport.split_tracks(str(fake_ffmpeg), str(clip), ["", "", ""], logs.append) is None
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["clip.mp4", "ffmpeg"]
+    assert clip_reexport.split_tracks(fake_ffmpeg, str(clip), ["", "", ""], logs.append) is None
+    assert sorted(p.name for p in tmp_path.iterdir()) == sorted(["clip.mp4", os.path.basename(fake_ffmpeg)])
     assert clip.read_text() == "six tracks"
     assert "boom" in logs[0]
 
@@ -215,6 +211,7 @@ def _rec_tracks():
 
 
 def test_split_tracks_on_routes_each_source_to_its_own_track(tmp_path, monkeypatch):
+    monkeypatch.setattr(setup.obs_config, "app_capture_supported", lambda *_a, **_k: True)  # needs a built helper on Windows
     scene = _shipped_config(tmp_path, monkeypatch)
     monkeypatch.setattr(setup.platform, "system", lambda: "Linux")
     monkeypatch.setattr(setup.obs_config.shutil, "which", lambda name: "/usr/bin/" + name)
@@ -268,3 +265,98 @@ def test_turning_split_tracks_on_removes_the_app_sources_older_versions_added(tm
     assert not any(s["name"].startswith("ClipEm App") for s in data["sources"])
     scene_source = next(s for s in data["sources"] if s["id"] == "scene")
     assert [i["name"] for i in scene_source["settings"]["items"]] == ["Display Capture"]
+
+
+def test_a_failed_copy_leaves_nothing_and_says_why(tmp_path, monkeypatch):
+    out = tmp_path / "clip-small.mp4"
+    logs = []
+
+    def ffmpeg(cmd, **_kwargs):
+        (tmp_path / "clip-small.mp4.partial").write_bytes(b"half")
+        return subprocess.CompletedProcess(cmd, 1, stderr="x" * 600 + "the real error")
+
+    monkeypatch.setattr(clip_reexport.subprocess, "run", ffmpeg)
+    assert clip_reexport.run_to(lambda partial: [partial], str(out), "copying", logs.append) is False
+    assert os.listdir(tmp_path) == [] and logs[0].endswith("the real error") and len(logs[0]) < 530
+
+
+def test_ffmpeg_not_starting_is_a_failed_copy_not_a_crash(tmp_path, monkeypatch):
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError("ffmpeg")
+
+    logs = []
+    monkeypatch.setattr(clip_reexport.subprocess, "run", missing)
+    assert clip_reexport.run_to(lambda partial: [partial], str(tmp_path / "out"), "copying", logs.append) is False
+    assert logs == ["copying failed: ffmpeg"]
+
+
+def test_a_finished_copy_replaces_the_file_in_one_step(tmp_path, monkeypatch):
+    out = tmp_path / "clip.mp4"
+    out.write_bytes(b"old")
+
+    def ffmpeg(cmd, **_kwargs):
+        (tmp_path / "clip.mp4.partial").write_bytes(b"new")
+        return subprocess.CompletedProcess(cmd, 0, stderr="")
+
+    monkeypatch.setattr(clip_reexport.subprocess, "run", ffmpeg)
+    assert clip_reexport.run_to(lambda partial: [partial], str(out), "copying", print) is True
+    assert out.read_bytes() == b"new" and os.listdir(tmp_path) == ["clip.mp4"]
+
+
+def test_a_partial_that_cant_be_removed_doesnt_raise(tmp_path, monkeypatch):
+    def ffmpeg(cmd, **_kwargs):
+        (tmp_path / "out.partial").write_bytes(b"half")
+        return subprocess.CompletedProcess(cmd, 1, stderr="failed")
+
+    def in_use(_path):
+        raise PermissionError("in use")
+
+    monkeypatch.setattr(clip_reexport.subprocess, "run", ffmpeg)
+    monkeypatch.setattr(clip_reexport.clip_naming.os, "remove", in_use)
+    assert clip_reexport.run_to(lambda partial: [partial], str(tmp_path / "out"), "copying", print) is False
+
+
+def test_a_failed_smaller_copy_is_no_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr(clip_reexport.subprocess, "run",
+                        lambda cmd, **_k: subprocess.CompletedProcess(cmd, 1, stderr="failed"))
+    assert clip_reexport.reexport("ffmpeg", str(tmp_path / "c.mp4"), 10, 30, print) is None
+
+
+def test_ffmpeg_runs_below_the_games_priority(monkeypatch):
+    import clip_tracks
+
+    monkeypatch.setattr(clip_tracks, "_SYSTEM", "Windows")
+    assert clip_tracks.low_priority_kwargs() == {"creationflags": 0x00004000 | 0x08000000}
+    monkeypatch.setattr(clip_tracks, "_SYSTEM", "Linux")
+    niced = []
+    monkeypatch.setattr(clip_tracks.os, "nice", niced.append, raising=False)
+    clip_tracks.low_priority_kwargs()["preexec_fn"]()
+    assert niced == [10]
+
+
+def test_a_track_that_cant_be_measured_keeps_its_label(monkeypatch):
+    def fail(*_args, **_kwargs):
+        raise OSError("ffmpeg vanished")
+
+    logs = []
+    monkeypatch.setattr(clip_reexport.subprocess, "run", fail)
+    assert clip_reexport.silent_app_tracks("ffmpeg", "c.mkv", ["Game"], logs.append) == set()
+    assert "couldn't measure Game's track" in logs[0]
+
+
+@pytest.mark.parametrize("strip_ok", [True, False])
+def test_a_failed_strip_is_said_and_the_tracks_copy_stays(monkeypatch, strip_ok):
+    results = iter([True, strip_ok])
+    monkeypatch.setattr(clip_reexport, "run_to", lambda *_args: next(results))
+    monkeypatch.setattr(clip_reexport, "silent_app_tracks", lambda *_args: set())
+    logs = []
+    assert clip_reexport.split_tracks("ffmpeg", "/c/clip.mp4", [], logs.append) == "/c/clip-tracks.mkv"
+    assert any("still has every audio track" in line for line in logs) is not strip_ok
+
+
+def test_no_tracks_copy_means_the_clip_keeps_its_tracks(monkeypatch):
+    runs = []
+    monkeypatch.setattr(clip_reexport, "run_to", lambda *args: runs.append(args) and False)
+    monkeypatch.setattr(clip_reexport, "silent_app_tracks", lambda *_args: set())
+    assert clip_reexport.split_tracks("ffmpeg", "/c/clip.mp4", [], print) is None
+    assert len(runs) == 1

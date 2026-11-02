@@ -113,3 +113,27 @@ def test_peak_guard_logs_once_per_source_without_levels(peak_guard, monkeypatch)
         check.peak_guard_tick()
     assert len(logs) == 1
     assert "dB" not in logs[0] and not any(ch.isdigit() for ch in logs[0])
+
+
+def test_libobs_is_found_only_if_it_has_the_volume_meter(monkeypatch):
+    class Library:
+        def __init__(self, has_meter):
+            self.obs_queue_task = types.SimpleNamespace()
+            for name in ("obs_get_source_by_uuid", "obs_source_release", "obs_volmeter_add_callback",
+                         "obs_volmeter_attach_source", "obs_volmeter_destroy"):
+                setattr(self, name, types.SimpleNamespace())
+            if has_meter:
+                self.obs_volmeter_create = types.SimpleNamespace()
+
+    monkeypatch.setattr(check, "_SYSTEM", "Linux")
+    libraries = {None: Library(False), "libobs.so.0": Library(True)}
+
+    def open_library(name):
+        if name not in libraries:
+            raise OSError(f"no {name}")
+        return libraries[name]
+
+    monkeypatch.setattr(check.ctypes, "CDLL", open_library)
+    assert check.load_libobs() is libraries["libobs.so.0"]
+    del libraries["libobs.so.0"]
+    assert check.load_libobs() is None

@@ -29,7 +29,8 @@ def test_desktop_exec_arg_escaping():
     assert autostart.desktop_exec_arg('/x/"q"$`%') == '"/x/\\\\"q\\\\"\\\\$\\\\`%%"'
 
 
-def test_linux_desktop_entry():
+def test_linux_desktop_entry(monkeypatch):
+    monkeypatch.setattr(autostart, "RUN_PY", "/x/run.py")
     entry = autostart.linux_desktop_entry("/usr/bin/python3", ["--boot"], autostart=True)
     assert entry.startswith("[Desktop Entry]\n")
     assert f'Exec="/usr/bin/python3" "{autostart.RUN_PY}" "--boot"\n' in entry
@@ -135,7 +136,8 @@ def menu_dir(tmp_path, monkeypatch):
     return tmp_path / "applications"
 
 
-def test_linux_menu_entry_is_listed_in_menus(menu_dir):
+def test_linux_menu_entry_is_listed_in_menus(menu_dir, monkeypatch):
+    monkeypatch.setattr(autostart, "RUN_PY", "/x/run.py")
     autostart.create_linux_menu_entry("/usr/bin/python3", "/x/ClipEm.png")
     entry = (menu_dir / "clipem.desktop").read_text()
     assert f'Exec="/usr/bin/python3" "{autostart.RUN_PY}"\n' in entry
@@ -249,11 +251,155 @@ def test_launch_repairs_a_broken_menu_entry_unless_uninstalled(shortcuts):
     assert autostart.repair_linux_menu_entry() is None  # working now: left alone
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Linux only: it removes the entry it has open, which Windows refuses")
 def test_uninstall_removes_this_installs_window_entries_only(tmp_path, monkeypatch):
     monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(autostart, "SHARED_DIR", "/home/x/ClipEm/App/Shared")
     ours, theirs = tmp_path / "clipem-editor.desktop", tmp_path / "clipem-settings.desktop"
     ours.write_text(f"Icon={autostart.SHARED_DIR}/tray-widget/ClipEmEditor.png\n")
     theirs.write_text("Icon=/other/ClipEm/App/Shared/tray-widget/ClipEmSettings.png\n")
     autostart.remove_window_desktop_entries(str(tmp_path))
     assert not ours.exists() and theirs.exists()
 
+
+
+# --- Registering the boot autostart entry -------------------------------------
+
+@pytest.fixture
+def linux_boot(tmp_path, monkeypatch):
+    path = tmp_path / "autostart" / "clipem.desktop"
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(autostart, "autostart_entry_path", lambda: str(path))
+    monkeypatch.setattr(autostart, "find_linux_python_bin", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(autostart, "RUN_PY", "/home/x/ClipEm/App/Shared/Installer/run.py")
+    return path
+
+
+def test_boot_autostart_writes_a_runnable_entry_that_passes_boot(linux_boot):
+    autostart.apply_boot_autostart(True)
+    entry = linux_boot.read_text()
+    assert '"--boot"' in entry and f'"{autostart.RUN_PY}"' in entry and "X-GNOME-Autostart-enabled=true" in entry
+    assert os.access(linux_boot, os.X_OK)
+
+
+def test_turning_boot_autostart_off_removes_this_installs_entry(linux_boot):
+    autostart.apply_boot_autostart(True)
+    autostart.apply_boot_autostart(False)
+    assert not linux_boot.exists()
+
+
+def test_turning_boot_autostart_off_twice_is_fine(linux_boot):
+    autostart.apply_boot_autostart(False)
+    assert not linux_boot.exists()
+
+
+def test_another_installs_entry_is_left_alone(linux_boot):
+    linux_boot.parent.mkdir()
+    entry = "[Desktop Entry]\nExec=/usr/bin/python3 /other/ClipEm/App/Shared/Installer/run.py --boot\n"
+    linux_boot.write_text(entry)
+    autostart.apply_boot_autostart(False)
+    assert linux_boot.read_text() == entry
+
+
+def test_a_platform_without_autostart_is_told_so(monkeypatch, capsys):
+    monkeypatch.setattr(autostart, "autostart_entry_path", lambda: None)
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Plan9")
+    autostart.apply_boot_autostart(True)
+    assert "isn't supported on Plan9" in capsys.readouterr().err
+
+
+def test_an_entry_that_cant_be_written_is_skipped_not_fatal(linux_boot, monkeypatch, capsys):
+    def fail():
+        raise OSError("no python")
+
+    monkeypatch.setattr(autostart, "find_linux_python_bin", fail)
+    autostart.apply_boot_autostart(True)
+    captured = capsys.readouterr()
+    assert "skipping it" in captured.err and "enabled" not in captured.out
+
+
+def test_macos_writes_a_launch_agent(tmp_path, monkeypatch):
+    path = tmp_path / "LaunchAgents" / "clipem.plist"
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(autostart, "autostart_entry_path", lambda: str(path))
+    autostart.apply_boot_autostart(True)
+    assert "<string>--boot</string>" in path.read_text()
+
+
+def test_windows_makes_a_shortcut_to_pythonw_passing_boot(tmp_path, monkeypatch):
+    path = tmp_path / "Startup" / "ClipEm.lnk"
+    scripts = []
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(autostart, "autostart_entry_path", lambda: str(path))
+    monkeypatch.setattr(autostart, "find_windows_python_root", lambda: "C:\\Py")
+    monkeypatch.setattr(autostart, "run_powershell", lambda script, check: scripts.append(script))
+    autostart.apply_boot_autostart(True)
+    assert os.path.join("C:\\Py", "pythonw.exe") in scripts[0] and "--boot" in scripts[0]
+
+
+def test_removing_entries_counts_what_really_went(tmp_path, monkeypatch, capsys):
+    real = tmp_path / "real.desktop"
+    real.write_text("x")
+    busy = tmp_path / "busy.desktop"
+    busy.write_text("x")
+    real_remove = os.remove
+
+    def remove(path):
+        if path == str(busy):
+            raise PermissionError("in use")
+        real_remove(path)
+
+    monkeypatch.setattr(autostart.os, "remove", remove)
+    entries = [{"path": str(real)}, {"path": str(tmp_path / "gone.desktop")}, {"path": str(busy)}]
+    assert autostart.remove_autostart_entries(entries) == 1
+    assert not real.exists() and busy.exists()
+    assert f"Could not remove the autostart entry {busy}" in capsys.readouterr().err
+
+
+def test_the_desktop_shortcut_is_made_runnable_and_trusted(tmp_path, monkeypatch):
+    path = tmp_path / "Desktop" / "ClipEm.desktop"
+    ran, remembered = [], []
+    monkeypatch.setattr(autostart.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(autostart, "shortcut_path", lambda kind: str(path))
+    monkeypatch.setattr(autostart, "find_linux_python_bin", lambda: "/usr/bin/python3")
+    monkeypatch.setattr(autostart, "_remember_shortcut", lambda kind, on: remembered.append((kind, on)))
+    monkeypatch.setattr(autostart.shutil, "which", lambda name: "/usr/bin/gio")
+    monkeypatch.setattr(autostart.subprocess, "run", lambda cmd, **k: ran.append(cmd))
+    assert autostart.install_shortcut("desktop") == str(path)
+    assert os.access(path, os.X_OK) and "StartupWMClass=ClipEm" in path.read_text()
+    assert ran == [["gio", "set", str(path), "metadata::trusted", "true"]]
+    assert remembered == [("desktop", True)]
+
+
+def test_a_shortcut_this_platform_doesnt_have_is_an_error(monkeypatch):
+    monkeypatch.setattr(autostart, "shortcut_path", lambda kind: None)
+    with pytest.raises(RuntimeError, match="doesn't make this shortcut"):
+        autostart.install_shortcut("desktop")
+
+
+def test_the_folders_launcher_is_kept_and_a_menu_failure_isnt_fatal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(autostart, "ROOT_DIR", str(tmp_path))
+    monkeypatch.setattr(autostart, "find_linux_python_bin", lambda: "/usr/bin/python3")
+
+    def no_menu(_python, _icon):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(autostart, "create_linux_menu_entry", no_menu)
+    autostart.create_shortcut_linux()
+    launcher = tmp_path / "ClipEm.desktop"
+    assert os.access(launcher, os.X_OK) and "skipping it" in capsys.readouterr().err
+    launcher.write_text("edited")
+    autostart.create_shortcut_linux()
+    assert launcher.read_text() == "edited"
+
+
+@pytest.mark.parametrize("system, name", [
+    ("Linux", "create_shortcut_linux"), ("Windows", "create_shortcut_windows"), ("Darwin", "create_shortcut_macos"),
+])
+def test_each_platform_gets_its_own_shortcut(monkeypatch, system, name):
+    made = []
+    monkeypatch.setattr(autostart.platform, "system", lambda: system)
+    for other in ("create_shortcut_linux", "create_shortcut_windows", "create_shortcut_macos"):
+        monkeypatch.setattr(autostart, other, lambda who=other: made.append(who))
+    autostart.create_shortcut()
+    assert made == [name]

@@ -87,7 +87,8 @@ def open_log_viewer(root, px, reveal_file):
             for path in paths:
                 files.insert("end", f"  {os.path.basename(path)}")
                 rows.append(path)
-        target = current if current in rows else next((path for path in rows if path), None)
+        # (Not "current in rows" alone: before any log is open it's None, a heading's row.)
+        target = current if current is not None and current in rows else next((path for path in rows if path), None)
         if target is None:
             chosen["path"] = None
             text.config(state="normal")

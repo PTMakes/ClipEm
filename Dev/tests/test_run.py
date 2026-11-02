@@ -6,6 +6,7 @@ import threading
 
 import pytest
 import run
+from conftest import has_display
 
 
 def test_post_update_launch_never_offers_again(monkeypatch):
@@ -99,14 +100,14 @@ def _update_prompt_text(monkeypatch, notes):
     return _prompt_text(monkeypatch, lambda: run._ask_about_update(["ClipEm 1.0.0 -> 1.1.0"], notes))
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 def test_update_prompt_shows_the_notes_above_the_warning(monkeypatch):
     labels = _update_prompt_text(monkeypatch, "New: post-clip.")
     assert labels[1:3] == ["Release notes", "New: post-clip."]
     assert labels[3].startswith("Updating keeps")
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 def test_update_prompt_without_notes_has_no_section(monkeypatch):
     assert "Release notes" not in _update_prompt_text(monkeypatch, "")
 
@@ -159,7 +160,7 @@ def test_a_window_that_fails_doesnt_stop_the_launch_or_return(started, monkeypat
     assert run.updater.load_update_config()["last_version"] == "1.5.0"
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 @pytest.mark.parametrize("old, heading, shown", [
     ("1.4.0", "ClipEm Has Updated From 1.4.0 to 1.4.2", ["Two.", "One."]),
     ("1.4.1", "ClipEm Has Updated From 1.4.1 to 1.4.2", ["Two."]),
@@ -178,14 +179,14 @@ def test_update_finished_window(monkeypatch, tmp_path, old, heading, shown):
     assert ("1.4.2  (2026-11-01)" in texts[1]) == (len(shown) > 1)  # one version: the window's heading says it
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 def test_update_finished_window_without_notes(monkeypatch, tmp_path):
     monkeypatch.setattr(run.release_notes, "RELEASE_NOTES_PATH", str(tmp_path / "missing.json"))
     texts = _prompt_text(monkeypatch, lambda: run._show_update_finished("1.4.0", "1.4.2"))
     assert texts[1] == run.release_notes.NO_NOTES
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 @pytest.mark.parametrize("new_settings", [[{"key": "post_clip", "name": "Post-clip"}], []])
 def test_update_finished_window_offers_the_new_settings(monkeypatch, tmp_path, new_settings):
     import tkinter
@@ -221,7 +222,7 @@ def test_update_finished_window_offers_the_new_settings(monkeypatch, tmp_path, n
         assert not request.exists()
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 def test_show_new_settings_says_so_when_the_tray_is_gone(monkeypatch, tmp_path):
     import tkinter
 
@@ -592,7 +593,7 @@ def test_another_launch_cant_be_killed(launch_gate):
         other.wait()
 
 
-@pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")), reason="needs a display")
+@pytest.mark.skipif(not has_display(), reason="needs a display")
 @pytest.mark.parametrize("can_kill, shown", [(True, True), (False, False)])
 def test_already_open_dialog_offers_the_kill_button(monkeypatch, can_kill, shown):
     import tkinter
@@ -682,3 +683,368 @@ def test_a_running_tray_counts_as_already_open_except_for_an_obs_restart(launch_
     finally:
         tray.kill()
         tray.wait()
+
+
+def test_resolve_tray_python_falls_back(tmp_path):
+    assert run._resolve_tray_python(None, "/fallback") == "/fallback"
+    assert run._resolve_tray_python(str(tmp_path), "/fallback") == "/fallback"  # no pin
+    (tmp_path / run.TRAY_PYTHON_PIN_FILENAME).write_text("/gone/python\n")
+    assert run._resolve_tray_python(str(tmp_path), "/fallback") == "/fallback"  # uninstalled since
+    (tmp_path / run.TRAY_PYTHON_PIN_FILENAME).write_text("  \n")
+    assert run._resolve_tray_python(str(tmp_path), "/fallback") == "/fallback"
+
+
+def test_a_crash_sentinel_is_cleared_so_obs_doesnt_ask_about_safe_mode(tmp_path):
+    (tmp_path / ".sentinel").mkdir()
+    (tmp_path / ".sentinel" / "run_abc").write_text("")
+    run._clear_sentinel(str(tmp_path))
+    assert os.listdir(tmp_path / ".sentinel") == []
+    run._clear_sentinel(str(tmp_path / "gone"))
+
+
+def test_a_sentinel_that_cant_be_removed_doesnt_stop_a_launch(tmp_path, monkeypatch):
+    def in_use(_path):
+        raise PermissionError("in use")
+
+    (tmp_path / ".sentinel").mkdir()
+    (tmp_path / ".sentinel" / "run_abc").write_text("")
+    monkeypatch.setattr(run.os, "remove", in_use)
+    run._clear_sentinel(str(tmp_path))
+
+
+class Tray:
+    """_start_tray_widget with its prerequisite check's exit code `check`;
+    `started`: what was launched."""
+
+    def __init__(self, monkeypatch, tmp_path, check=0, stderr=""):
+        self.started = []
+        self.checks = []
+        self.logs = []
+
+        def run_check(cmd, **kwargs):
+            self.checks.append((cmd, kwargs))
+            return subprocess.CompletedProcess(cmd, check, stderr=stderr)
+
+        monkeypatch.setattr(run, "_tray_widget_running", lambda: False)
+        monkeypatch.setattr(run.subprocess, "run", run_check)
+        monkeypatch.setattr(run.subprocess, "Popen", lambda cmd, **kwargs: self.started.append((cmd, kwargs)))
+        monkeypatch.setattr(run.log, "info", self.logs.append)
+
+
+def test_the_tray_starts_with_its_packages_on_the_path(monkeypatch, tmp_path):
+    tray = Tray(monkeypatch, tmp_path)
+    monkeypatch.setenv("PYTHONPATH", "/existing")
+    run._start_tray_widget("/python", extra_env={"EXTRA": "1"}, tray_deps_dir="/deps")
+    (cmd, kwargs), = tray.started
+    assert cmd == ["/python", run.TRAY_WIDGET_SCRIPT]
+    assert kwargs["env"]["PYTHONPATH"] == os.pathsep.join(["/deps", "/existing"]) and kwargs["env"]["EXTRA"] == "1"
+    assert tray.checks[0][1]["env"] == kwargs["env"]
+
+
+def test_the_tray_path_has_no_trailing_separator_when_nothing_was_set(monkeypatch, tmp_path):
+    tray = Tray(monkeypatch, tmp_path)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    run._start_tray_widget("/python", tray_deps_dir="/deps")
+    assert tray.started[0][1]["env"]["PYTHONPATH"] == "/deps"
+
+
+def test_the_tray_check_needs_pillows_compiled_part(monkeypatch, tmp_path):
+    """`import PIL` alone passes with a Pillow built for another Python."""
+    tray = Tray(monkeypatch, tmp_path)
+    monkeypatch.setattr(run.sys, "platform", "linux")
+    run._start_tray_widget("/python")
+    code = tray.checks[0][0][-1]
+    assert "from PIL import Image, ImageDraw" in code and "dbus_next" in code and "websocket" in code
+    monkeypatch.setattr(run.sys, "platform", "darwin")
+    run._start_tray_widget("/python")
+    assert "pystray" in tray.checks[1][0][-1]
+
+
+def test_a_tray_that_couldnt_run_isnt_started(monkeypatch, tmp_path):
+    tray = Tray(monkeypatch, tmp_path, check=1, stderr="Traceback\nImportError: _imaging\n")
+    run._start_tray_widget("/python")
+    assert tray.started == [] and tray.logs[-1] == "ImportError: _imaging"
+
+
+def test_a_running_tray_isnt_started_again(monkeypatch, tmp_path):
+    tray = Tray(monkeypatch, tmp_path)
+    monkeypatch.setattr(run, "_tray_widget_running", lambda: True)
+    run._start_tray_widget("/python")
+    assert tray.started == [] and tray.checks == []
+
+
+def test_windows_starts_the_tray_windowless_and_detached(monkeypatch, tmp_path):
+    tray = Tray(monkeypatch, tmp_path)
+    monkeypatch.setattr(run.sys, "platform", "win32")
+    monkeypatch.setattr(run, "_NO_CONSOLE_FLAGS", 0x08000000, raising=False)
+    monkeypatch.setattr(run, "_DETACHED_FLAGS", 520, raising=False)
+    (tmp_path / "pythonw.exe").write_text("")
+    python = str(tmp_path / "python.exe")
+    run._start_tray_widget(python)
+    (cmd, kwargs), = tray.started
+    assert cmd[0] == str(tmp_path / "pythonw.exe") and kwargs["creationflags"] == 520
+    assert tray.checks[0][0][0] == python
+
+
+def test_a_python_without_pythonw_is_used_as_it_is(monkeypatch, tmp_path):
+    monkeypatch.setattr(run.sys, "platform", "win32")
+    assert run._windowless_python(str(tmp_path / "python.exe")) == str(tmp_path / "python.exe")
+
+
+@pytest.mark.parametrize("config, obs_started, tray_started", [
+    ({"autostart_obs": True, "autostart_tray": True}, True, True),
+    ({"autostart_obs": False, "autostart_tray": True}, False, True),
+    ({"autostart_obs": True, "autostart_tray": False}, True, False),
+    ({"autostart_obs": False, "autostart_tray": False}, False, False),
+])
+def test_each_platform_follows_the_boot_config(tmp_path, monkeypatch, config, obs_started, tray_started):
+    exe = tmp_path / "Linux" / "obs-install" / "bin" / "obs"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    started, tray = [], []
+    monkeypatch.setattr(run.obs_install, "platform_dir", lambda system: str(tmp_path / "Linux"))
+    monkeypatch.setattr(run, "_ensure_obs", lambda system: str(exe))
+    monkeypatch.setattr(run.helper, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(run, "_obs_launch_flags", lambda: (["--startreplaybuffer"], {"A": "1"}))
+    monkeypatch.setattr(run.subprocess, "Popen", lambda cmd, **kwargs: started.append(cmd))
+    monkeypatch.setattr(run, "_start_tray_widget", lambda python, extra_env, tray_deps_dir: tray.append(extra_env))
+    run.run_linux(config)
+    assert bool(started) is obs_started and bool(tray) is tray_started
+    if started:
+        assert started[0] == [str(exe), "-p", "--startreplaybuffer"]
+    if tray:
+        assert tray[0] == {"A": "1", "PYSTRAY_BACKEND": "appindicator"}
+
+
+def test_obs_is_told_where_clipems_plugin_is(tmp_path, monkeypatch):
+    (tmp_path / "linux").mkdir()
+    monkeypatch.setattr(run, "OBS_PLUGIN_DIR", str(tmp_path))
+    env = run._obs_env("linux")
+    assert env["OBS_PLUGINS_PATH"] == env["OBS_PLUGINS_DATA_PATH"] == str(tmp_path / "linux")
+
+
+def test_without_the_plugin_obs_still_starts(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "OBS_PLUGIN_DIR", str(tmp_path))
+    monkeypatch.delenv("OBS_PLUGINS_PATH", raising=False)
+    assert "OBS_PLUGINS_PATH" not in run._obs_env("linux")
+
+
+def test_macos_stops_without_obs(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "APP_DIR", str(tmp_path))
+    with pytest.raises(SystemExit, match="OBS.app not found"):
+        run.run_macos({"autostart_obs": True, "autostart_tray": True})
+
+
+def test_macos_starts_obs_and_the_tray(tmp_path, monkeypatch):
+    exe = tmp_path / "macOS" / "OBS.app" / "Contents" / "MacOS" / "OBS"
+    exe.parent.mkdir(parents=True)
+    exe.write_text("")
+    started, tray = [], []
+    monkeypatch.setattr(run, "APP_DIR", str(tmp_path))
+    monkeypatch.setattr(run.helper, "prepare", lambda *a, **k: None)
+    monkeypatch.setattr(run, "_obs_launch_flags", lambda: (["--flag"], {}))
+    monkeypatch.setattr(run.subprocess, "Popen", lambda cmd, **kwargs: started.append(cmd))
+    monkeypatch.setattr(run, "_start_tray_widget", lambda python, extra_env, tray_deps_dir: tray.append(tray_deps_dir))
+    run.run_macos({"autostart_obs": True, "autostart_tray": True})
+    assert started == [[str(exe), "--portable", "--flag"]]
+    assert tray == [str(tmp_path / "macOS" / "tray-deps")]
+
+
+def test_tcl_is_only_pointed_at_on_windows_and_never_over_a_setting(tmp_path, monkeypatch):
+    (tmp_path / "tcl" / "tcl8.6").mkdir(parents=True)
+    monkeypatch.setattr(run.sys, "executable", str(tmp_path / "python.exe"))
+    monkeypatch.setattr(run.sys, "platform", "linux")
+    monkeypatch.delenv("TCL_LIBRARY", raising=False)
+    monkeypatch.delenv("TK_LIBRARY", raising=False)
+    run._enable_windows_tk()
+    assert "TCL_LIBRARY" not in os.environ
+    monkeypatch.setattr(run.sys, "platform", "win32")
+    run._enable_windows_tk()
+    assert os.environ["TCL_LIBRARY"] == str(tmp_path / "tcl" / "tcl8.6") and "TK_LIBRARY" not in os.environ
+    monkeypatch.setenv("TCL_LIBRARY", "/mine")
+    run._enable_windows_tk()
+    assert os.environ["TCL_LIBRARY"] == "/mine"
+
+
+def test_an_error_dialog_that_cant_open_is_only_skipped(monkeypatch):
+    def no_display(*_args, **_kwargs):
+        raise RuntimeError("no display")
+
+    monkeypatch.setattr("tkinter.Tk", no_display)
+    run._show_error("message")
+
+
+def test_a_fatal_error_is_logged_shown_and_exits(monkeypatch):
+    shown, logged = [], []
+    monkeypatch.setattr(run, "_show_error", shown.append)
+    monkeypatch.setattr(run.log, "error", logged.append)
+    with pytest.raises(SystemExit) as exc:
+        run._fatal("broken")
+    assert exc.value.code == "broken" and shown == ["broken"] and logged == ["broken"]
+
+
+@pytest.mark.parametrize("platform", ["linux", "win32"])
+def test_restarting_replaces_this_launch(monkeypatch, platform):
+    ran = []
+    monkeypatch.setattr(sys, "argv", ["run.py", "--boot", run.POST_UPDATE_FLAG])
+    monkeypatch.setattr(run.sys, "platform", platform)
+    monkeypatch.setattr(run, "_DETACHED_FLAGS", 520, raising=False)
+    monkeypatch.setattr(run.os, "execv", lambda exe, argv: ran.append(argv))
+    monkeypatch.setattr(run.subprocess, "Popen", lambda argv, creationflags: ran.append(argv))
+    if platform == "win32":
+        with pytest.raises(SystemExit) as exc:
+            run._restart_self([run.POST_UPDATE_FLAG])
+        assert exc.value.code == 0
+    else:
+        run._restart_self([run.POST_UPDATE_FLAG])
+    assert ran[0][2:] == ["--boot", run.POST_UPDATE_FLAG, run.RESTARTED_FLAG]  # the flag isn't doubled
+
+
+class Launch:
+    """run.main() with every step faked; `steps` is what happened, in order."""
+
+    def __init__(self, monkeypatch, tmp_path, argv=(), may_update=True, obs_running=False, pending=None):
+        self.steps = []
+        self.obs_running = obs_running
+        step = self.steps.append
+        monkeypatch.setattr(sys, "argv", ["run.py", *argv])
+        monkeypatch.setattr(run, "_claim_launch", lambda: may_update)
+        monkeypatch.setattr(run.platform, "system", lambda: "Linux")
+        monkeypatch.setattr(run, "_reinstall_if_requested", lambda: step("reinstall"))
+        monkeypatch.setattr(run, "_install_pending_update", lambda: step("update"))
+        monkeypatch.setattr(run, "_note_version_started", lambda: step("note_version"))
+        monkeypatch.setattr(run, "_offer_update", lambda: step("offer"))
+        monkeypatch.setattr(run, "run_linux", lambda config: step(("linux", config)))
+        monkeypatch.setattr(run, "load_run_config", lambda: {"from": "run_config.json"})
+        monkeypatch.setattr(run.obs_process, "obs_running", lambda: self.obs_running)
+        config = run.obs_config
+        monkeypatch.setattr(config, "ensure_obs_websocket_password", lambda: step("password"))
+        monkeypatch.setattr(config, "load_pending_obs_settings", lambda: pending)
+        monkeypatch.setattr(config, "apply_pending_obs_settings", lambda: step("apply_pending") or ["x"])
+        monkeypatch.setattr(config, "migrate_discord_target_size", lambda: step("migrate_discord"))
+        monkeypatch.setattr(config, "migrate_split_tracks_layout", lambda: step("migrate_tracks"))
+        monkeypatch.setattr(config, "migrate_audio_bitrate", lambda: step("migrate_audio"))
+        monkeypatch.setattr(config, "fit_replay_buffer_size", lambda: step("fit_buffer") or 512)
+        monkeypatch.setattr(config, "load_split_tracks", lambda: False)
+        monkeypatch.setattr(run.autostart, "ensure_start_menu_entry", lambda: step("start_menu"))
+        monkeypatch.setattr(run.autostart, "repair_linux_menu_entry", lambda: step("repair_menu"))
+        import setup
+
+        monkeypatch.setattr(setup, "ensure_recording_encoder_available", lambda: step("encoder"))
+
+
+def test_a_launch_updates_first_and_offers_updates_last(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path)
+    run.main()
+    assert launch.steps[:3] == ["reinstall", "update", "password"]
+    assert launch.steps[-3:] == [("linux", dict(run.DEFAULT_RUN_CONFIG)), "note_version", "offer"]
+
+
+def test_settings_and_migrations_all_happen_before_obs_starts(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path, pending={"video": 1})
+    run.main()
+    started = launch.steps.index(("linux", dict(run.DEFAULT_RUN_CONFIG)))
+    for step in ("password", "apply_pending", "migrate_discord", "migrate_tracks", "migrate_audio", "fit_buffer",
+                 "encoder", "start_menu"):
+        assert launch.steps.index(step) < started
+
+
+def test_a_launch_beside_another_leaves_updates_to_it(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path, may_update=False)
+    run.main()
+    assert not {"reinstall", "update", "note_version", "offer"} & set(map(str, launch.steps))
+    assert "password" in launch.steps
+
+
+def test_only_a_boot_launch_follows_the_saved_config(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path, argv=["--boot"])
+    run.main()
+    assert ("linux", {"from": "run_config.json"}) in launch.steps
+
+
+def test_nothing_changes_obss_config_while_it_runs(monkeypatch, tmp_path):
+    """It'd overwrite the scene collection on exit."""
+    launch = Launch(monkeypatch, tmp_path, obs_running=True, pending={"video": 1})
+    run.main()
+    for step in ("apply_pending", "migrate_discord", "migrate_tracks", "migrate_audio", "fit_buffer", "encoder"):
+        assert step not in launch.steps
+
+
+def test_no_queued_settings_means_nothing_to_apply(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path)
+    run.main()
+    assert "apply_pending" not in launch.steps
+
+
+@pytest.mark.parametrize("module, name", [
+    ("obs_config", "ensure_obs_websocket_password"),
+    ("obs_config", "apply_pending_obs_settings"),
+    ("obs_config", "migrate_discord_target_size"),
+    ("obs_config", "migrate_split_tracks_layout"),
+    ("obs_config", "migrate_audio_bitrate"),
+    ("obs_config", "fit_replay_buffer_size"),
+    ("obs_config", "load_split_tracks"),
+    ("autostart", "ensure_start_menu_entry"),
+    ("autostart", "repair_linux_menu_entry"),
+])
+def test_no_single_step_stops_obs_starting(monkeypatch, tmp_path, module, name):
+    launch = Launch(monkeypatch, tmp_path, pending={"video": 1})
+
+    def fail():
+        raise OSError("step failed")
+
+    monkeypatch.setattr(getattr(run, module), name, fail)
+    monkeypatch.setattr(run.log, "warning", lambda _message: None)
+    run.main()
+    assert ("linux", dict(run.DEFAULT_RUN_CONFIG)) in launch.steps
+
+
+def test_a_failed_encoder_check_doesnt_stop_obs_starting(monkeypatch, tmp_path):
+    import setup
+
+    launch = Launch(monkeypatch, tmp_path)
+
+    def fail():
+        raise OSError("no encoders")
+
+    monkeypatch.setattr(setup, "ensure_recording_encoder_available", fail)
+    run.main()
+    assert ("linux", dict(run.DEFAULT_RUN_CONFIG)) in launch.steps
+
+
+def test_a_changed_encoder_is_reported(monkeypatch, tmp_path):
+    import setup
+
+    Launch(monkeypatch, tmp_path)
+    warnings = []
+    monkeypatch.setattr(setup, "ensure_recording_encoder_available", lambda: "Moved to x264.")
+    monkeypatch.setattr(run.log, "warning", warnings.append)
+    run.main()
+    assert warnings == ["Moved to x264."]
+
+
+def test_a_missing_app_capture_helper_is_reported_but_not_fatal(monkeypatch, tmp_path):
+    launch = Launch(monkeypatch, tmp_path)
+    warnings = []
+    monkeypatch.setattr(run.obs_config, "load_split_tracks", lambda: True)
+    monkeypatch.setattr(run.obs_config, "app_capture_helper_missing", lambda: True)
+    monkeypatch.setattr(run.log, "warning", warnings.append)
+    run.main()
+    assert "apps won't get their own tracks" in warnings[0]
+    assert ("linux", dict(run.DEFAULT_RUN_CONFIG)) in launch.steps
+
+
+@pytest.mark.parametrize("system, runner", [("Windows", "run_windows"), ("Darwin", "run_macos")])
+def test_each_platform_runs_its_own_launch(monkeypatch, tmp_path, system, runner):
+    launch = Launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(run.platform, "system", lambda: system)
+    monkeypatch.setattr(run, runner, lambda config: launch.steps.append(runner))
+    run.main()
+    assert runner in launch.steps
+
+
+def test_an_unknown_platform_stops(monkeypatch, tmp_path):
+    Launch(monkeypatch, tmp_path)
+    monkeypatch.setattr(run.platform, "system", lambda: "Plan9")
+    with pytest.raises(SystemExit, match="Unsupported platform: Plan9"):
+        run.main()

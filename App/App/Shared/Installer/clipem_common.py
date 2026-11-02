@@ -139,13 +139,26 @@ def _is_zombie(pid):
 def pid_alive(pid):
     if sys.platform == "win32":
         import ctypes
+        from ctypes import wintypes
 
+        kernel32 = ctypes.windll.kernel32
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = (wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD))
+        kernel32.CloseHandle.argtypes = (wintypes.HANDLE,)
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        STILL_ACTIVE = 259
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
             return False
-        ctypes.windll.kernel32.CloseHandle(handle)
-        return True
+        try:
+            # A process that has exited can still be opened while anything
+            # holds a handle to it (its parent's Popen, say): ask if it's done.
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True  # can't tell: as before, an openable pid is alive
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
 
     try:
         os.kill(pid, 0)
@@ -154,7 +167,6 @@ def pid_alive(pid):
     except PermissionError:
         return True  # exists, just owned by someone else
     return not _is_zombie(pid)
-    return True
 
 
 def _windows_process_start(pid):

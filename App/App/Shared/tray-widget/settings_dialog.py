@@ -458,7 +458,8 @@ def open_dialog(start_tab=None, highlight=()):
     # the window shrinks the scrolling settings area above it, never them.
     footer = tk.Frame(root, padx=px(16), pady=px(10))
     footer.pack(side="bottom", fill="x")
-    ttk.Separator(root, orient="horizontal").pack(side="bottom", fill="x")
+    footer_line = ttk.Separator(root, orient="horizontal")
+    footer_line.pack(side="bottom", fill="x")
     sidebar = tk.Frame(root, background=dark_theme.PANEL, padx=px(10), pady=px(12))
     sidebar.pack(side="left", fill="y")
     scroll_area = tk.Frame(root)
@@ -1297,6 +1298,9 @@ def open_dialog(start_tab=None, highlight=()):
     install_button = tk.Button(autostart_row, text="Install Autostart")
     uninstall_button = tk.Button(autostart_row, text="Uninstall Autostart")
     uninstall_others_button = tk.Button(autostart_row)
+    # A button's height while they're hidden for the check, so the tab is
+    # already as tall as it ends up when the window is sized to fit it.
+    autostart_row.configure(height=install_button.winfo_reqheight())
 
     def show_autostart_buttons(show_install, show_uninstall, others=0):
         install_button.pack_forget()
@@ -1413,6 +1417,7 @@ def open_dialog(start_tab=None, highlight=()):
         next_row += 1
         shortcut_install = tk.Button(shortcut_row, text=f"Install {name} Shortcut")
         shortcut_uninstall = tk.Button(shortcut_row, text=f"Uninstall {name} Shortcut")
+        shortcut_row.configure(height=shortcut_install.winfo_reqheight())  # as autostart_row
 
         def show_shortcut_status(kind=kind, name=name, status_var=shortcut_status_var,
                                  install=shortcut_install, uninstall=shortcut_uninstall):
@@ -2258,18 +2263,27 @@ def open_dialog(start_tab=None, highlight=()):
         label.bind("<Leave>", lambda _e, w=label: style_hover(w, False))
         tab_labels[name] = label
 
-    # Opens 16:9, wide enough for the widest card with the sidebar beside it;
-    # the page scrolls when a tab is taller. Never bigger than the screen.
+    # Opens 16:9, wide enough for the widest card with the sidebar beside it,
+    # and taller if a tab other than All needs it (fonts differ by platform);
+    # All scrolls. Never bigger than the screen.
+    tallest = 0
+    for name in TABS:
+        if name != "All":
+            show_tab(name)
+            root.update_idletasks()
+            tallest = max(tallest, page.winfo_reqheight())
     show_tab("All")
     root.update_idletasks()
     min_width = sidebar.winfo_reqwidth() + page.winfo_reqwidth() + scrollbar.winfo_reqwidth()
     screen_width, screen_height = root.winfo_screenwidth(), root.winfo_screenheight()
     width = max(px(1100), min_width)
+    # Below the page's canvas: the footer and the line above it.
+    height = max(width * 9 // 16, tallest + footer.winfo_reqheight() + footer_line.winfo_reqheight())
     root.highlight_settings = highlight_settings
     root.layout = {"show_tab": show_tab, "tabs": TABS, "canvas": canvas, "page": page, "highlights": highlights,
-                   "highlighted": highlighted, "size": (width, width * 9 // 16)}  # for test_settings_dialog's overflow check
+                   "highlighted": highlighted, "size": (width, height)}  # for test_settings_dialog's overflow check
     width = min(width, screen_width - px(40))
-    height = min(width * 9 // 16, screen_height - px(80))
+    height = min(height, screen_height - px(80))
     window_size.update(width=width, height=height)
     root.geometry(f"{width}x{height}")
     root.minsize(min(min_width, screen_width), min(footer.winfo_reqheight() + px(160), height))

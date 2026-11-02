@@ -12,7 +12,12 @@ from clipem_common import acquire_instance_lock, pid_alive
 def _dead_pid():
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
     proc.wait()
-    return proc.pid
+    pid = proc.pid
+    del proc  # its handle keeps an exited process findable on Windows
+    deadline = time.monotonic() + 5
+    while pid_alive(pid) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return pid
 
 
 def test_no_lock_file_is_acquired(tmp_path):

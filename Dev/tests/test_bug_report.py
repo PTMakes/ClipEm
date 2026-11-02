@@ -3,11 +3,13 @@ password never does. send_bug_report(): what it uploads, and its errors."""
 
 import io
 import os
+import sys
 import urllib.error
 import zipfile
 
 import bug_report
 import pytest
+from conftest import TRAY_WIDGET_DIR
 
 PASSWORD = "s3cret-ws-password"
 
@@ -184,7 +186,7 @@ def test_read_log_masks_the_websocket_password(install):
 
 def test_read_log_shows_the_end_of_a_big_log(tmp_path):
     path = tmp_path / "big.log"
-    path.write_text("old\n" * 1000 + "newest line\n")
+    path.write_bytes(b"old\n" * 1000 + b"newest line\n")
     text = bug_report.read_log(str(path), max_bytes=100)
     assert text.endswith("newest line\n") and text.startswith("[Showing the last") and "old\nold" in text
 
@@ -193,15 +195,47 @@ def test_read_log_says_when_it_cant(tmp_path):
     assert "Couldn't read" in bug_report.read_log(str(tmp_path / "gone.log"))
 
 
-def test_log_viewer_reads_each_log_on_its_own(install):
+def test_the_log_viewer_opens_on_the_first_log(install, request):
     import tkinter as tk
 
+    sys.path.insert(0, TRAY_WIDGET_DIR)
     import log_viewer
 
     try:
         root = tk.Tk()
     except tk.TclError:
         pytest.skip("no display")
+    request.addfinalizer(root.destroy)
+    dialog = log_viewer.open_log_viewer(root, lambda value: value, lambda path: None)
+
+    def find(widget):
+        for child in widget.winfo_children():
+            found = child if isinstance(child, tk.Text) else find(child)
+            if found:
+                return found
+        return None
+
+    assert "connecting with password" in find(dialog).get("1.0", "end")
+
+
+def test_log_viewer_reads_each_log_on_its_own(install, request):
+    import tkinter as tk
+
+    sys.path.insert(0, TRAY_WIDGET_DIR)
+    import log_viewer
+
+    try:
+        root = tk.Tk()
+    except tk.TclError:
+        pytest.skip("no display")
+
+    def close():  # a failure here mustn't leave it as Tk's default root
+        try:
+            root.destroy()
+        except tk.TclError:
+            pass  # the test got that far
+
+    request.addfinalizer(close)
     dialog = log_viewer.open_log_viewer(root, lambda value: value, lambda path: None)
     assert log_viewer.open_log_viewer(root, lambda value: value, lambda path: None) is dialog  # only one
 
@@ -219,6 +253,7 @@ def test_log_viewer_reads_each_log_on_its_own(install):
     assert names[0] == "ClipEm logs" and "  run.log" in names and "OBS logs" in names
     assert PASSWORD not in text.get("1.0", "end")  # run.log, opened first
 
+    root.update()  # Tk on Windows only delivers the event to a window that's up
     files.selection_clear(0, "end")
     files.selection_set(names.index("  settings.log"))
     files.event_generate("<<ListboxSelect>>")

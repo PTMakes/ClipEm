@@ -278,3 +278,72 @@ def test_the_obs_script_stands_aside_when_the_tray_finishes_clips():
     # (the script itself is exercised in test_obs_scripts.py; this is the rule)
     source = open(os.path.join(SCRIPTS_DIR, "clip_reexport.py"), encoding="utf-8").read()
     assert "if tray_tracks_enabled:" in source
+
+
+def test_the_bundled_ffmpeg_comes_first(monkeypatch, tmp_path):
+    bundled = tmp_path / "Linux" / "ffmpeg" / "bin" / "ffmpeg"
+    monkeypatch.setattr(tray_tracks, "APP_DIR", str(tmp_path))
+    monkeypatch.setattr(tray_tracks.sys, "platform", "linux")
+    monkeypatch.setattr(tray_tracks.shutil, "which", lambda name: "/usr/bin/ffmpeg")
+    assert tray_tracks.find_ffmpeg() == "/usr/bin/ffmpeg"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_text("")
+    assert tray_tracks.find_ffmpeg() == str(bundled)
+
+
+@pytest.mark.parametrize("event", [None, {}, {"savedReplayPath": ""}])
+def test_an_event_without_a_clip_is_ignored(event):
+    recorder = FakeRecorder()
+    recorder.snapshot = lambda: pytest.fail("nothing to snapshot")
+    tray_tracks.ClipFinisher(recorder, enabled=lambda: True).on_replay_saved(event)
+
+
+def test_a_failing_snapshot_doesnt_reach_the_websocket_thread(monkeypatch):
+    def fail():
+        raise RuntimeError("recorder stopped")
+
+    recorder = FakeRecorder()
+    recorder.snapshot = fail
+    monkeypatch.setattr(tray_tracks.threading, "Thread", lambda **_k: pytest.fail("nothing to finish"))
+    tray_tracks.ClipFinisher(recorder, enabled=lambda: True).on_replay_saved({"savedReplayPath": "/x.mp4"})
+
+
+def _finish(monkeypatch, tmp_path, post_state=None, ffmpeg="ffmpeg", exists=True):
+    clip = tmp_path / "Replay.mp4"
+    if exists:
+        clip.write_bytes(b"x")
+    done = []
+    monkeypatch.setattr(tray_tracks, "find_ffmpeg", lambda: ffmpeg)
+    monkeypatch.setattr(tray_tracks, "finish_clip", lambda *args: done.append(("clip", args)))
+    monkeypatch.setattr(tray_tracks, "finish_post_save", lambda *args: done.append(("post", args)))
+    options = {"naming": tray_tracks.clip_naming.DEFAULTS}
+    tray_tracks.ClipFinisher._finish(str(clip), "snapshot", options, post_state)
+    return clip, done
+
+
+def test_no_ffmpeg_leaves_the_clip_as_it_is(monkeypatch, tmp_path):
+    clip, done = _finish(monkeypatch, tmp_path, ffmpeg=None)
+    assert done == [] and clip.exists()
+
+
+def test_a_clip_gone_before_it_was_finished_is_skipped(monkeypatch, tmp_path):
+    _clip, done = _finish(monkeypatch, tmp_path, exists=False)
+    assert done == []
+
+
+def test_a_post_clip_save_is_finished_under_obss_name(monkeypatch, tmp_path):
+    state = {"pressed_at": 1}
+    clip, done = _finish(monkeypatch, tmp_path, post_state=state)
+    (kind, args), = done
+    assert kind == "post" and args[:3] == (str(clip), "snapshot", state) and clip.exists()
+
+
+def test_a_failure_finishing_a_clip_stays_on_its_worker(monkeypatch, tmp_path):
+    def fail(*_args):
+        raise RuntimeError("ffmpeg bug")
+
+    clip = tmp_path / "Replay.mp4"
+    clip.write_bytes(b"x")
+    monkeypatch.setattr(tray_tracks, "find_ffmpeg", lambda: "ffmpeg")
+    monkeypatch.setattr(tray_tracks, "finish_clip", fail)
+    tray_tracks.ClipFinisher._finish(str(clip), "snapshot", {"naming": tray_tracks.clip_naming.DEFAULTS})

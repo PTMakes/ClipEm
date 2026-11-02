@@ -6,7 +6,7 @@ import os
 import sys
 
 import pytest
-from conftest import INSTALLER_DIR, SCRIPTS_DIR
+from conftest import INSTALLER_DIR, SCRIPTS_DIR, show_window
 
 sys.path.insert(0, SCRIPTS_DIR)
 import clip_naming  # noqa: E402
@@ -173,6 +173,172 @@ def test_the_copy_suffixes_must_differ():
     assert clip_naming.validate(naming(extra_suffix=""))
 
 
+def test_renaming_really_moves_the_file(tmp_path):
+    original = saved_clip(tmp_path)
+    renamed = clip_naming.rename_clip(original, naming(), now=WHEN)
+    assert not os.path.exists(original)
+    with open(renamed, "rb") as f:
+        assert f.read() == b"x"
+
+
+def test_a_clip_that_already_has_its_name_is_left_alone(tmp_path):
+    path = saved_clip(tmp_path, "Replay-2026-10-25-21-50-07.mp4")
+    assert clip_naming.rename_clip(path, naming(), now=WHEN) == path
+    assert os.listdir(tmp_path) == ["Replay-2026-10-25-21-50-07.mp4"]
+
+
+def test_every_name_taken_counts_up(tmp_path):
+    for name in ("Clip-2026-10-25-21-50-07.mp4", "Clip-2026-10-25-21-50-07-2.mp4"):
+        (tmp_path / name).write_bytes(b"old")
+    renamed = clip_naming.rename_clip(saved_clip(tmp_path), naming(prefix="Clip"), now=WHEN)
+    assert os.path.basename(renamed) == "Clip-2026-10-25-21-50-07-3.mp4"
+    assert (tmp_path / "Clip-2026-10-25-21-50-07.mp4").read_bytes() == b"old"
+
+
+def test_a_clip_that_cant_be_renamed_keeps_its_name(tmp_path, monkeypatch):
+    def refuse(_old, _new):
+        raise PermissionError("in use")
+
+    path = saved_clip(tmp_path)
+    monkeypatch.setattr(clip_naming.os, "rename", refuse)
+    logs = []
+    assert clip_naming.rename_clip(path, naming(), now=WHEN, log=logs.append) == path
+    assert "keeping OBS's name" in logs[0]
+
+
+def test_the_date_in_a_name_is_when_the_clip_was_saved(tmp_path):
+    path = saved_clip(tmp_path)
+    when = WHEN.timestamp()
+    os.utime(path, (when, when))
+    assert os.path.basename(clip_naming.rename_clip(path, naming())) == "Replay-2026-10-25-21-50-07.mp4"
+
+
+def test_a_clip_gone_before_its_rename_doesnt_raise(tmp_path):
+    logs = []
+    path = str(tmp_path / "gone.mp4")
+    assert clip_naming.rename_clip(path, naming(), log=logs.append) == path
+    assert "couldn't rename" in logs[0]
+
+
+@pytest.mark.parametrize("content", [None, "{broken", "[1, 2]", '{"clip_naming": "nonsense"}', "{}"])
+def test_a_missing_or_broken_config_is_the_defaults(tmp_path, content):
+    config = tmp_path / "run_config.json"
+    if content is not None:
+        config.write_text(content)
+    assert clip_naming.load(str(config)) == clip_naming.DEFAULTS
+
+
+def test_settings_saved_with_an_order_arent_upgraded(tmp_path):
+    saved = naming(prefix="", prefix_on=True, small_suffix="-odd", date=True)
+    assert clip_naming.upgrade(saved)["prefix_on"] is True
+    assert clip_naming.upgrade(saved)["small_suffix"] == "-odd"
+    assert clip_naming.upgrade("not a dict") == clip_naming.DEFAULTS
+    assert clip_naming.upgrade({"tracks_suffix": " -_."})["tracks_suffix"] == "tracks"
+
+
+@pytest.mark.parametrize("changes", [
+    {"number_digits": 0}, {"number_digits": 12}, {"number_start": 0}, {"id": "guid"}, {"separator": "."},
+    {"date": False, "date_format": "no codes"},
+])
+def test_usable_settings_pass(changes):
+    assert clip_naming.validate(naming(**changes)) is None
+
+
+@pytest.mark.parametrize("changes", [
+    {"number_digits": 13}, {"number_digits": -1}, {"number_digits": "x"}, {"number_start": None}, {"id": "other"},
+    {"date": "yes"}, {"prefix_on": 1}, {"app": None}, {"order": None}, {"order": ["prefix", "id", "date", "date"]},
+    {"separator": None}, {"separator": "a b"}, {"date_format": None}, {"extra_suffix": 5},
+])
+def test_settings_of_the_wrong_kind_are_refused_without_raising(changes):
+    assert clip_naming.validate(naming(**changes))
+
+
+def test_a_blank_date_format_says_what_to_do():
+    assert "Pick at least one part" in clip_naming.validate(naming(date_format="   "))
+    assert "doesn't contain any date" in clip_naming.validate(naming(date_format="---"))
+
+
+def test_a_setting_missing_altogether_is_refused():
+    settings = naming()
+    del settings["separator"]
+    assert "Invalid setting" in clip_naming.validate(settings)
+
+
+def test_a_blank_prefix_is_no_prefix():
+    """It'd leave the clip with no name at all - a hidden ".mp4"."""
+    assert clip_naming.validate(naming(prefix="   ", date=False)) is not None
+
+
+def test_a_name_is_only_cut_past_the_longest_allowed():
+    fits = "x" * clip_naming.MAX_APP_LENGTH
+    assert clip_naming.stem(naming(date=False), WHEN, app=fits) == f"Replay-{fits}"
+    assert clip_naming.MAX_APP_LENGTH == 48
+
+
+def test_a_broken_active_app_file_is_no_app(tmp_path):
+    path = tmp_path / "active_app.json"
+    assert clip_naming.active_app(str(path)) is None
+    for content in ("{broken", "[1]", '{"app": 5}', '{"app": "   "}', "{}"):
+        path.write_text(content)
+        assert clip_naming.active_app(str(path)) is None
+
+
+def test_publishing_the_app_leaves_only_the_file(tmp_path):
+    path = tmp_path / "new" / "active_app.json"
+    clip_naming.publish_active_app("Deadlock", str(path))
+    assert os.listdir(path.parent) == ["active_app.json"]
+    assert clip_naming.active_app(str(path)) == "Deadlock"
+
+
+def test_a_guid_can_be_passed_in():
+    assert clip_naming.stem(naming(id="guid", date=False, prefix="C"), WHEN, guid="abc") == "C-abc"
+
+
+@pytest.mark.parametrize("date_format, parts", [
+    ("yyyyMMddhhmmss", ["yyyy", "MM", "dd", "hh", "mm", "ss"]),
+    ("%Y-%m %H", ["yyyy", "MM", "hh"]),
+    ("dd.MM.yy", ["dd", "MM", "yyyy"]),
+    ("hh:HH", ["hh"]),  # the same part twice
+    ("nothing", []),
+])
+def test_date_parts_of_a_format(date_format, parts):
+    assert clip_naming.date_parts(date_format) == parts
+
+
+@pytest.mark.parametrize("changes, existing", [
+    ({"date_format": "dd.MM.yyyy"}, "Clip-0041-25.10.2026.mp4"),  # its own punctuation
+    ({"date_format": "%Y-%m"}, "Clip-0041-2026-10.mp4"),  # strftime's codes
+    ({"date_format": "yyyy_MM"}, "Clip-0041-2026_10.mp4"),
+    ({"prefix": "My Clip", "date": False}, "My-Clip-0041.mp4"),
+    ({"prefix_on": False, "date": False}, "0041.mp4"),
+])
+def test_numbers_are_found_in_every_kind_of_name(tmp_path, changes, existing):
+    settings = naming(**{"prefix": "Clip", "id": "number", **changes})
+    (tmp_path / existing).write_bytes(b"x")
+    assert clip_naming.next_number(tmp_path, settings) == 42
+
+
+def test_a_starting_number_above_the_folders_wins(tmp_path):
+    (tmp_path / "Clip-0041.mp4").write_bytes(b"x")
+    settings = naming(prefix="Clip", date=False, id="number", number_start=100)
+    assert clip_naming.next_number(tmp_path, settings) == 100
+
+
+def test_a_folder_that_cant_be_read_starts_at_the_start(tmp_path):
+    assert clip_naming.next_number(tmp_path / "gone", naming(id="number", number_start=7)) == 7
+
+
+def test_a_prefix_turned_off_counts_only_bare_numbers(tmp_path):
+    (tmp_path / "Clip-0041.mp4").write_bytes(b"x")
+    (tmp_path / "0007.mp4").write_bytes(b"x")
+    assert clip_naming.next_number(tmp_path, naming(prefix="Clip", prefix_on=False, date=False, id="number")) == 8
+
+
+def test_an_empty_prefix_is_skipped_in_the_pattern(tmp_path):
+    (tmp_path / "0007.mp4").write_bytes(b"x")
+    assert clip_naming.next_number(tmp_path, naming(prefix="", date=False, id="number")) == 8
+
+
 @pytest.fixture
 def form():
     tk = pytest.importorskip("tkinter")
@@ -297,9 +463,8 @@ def test_dragging_a_handle_reorders_the_parts(form):
 def test_a_real_drag_on_a_handle_reorders_the_parts(form):
     shown = form()
     root = shown.winfo_toplevel()
-    root.deiconify()
     shown.pack()
-    root.update()
+    show_window(root)
     handle = shown._rows["app"][0]
     target = shown._rows["prefix"][2]
     handle.event_generate("<ButtonPress-1>", x=2, y=2)

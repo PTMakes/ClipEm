@@ -1,10 +1,10 @@
 """popups.py: the standard width, with the height following the contents."""
 
-import os
 
 import pytest
+from conftest import has_display
 
-pytestmark = pytest.mark.skipif(not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
+pytestmark = pytest.mark.skipif(not has_display(),
                                 reason="needs a display")
 
 SHORT = "A short explanation."

@@ -424,10 +424,10 @@ def load_clip_hotkey():
         if sep and key.strip() == CLIP_HOTKEY_INI_KEY:
             try:
                 saved = json.loads(value.strip())
-                if CLIP_HOTKEY_ACTION not in saved:
+                if not isinstance(saved, dict) or CLIP_HOTKEY_ACTION not in saved:
                     return DEFAULT_CLIP_HOTKEY
                 return _hotkey_from_combos(saved[CLIP_HOTKEY_ACTION])
-            except (ValueError, AttributeError):
+            except (ValueError, AttributeError, TypeError):
                 return DEFAULT_CLIP_HOTKEY
     return DEFAULT_CLIP_HOTKEY
 

@@ -49,6 +49,7 @@ sys.path.insert(
 )
 
 import gui
+from conftest import has_display  # noqa: E402
 
 # Every page, so a new one can't be left out of these checks.
 PAGES = ("_show_welcome", *(page for page in gui.STEP_PAGES if page != "_show_done"))
@@ -249,6 +250,8 @@ def find_out_of_bounds_widgets(root):
     for widget in iter_widgets(root):
         if widget is root or isinstance(widget, tk.Toplevel):
             continue
+        if not widget.winfo_ismapped():  # another page's, or not shown yet
+            continue
         w, h = widget.winfo_width(), widget.winfo_height()
         if w <= 0 or h <= 0:
             continue
@@ -270,7 +273,7 @@ def format_report(problems_by_page):
 
 
 @unittest.skipUnless(
-    os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"),
+    has_display(),
     "needs a real display (run under xvfb-run in CI)",
 )
 class GuiLayoutTest(unittest.TestCase):

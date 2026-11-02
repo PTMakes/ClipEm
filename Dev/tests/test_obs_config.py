@@ -1,6 +1,7 @@
 import json
 
 import obs_config
+import pytest
 
 
 def test_update_ini_section_updates_and_appends(tmp_path):
@@ -158,3 +159,102 @@ def test_split_tracks_turn_app_tracks_back_on_once_app_capture_is_available(tmp_
     assert obs_config.migrate_split_tracks_layout() is False and calls == []
     monkeypatch.setattr(obs_config, "app_capture_supported", lambda: True)
     assert obs_config.migrate_split_tracks_layout() is True and calls == [True]
+
+
+def test_only_audio_tracks_at_the_old_default_move_to_the_new_bitrate(fake_obs_config):
+    ini = fake_obs_config / "basic.ini"
+    ini.write_text("[AdvOut]\nTrack1Bitrate=160\nTrack2Bitrate=320\nTrack3Bitrate=nonsense\n")
+    assert obs_config.migrate_audio_bitrate() is True
+    adv = obs_config.read_ini_section("AdvOut")
+    new = str(obs_config.DEFAULT_AUDIO_TRACK_KBPS)
+    assert adv["Track1Bitrate"] == new and adv["Track6Bitrate"] == new  # unset counts as the old default
+    assert adv["Track2Bitrate"] == "320"  # set in OBS itself
+
+
+def test_the_audio_bitrate_migration_is_done_once(fake_obs_config):
+    ini = fake_obs_config / "basic.ini"
+    ini.write_text("[AdvOut]\n" + "".join(f"Track{n}Bitrate=320\n" for n in range(1, 7)))
+    assert obs_config.migrate_audio_bitrate() is False
+
+
+def test_the_audio_bitrate_migration_needs_a_config(fake_obs_config):
+    (fake_obs_config / "basic.ini").unlink()
+    assert obs_config.migrate_audio_bitrate() is False
+
+
+def test_no_config_means_the_default_hotkey_and_saving_says_so(fake_obs_config):
+    (fake_obs_config / "basic.ini").unlink()
+    assert obs_config.load_clip_hotkey() == obs_config.DEFAULT_CLIP_HOTKEY
+    with pytest.raises(FileNotFoundError):
+        obs_config.save_clip_hotkey(True, False, False, "F9")
+
+
+@pytest.mark.parametrize("ini", [
+    "[General]\nName=x\n",  # no [Hotkeys]
+    "[Hotkeys]\nOther={}\n",  # no clip hotkey
+    "[Hotkeys]\nReplayBuffer={}\n",  # nothing for this action
+    "[Hotkeys]\nReplayBuffer={broken\n",
+    "[Hotkeys]\nReplayBuffer=[1, 2]\n",
+])
+def test_a_config_without_a_usable_hotkey_is_the_default(fake_obs_config, ini):
+    (fake_obs_config / "basic.ini").write_text(ini)
+    assert obs_config.load_clip_hotkey() == obs_config.DEFAULT_CLIP_HOTKEY
+
+
+def test_a_hotkey_that_isnt_an_object_is_the_default(fake_obs_config):
+    (fake_obs_config / "basic.ini").write_text("[Hotkeys]\nReplayBuffer=5\n")
+    assert obs_config.load_clip_hotkey() == obs_config.DEFAULT_CLIP_HOTKEY
+
+
+def test_saving_a_hotkey_adds_its_section_and_keeps_the_rest(fake_obs_config):
+    ini = fake_obs_config / "basic.ini"
+    ini.write_text("[General]\nName=DefaultPTM")  # no newline at the end
+    obs_config.save_clip_hotkey(True, False, True, "F9")
+    assert obs_config.load_clip_hotkey() == (True, False, True, "F9")
+    assert obs_config.read_ini_section("General")["Name"] == "DefaultPTM"
+
+
+def test_saving_a_hotkey_adds_its_line_to_the_section(fake_obs_config):
+    (fake_obs_config / "basic.ini").write_text("[Hotkeys]\nOther=1\n\n[Next]\nA=1\n")
+    obs_config.save_clip_hotkey(False, True, False, "F8")
+    assert obs_config.load_clip_hotkey() == (False, True, False, "F8")
+    assert obs_config.read_ini_section("Hotkeys")["Other"] == "1"
+    assert obs_config.read_ini_section("Next")["A"] == "1"
+
+
+def test_saving_an_unknown_key_changes_nothing(fake_obs_config):
+    before = (fake_obs_config / "basic.ini").read_text()
+    with pytest.raises(ValueError):
+        obs_config.save_clip_hotkey(False, False, False, "F25")
+    assert (fake_obs_config / "basic.ini").read_text() == before
+
+
+def test_with_post_clip_on_a_broken_scene_collection_stops_the_hotkey_saving(fake_obs_config):
+    obs_config.clipem_common.save_run_config({"post_clip": {"enabled": True}})
+    (fake_obs_config / "scenes.json").write_text("{broken")
+    assert obs_config.load_clip_hotkey() == obs_config.DEFAULT_CLIP_HOTKEY
+    before = (fake_obs_config / "basic.ini").read_text()
+    with pytest.raises(ValueError):
+        obs_config.save_clip_hotkey(True, False, False, "F9")
+    assert (fake_obs_config / "basic.ini").read_text() == before
+
+
+def test_with_post_clip_on_a_missing_scene_collection_stops_the_hotkey_saving(fake_obs_config):
+    obs_config.clipem_common.save_run_config({"post_clip": {"enabled": True}})
+    (fake_obs_config / "scenes.json").unlink()
+    with pytest.raises(FileNotFoundError):
+        obs_config.save_clip_hotkey(True, False, False, "F9")
+
+
+def test_with_post_clip_off_a_broken_scene_collection_doesnt_matter(fake_obs_config):
+    (fake_obs_config / "scenes.json").write_text("{broken")
+    obs_config.save_clip_hotkey(True, False, False, "F9")
+    assert obs_config.load_clip_hotkey() == (True, False, False, "F9")
+
+
+def test_saved_keys_that_make_no_sense_are_the_default(fake_obs_config):
+    obs_config.clipem_common.save_run_config({"post_clip": {"enabled": True}})
+    (fake_obs_config / "scenes.json").write_text(json.dumps({"modules": {"scripts-tool": [
+        {"path": "/x/post_clip.py", "settings": {"post_clip_hotkey": 5}},
+    ]}}))
+    assert obs_config.load_clip_hotkey() == obs_config.DEFAULT_CLIP_HOTKEY

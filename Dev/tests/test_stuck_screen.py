@@ -410,6 +410,12 @@ def reload_requests(client):
             if stuck_screen.PIPEWIRE_RELOAD_REQUEST_KEY in r["inputSettings"]]
 
 
+@pytest.fixture(autouse=True)
+def linux_capture_kinds(monkeypatch):
+    """What's chosen at import is this platform's: the PipeWire tests run everywhere."""
+    monkeypatch.setattr(stuck_screen, "CAPTURE_INPUT_KINDS", (*stuck_screen.CAPTURE_INPUT_KINDS, PIPEWIRE))
+
+
 def pipewire_monitor(tmp_path, black=False, is_locked=lambda: False, input_seconds=lambda: None):
     notifications = []
     clock = Clock()

@@ -1800,7 +1800,7 @@ def verify_checksums():
         lines.append(f"  changed:  {rel_path}")
     for rel_path in missing[:10]:
         lines.append(f"  missing:  {rel_path}")
-    if len(mismatched) + len(missing) > 20:
+    if len(mismatched) > 10 or len(missing) > 10:
         lines.append("  ...")
     lines.append(
         "This usually means this copy of the folder is incomplete or corrupted "

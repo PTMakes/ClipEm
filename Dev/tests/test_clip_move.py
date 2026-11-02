@@ -4,6 +4,7 @@ import json
 import os
 import sys
 
+import pytest
 from conftest import INSTALLER_DIR, TRAY_WIDGET_DIR
 
 sys.path.insert(0, INSTALLER_DIR)
@@ -156,3 +157,98 @@ def test_too_little_room_is_said_before_starting(tmp_path, monkeypatch):
     monkeypatch.setattr(clip_move.shutil, "disk_usage", lambda folder: Usage)
     assert "free" in clip_move.room_problem([str(path)], new, move=False)
     assert clip_move.room_problem([str(path)], new, move=True) is None  # one drive: nothing to write
+
+
+def test_a_move_to_another_drive_copies_then_removes(tmp_path, monkeypatch):
+    old, new = folders(tmp_path)
+    clip(old, "a.mp4", b"x" * 10)
+
+    def other_drive(_old, _new):
+        raise OSError(18, "Invalid cross-device link")
+
+    monkeypatch.setattr(clip_move.os, "rename", other_drive)
+    monkeypatch.setattr(clip_move, "CHUNK_BYTES", 4)
+    seen = []
+    result = clip_move.transfer(old, new, move=True, progress=lambda done, total: seen.append((done, total)))
+    assert result == {"done": 1, "skipped": [], "failed": []}
+    assert not (old / "a.mp4").exists() and (new / "a.mp4").read_bytes() == b"x" * 10
+    assert os.path.getmtime(new / "a.mp4") == 1_000_000
+    assert seen == [(4, 10), (8, 10), (10, 10)]
+
+
+def test_a_clip_that_cant_be_copied_stays_and_leaves_nothing(tmp_path, monkeypatch):
+    old, new = folders(tmp_path)
+    clip(old, "a.mp4")
+
+    def other_drive(_old, _new):
+        raise OSError("cross-device")
+
+    def full(_source, _target):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(clip_move.os, "rename", other_drive)
+    monkeypatch.setattr(clip_move.shutil, "copystat", full)
+    result = clip_move.transfer(old, new, move=True)
+    assert result["done"] == 0 and result["failed"] == [("a.mp4", "disk full")]
+    assert (old / "a.mp4").read_bytes() == b"video" and os.listdir(new) == []
+
+
+def test_skipped_clips_still_count_towards_the_progress(tmp_path):
+    old, new = folders(tmp_path)
+    clip(old, "a.mp4", b"old one")
+    new.mkdir()
+    clip(new, "a.mp4", b"new")
+    seen = []
+    clip_move.transfer(old, new, move=True, progress=lambda done, total: seen.append((done, total)))
+    assert seen == [(7, 7)]
+
+
+@pytest.mark.usefixtures("links")
+def test_the_same_folder_is_recognised_through_links(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    assert clip_move.same_folder(str(real), str(link)) is True
+    assert clip_move.same_folder(str(real), str(tmp_path)) is False
+
+
+def _room(monkeypatch, tmp_path, free):
+    monkeypatch.setattr(clip_move.shutil, "disk_usage", lambda _path: type("Usage", (), {"free": free}))
+    old, new = folders(tmp_path)
+    new.mkdir()
+    return [str(clip(old, "a.mp4", b"x" * 100))], new
+
+
+def test_copying_needs_room_for_every_clip(tmp_path, monkeypatch):
+    paths, new = _room(monkeypatch, tmp_path, 99)
+    assert "need 0.0 GB" in clip_move.room_problem(paths, new, move=False)
+
+
+def test_exactly_enough_room_is_enough(tmp_path, monkeypatch):
+    paths, new = _room(monkeypatch, tmp_path, 100)
+    assert clip_move.room_problem(paths, new, move=False) is None
+
+
+def test_a_move_on_one_drive_needs_no_room(tmp_path, monkeypatch):
+    paths, new = _room(monkeypatch, tmp_path, 0)
+    assert clip_move.room_problem(paths, new, move=True) is None
+
+
+def test_a_move_to_another_drive_needs_room(tmp_path, monkeypatch):
+    paths, new = _room(monkeypatch, tmp_path, 0)
+    real_stat = os.stat
+
+    def stat(path, **kwargs):
+        result = real_stat(path, **kwargs)
+        if str(path) == str(new):
+            return type("Stat", (), {"st_dev": result.st_dev + 1})
+        return result
+
+    monkeypatch.setattr(clip_move.os, "stat", stat)
+    assert clip_move.room_problem(paths, new, move=True) is not None
+
+
+def test_no_clips_or_no_folder_is_no_problem(tmp_path):
+    assert clip_move.room_problem([], tmp_path, move=True) is None
+    assert clip_move.room_problem([str(tmp_path / "a.mp4")], tmp_path / "gone", move=False) is None

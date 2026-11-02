@@ -3,6 +3,7 @@ import os
 import app_window
 import pytest
 from app_window import EntryHistory
+from conftest import has_display
 
 
 def test_undo_and_redo_walk_through_edits():
@@ -44,7 +45,7 @@ def test_history_is_bounded():
 
 
 needs_display = pytest.mark.skipif(
-    not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")),
+    not has_display(),
     reason="needs a real display (run under xvfb-run in CI)",
 )
 
