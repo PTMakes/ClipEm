@@ -500,6 +500,43 @@ def test_a_window_can_ask_to_go_by_its_title():
     assert app_audio.ActiveApp().update([_stream("cs2", "cs2")], 0, windows) == "Counter-Strike 2"
 
 
+def test_a_fullscreen_game_goes_by_its_programs_name_like_its_track():
+    # A real Left 4 Dead 2 on Windows: the session has no display name, so its
+    # track is named after the .exe's version info, as the window is.
+    window = {**_window("left4dead2", fullscreen=True, title="Left 4 Dead 2 - Direct3D 9", pid=7),
+              "use_title": True, "name": "Left 4 Dead 2"}
+    streams = [_stream("left4dead2", "Left 4 Dead 2")._replace(pid=7)]
+    assert app_audio.ActiveApp().update(streams, 0, [window]) == "Left 4 Dead 2"
+    assert app_audio.ActiveApp().update([], 0, [window]) == "Left 4 Dead 2"
+
+
+def test_a_sound_named_by_its_app_names_the_window_too():
+    window = {**_window("game", fullscreen=True, title="Game - Vulkan", pid=7), "use_title": True, "name": "Game"}
+    streams = [_stream("game", "Game: Special Edition")._replace(pid=7)]
+    assert app_audio.ActiveApp().update(streams, 0, [window]) == "Game: Special Edition"
+
+
+@pytest.mark.parametrize("title, expected", [
+    ("Left 4 Dead 2 - Direct3D 9", "Left 4 Dead 2"),
+    ("Left 4 Dead 2 - DirectX 3D", "Left 4 Dead 2"),
+    ("Some Game (DX12)", "Some Game"),
+    ("Some Game [Vulkan]", "Some Game"),
+    ("Some Game - OpenGL 4.6 (64-bit)", "Some Game"),
+    ("Half-Life 2 - Direct3D 9 - Vulkan", "Half-Life 2"),
+    ("Direct3D 9", "Direct3D 9"),
+    ("DX-Ball", "DX-Ball"),
+    ("Glide - GL", "Glide"),
+    ("Need for Speed - Most Wanted", "Need for Speed - Most Wanted"),
+])
+def test_a_title_loses_its_renderer(title, expected):
+    assert app_audio.clean_title(title) == expected
+
+
+def test_a_protons_title_loses_its_renderer():
+    windows = [_window("steam_app_550", fullscreen=True, title="Left 4 Dead 2 - Direct3D 9")]
+    assert app_audio.ActiveApp().update([], 0, windows) == "Left 4 Dead 2"
+
+
 @pytest.mark.parametrize("app", ["explorer", "applicationframehost", "searchhost"])
 def test_the_windows_shell_isnt_an_app(app):
     assert app_audio.ActiveApp().update([], 0, [_window(app, active=True)]) is None

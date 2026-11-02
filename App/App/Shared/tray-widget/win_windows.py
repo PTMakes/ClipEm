@@ -13,10 +13,17 @@ can't be told, or OBS is capturing a window or game, every screen counts.
 
 Nothing's kept: a window's title goes no further unless it's what a clip ends
 up named after.
+
+A program's name is what its .exe's version info calls it (program_name):
+"Left 4 Dead 2" for left4dead2.exe, whose window is "Left 4 Dead 2 -
+Direct3D 9". Its window and its sound (app_audio's Windows streams) both go
+by it, so a clip is named the same as its game's track.
 """
 
 import ctypes
+import functools
 import os
+import re
 import time
 from ctypes import wintypes
 
@@ -34,6 +41,15 @@ DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 = -4
 DESKTOP_CLASSES = {"Progman", "WorkerW", "Shell_TrayWnd", "Shell_SecondaryTrayWnd"}
 UNKNOWN_APP = "unknown"  # a process Windows won't name (some anti-cheat): its title will do
 BROWSERS = {"chrome", "msedge", "firefox", "brave", "opera", "vivaldi"}
+# Version info that names the engine or the kind of program, not the program
+# itself. Compared case-insensitively.
+GENERIC_PROGRAM_NAMES = {
+    "game", "launcher", "application", "app", "client", "main", "bootstrappackagedgame", "unrealgame",
+    "unreal engine", "unreal engine 4", "unreal engine 5", "unity", "unity player", "godot engine", "electron",
+    "java(tm) platform se binary", "openjdk platform binary", "microsoft windows operating system",
+}
+# Code pages to try when an .exe doesn't list its own (US English, Unicode / Western / neutral).
+FALLBACK_LANGUAGES = ("040904b0", "040904e4", "04090000")
 
 
 class _Rect(ctypes.Structure):
@@ -63,17 +79,71 @@ def is_fullscreen(style, window_rect, monitor_rect):
 
 def as_report(row, foreground):
     """A window as kde_windows reports them, or None if it's neither focused
-    nor fullscreen. row: {"hwnd", "pid", "exe", "title", "style", "rect",
-    "monitor_rect", "screen"}."""
+    nor fullscreen. row: {"hwnd", "pid", "exe", "name", "title", "style",
+    "rect", "monitor_rect", "screen"} - name: program_name(), if any."""
     fullscreen = is_fullscreen(row["style"], row["rect"], row["monitor_rect"])
     active = row["hwnd"] == foreground
     if not (fullscreen or active):
         return None
     app = os.path.splitext(row["exe"])[0] or UNKNOWN_APP
-    return {"pid": row["pid"], "app": app, "title": row["title"], "screen": row["screen"],
-            "screen_name": row.get("screen_name", ""), "fullscreen": fullscreen, "active": active,
-            # An .exe is often no name for a game ("cs2"), but a page's title is no name for a browser.
-            "use_title": app == UNKNOWN_APP or (fullscreen and app.lower() not in BROWSERS)}
+    report = {"pid": row["pid"], "app": app, "title": row["title"], "screen": row["screen"],
+              "screen_name": row.get("screen_name", ""), "fullscreen": fullscreen, "active": active,
+              # An .exe is often no name for a game ("cs2"), but a page's title is no name for a browser.
+              "use_title": app == UNKNOWN_APP or (fullscreen and app.lower() not in BROWSERS)}
+    if row.get("name"):
+        report["name"] = row["name"]
+    return report
+
+
+def pick_program_name(values):
+    """The first of an .exe's FileDescription and ProductName that names it,
+    tidied ("Left 4 Dead 2"), or ""."""
+    for value in values:
+        name = re.sub(r"\s+", " ", re.sub("[®™©]", "", str(value or ""))).strip(" .-")
+        if name and name.lower() not in GENERIC_PROGRAM_NAMES:
+            return name
+    return ""
+
+
+def _version_strings(path, keys):
+    """The values of an .exe's version info strings, in the order of keys
+    (any it doesn't have left out)."""
+    version = ctypes.windll.version
+    version.GetFileVersionInfoSizeW.argtypes = (wintypes.LPCWSTR, ctypes.c_void_p)
+    version.GetFileVersionInfoW.argtypes = (wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p)
+    version.VerQueryValueW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR, ctypes.c_void_p,
+                                       ctypes.POINTER(wintypes.UINT))
+    size = version.GetFileVersionInfoSizeW(path, None)
+    if not size:
+        return []
+    data = ctypes.create_string_buffer(size)
+    if not version.GetFileVersionInfoW(path, 0, size, data):
+        return []
+    pointer, length = ctypes.c_void_p(), wintypes.UINT()
+    languages = []
+    if version.VerQueryValueW(data, "\\VarFileInfo\\Translation", ctypes.byref(pointer), ctypes.byref(length)):
+        words = ctypes.cast(pointer, ctypes.POINTER(wintypes.WORD))  # (language, code page) pairs
+        languages = [f"{words[i]:04x}{words[i + 1]:04x}" for i in range(0, length.value // 2 - 1, 2)]
+    values = []
+    for key in keys:
+        for language in dict.fromkeys(languages + list(FALLBACK_LANGUAGES)):
+            if version.VerQueryValueW(data, f"\\StringFileInfo\\{language}\\{key}", ctypes.byref(pointer),
+                                      ctypes.byref(length)) and length.value:
+                values.append(ctypes.wstring_at(pointer, length.value).rstrip("\0"))
+                break
+    return values
+
+
+@functools.lru_cache(maxsize=256)
+def program_name(path):
+    """What an .exe's version info calls it, or "" if it can't be read or
+    says nothing (GENERIC_PROGRAM_NAMES). path: the .exe's full path."""
+    if not path:
+        return ""
+    try:
+        return pick_program_name(_version_strings(path, ("FileDescription", "ProductName")))
+    except (OSError, AttributeError, ValueError):  # AttributeError: not Windows
+        return ""
 
 
 def _monitor_id(user32, device):
@@ -82,15 +152,14 @@ def _monitor_id(user32, device):
                                                           EDD_GET_DEVICE_INTERFACE_NAME) else ""
 
 
-def _exe_name(kernel32, pid):
+def _exe_path(kernel32, pid):
     process = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
     if not process:
         return ""
     try:
         path = ctypes.create_unicode_buffer(32768)
         size = wintypes.DWORD(len(path))
-        return os.path.basename(path.value) if kernel32.QueryFullProcessImageNameW(
-            process, 0, path, ctypes.byref(size)) else ""
+        return path.value if kernel32.QueryFullProcessImageNameW(process, 0, path, ctypes.byref(size)) else ""
     finally:
         kernel32.CloseHandle(process)
 
@@ -121,7 +190,9 @@ def _window_row(hwnd, user32, kernel32, dwmapi, monitors):
     user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
     title = ctypes.create_unicode_buffer(512)
     user32.GetWindowTextW(hwnd, title, len(title))
-    return {"hwnd": hwnd, "pid": pid.value, "exe": _exe_name(kernel32, pid.value), "title": title.value,
+    path = _exe_path(kernel32, pid.value)
+    return {"hwnd": hwnd, "pid": pid.value, "exe": os.path.basename(path), "name": program_name(path),
+            "title": title.value,
             "style": user32.GetWindowLongW(hwnd, GWL_STYLE) & 0xFFFFFFFF,
             "rect": (rect.left, rect.top, rect.right, rect.bottom), "monitor_rect": monitor_rect, "screen": screen,
             "screen_name": screen_name}

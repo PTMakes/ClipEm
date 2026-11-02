@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import platform
+import re
 import subprocess
 import sys
 import threading
@@ -230,6 +231,18 @@ def _windows_root_pid(process):
             return root.pid
 
 
+def _windows_program_name(process):
+    """What the process's .exe calls itself - the name its window goes by too
+    (win_windows.program_name), so a clip and its game's track match."""
+    import psutil
+    import win_windows
+
+    try:
+        return win_windows.program_name(process.exe())
+    except (psutil.Error, OSError):
+        return ""
+
+
 def _windows_streams():
     import comtypes
     from pycaw.pycaw import AudioUtilities
@@ -248,7 +261,7 @@ def _windows_streams():
         exe = process.name()
         label = session.DisplayName
         if not label or label.startswith("@"):  # "@%SystemRoot%\\..." resource strings
-            label = os.path.splitext(exe)[0]
+            label = _windows_program_name(process) or os.path.splitext(exe)[0]
         if is_ignored(exe, label):
             continue
         key = _app_key(exe)
@@ -309,15 +322,38 @@ ACTIVE_HOLD_SECONDS = 60
 RANK_FULLSCREEN, RANK_FOCUSED_SOUND, RANK_SOUND, RANK_FOCUSED, RANK_BROWSER, RANK_BACKGROUND = range(6)
 
 
+# What games add to their window's title after their name: the renderer
+# ("Left 4 Dead 2 - Direct3D 9", "Game (DX12)", "Game [Vulkan]").
+_RENDERER_IN_TITLE = re.compile(
+    r"\s*(?:[-\u2013\u2014|:]\s*|[(\[]\s*)(?:direct\s*(?:x\s*)?3d|directx|d3d|dx|vulkan|opengl|gl)"
+    r"(?:\s*\d+(?:\.\d+)*)?(?:\s*\(?(?:32|64)[- ]?bit\)?)?\s*[)\]]?\s*$", re.I)
+
+
+def clean_title(title):
+    """A window's title without the renderer a game puts after its name -
+    unless that's all there is."""
+    title = str(title or "").strip()
+    while True:
+        shorter = _RENDERER_IN_TITLE.sub("", title).strip()
+        if not shorter or shorter == title:
+            return title
+        title = shorter
+
+
 def window_label(window, stream):
-    """What to call a window's app: its title if its class says nothing (or
-    its report says to), the label its sound has, or the end of its class
+    """What to call a window's app: if its class says nothing (or its report
+    says to go by its title), its program's name (win_windows.program_name -
+    or its sound's, the same or one the app chose) or else its title; if not,
+    the label its sound has, its program's name or the end of its class
     ("org.kde.dolphin")."""
-    app, title = window["app"], str(window.get("title") or "").strip()
+    app, title, name = window["app"], clean_title(window.get("title")), window.get("name")
     generic = app.lower().startswith(GENERIC_WINDOW_CLASSES) or app.lower().endswith(".exe")
-    if title and (generic or window.get("use_title")):
-        return title
-    return stream.label if stream else app.rsplit(".", 1)[-1]
+    if generic or window.get("use_title"):
+        if name:
+            return stream.label if stream else name
+        if title:
+            return title
+    return stream.label if stream else name or app.rsplit(".", 1)[-1]
 
 
 class ActiveApp:

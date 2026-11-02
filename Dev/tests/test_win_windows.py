@@ -59,6 +59,35 @@ def test_a_process_windows_wont_name_goes_by_its_title():
     assert report["app"] == win_windows.UNKNOWN_APP and report["use_title"]
 
 
+def test_a_report_has_the_programs_name_when_it_has_one():
+    assert win_windows.as_report({**row(), "name": "Left 4 Dead 2"}, foreground=1)["name"] == "Left 4 Dead 2"
+    assert "name" not in win_windows.as_report({**row(), "name": ""}, foreground=1)
+
+
+@pytest.mark.parametrize("values, expected", [
+    (["Left 4 Dead 2", "Left 4 Dead 2"], "Left 4 Dead 2"),
+    (["BootstrapPackagedGame", "Satisfactory"], "Satisfactory"),
+    (["", "Counter-Strike\u00ae 2 "], "Counter-Strike 2"),
+    (["Launcher", "Unreal Engine"], ""),
+    ([], ""),
+])
+def test_a_programs_name_is_the_first_version_string_that_names_it(values, expected):
+    assert win_windows.pick_program_name(values) == expected
+
+
+def test_a_program_with_no_readable_exe_has_no_name():
+    assert win_windows.program_name("") == ""
+    if sys.platform != "win32":
+        assert win_windows.program_name("C:\\Games\\left4dead2.exe") == ""
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="reads a real .exe's version info")
+def test_a_real_exe_has_its_name():
+    import os
+    notepad = os.path.join(os.environ.get("SystemRoot", "C:\\Windows"), "System32", "notepad.exe")
+    assert win_windows.program_name(notepad).lower() == "notepad"
+
+
 class Capture:
     def __init__(self, kind):
         self.name, self.kind = "Screen", kind
