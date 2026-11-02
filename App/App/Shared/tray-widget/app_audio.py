@@ -1,9 +1,11 @@
 """Per-app audio tracks for "Split audio tracks" (see obs_config's notes on
 the layout).
 
-Driven from the tray's poll loop: every CHECK_INTERVAL_SECONDS, asks the OS
-which apps have an audio stream and tells the recorder (app_recorder.py) to
-record each one. Nothing is assigned or remembered: when a clip is saved,
+On a thread of its own (AppTrackMonitor.start), as soon as the OS says a
+stream started (Linux) or every RECORD_CHECK_SECONDS, asks the OS which apps
+have an audio stream and tells the recorder (app_recorder.py) to record each
+one - whether or not OBS is connected, since OBS's replay buffer may have
+been recording for a while before the tray (re)connects. Nothing is assigned or remembered: when a clip is saved,
 every app that made sound during it becomes a track, named after the app.
 
 Streams are recorded whether or not they're paused, so the start of an app's
@@ -36,6 +38,11 @@ import clip_naming  # noqa: E402 - Scripts/clip_naming.py
 log = logging.getLogger("tray")
 
 CHECK_INTERVAL_SECONDS = 3
+# How often the recording thread looks for new streams: an app's sound is
+# only recorded from when its stream is found. On Linux StreamWatch says at
+# once, so the timed check is only a fallback; Windows has to be asked.
+RECORD_CHECK_SECONDS = {"Windows": 0.5}
+STREAM_WATCH_RESTART_SECONDS = 5
 
 # Never given a track: OBS itself, ClipEm's own clip sound players and its
 # clip editor window (editor_window.EXE_NAMES - its preview would otherwise
@@ -362,17 +369,68 @@ def replay_buffer_seconds():
         return 60
 
 
+class StreamWatch:
+    """Calls wake() as soon as PulseAudio/PipeWire says an app's stream (a
+    sink input) appeared or changed, from `pactl subscribe` on a thread of
+    its own - so a new app is recorded from its first sound, not from the
+    next timed check."""
+
+    def __init__(self, wake, popen=subprocess.Popen):
+        self._wake = wake
+        self._popen = popen
+        self._stopped = threading.Event()
+        self._process = None
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="app-stream-watch")
+        self._thread.start()
+
+    def _run(self):
+        while not self._stopped.is_set():
+            try:
+                process = self._popen(["pactl", "subscribe"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                      text=True)
+            except OSError:
+                return  # no pactl: the timed checks are all there is
+            with self._lock:
+                self._process = process
+            if self._stopped.is_set():
+                process.kill()  # stop() came while it was starting
+            for line in process.stdout:
+                if "sink-input" in line:
+                    self._wake()
+            process.wait()
+            self._stopped.wait(STREAM_WATCH_RESTART_SECONDS)  # it exited: PipeWire restarting, say
+
+    def stop(self):
+        self._stopped.set()
+        with self._lock:
+            if self._process is not None and self._process.poll() is None:
+                self._process.kill()
+
+
+def watch_streams(wake, system=None):
+    """A StreamWatch where the OS can say when streams start, else None."""
+    return StreamWatch(wake) if (system or _SYSTEM) == "Linux" else None
+
+
 class AppTrackMonitor:
-    """Call tick() from the poll loop. Records apps only if `enabled()` - split
-    audio tracks are on and this system can record apps - and publishes the
-    active app only if `names_clips()`. recorder: app_recorder.AppRecorder (or
-    anything with set_targets(targets) and stop())."""
+    """Call tick() from the poll loop, and start() once. Records apps only if
+    `enabled()` - split audio tracks are on and this system can record apps -
+    and publishes the active app only if `names_clips()`. recorder:
+    app_recorder.AppRecorder (or anything with set_targets(targets) and
+    stop()).
+
+    Recording runs on a thread of its own once started: an app's sound from
+    before its helper starts is lost, so new streams can't wait for the poll
+    loop - which only ticks while OBS is connected, and every POLL_SECONDS.
+    tick() then only publishes the active app (on Windows that asks OBS which
+    screen it captures)."""
 
     def __init__(self, recorder, list_streams=list_audio_streams, monotonic=time.monotonic,
                  interval_seconds=CHECK_INTERVAL_SECONDS,
                  enabled=lambda: obs_config.load_tray_tracks() and obs_config.app_capture_supported(),
                  names_clips=lambda: clip_naming.load()["app"], publish=clip_naming.publish_active_app,
-                 windows=tuple):
+                 windows=tuple, record_interval_seconds=None, watch=watch_streams):
         self._recorder = recorder
         self._list_streams = list_streams
         self._monotonic = monotonic
@@ -386,10 +444,72 @@ class AppTrackMonitor:
         self._windows = windows
         self._active = ActiveApp()
         self._published = ""  # None is a value: nothing's active
+        self._record_interval = record_interval_seconds or RECORD_CHECK_SECONDS.get(_SYSTEM, interval_seconds)
+        self._watch = watch
+        self._watcher = None
+        self._thread = None
+        self._stopped = threading.Event()
+        self._wake = threading.Event()
 
     def forget(self):
         """After a reconnect: check again straight away."""
         self._next_check = None
+        self._wake.set()
+
+    def start(self):
+        """Records on a thread of its own from now on."""
+        if self._thread is not None:
+            return
+        self._stopped.clear()
+        self._thread = threading.Thread(target=self._record_loop, daemon=True, name="app-tracks")
+        self._thread.start()
+        if self._watch:
+            self._watcher = self._watch(self._wake.set)
+
+    def stop(self, timeout_seconds=2):
+        """Stops the recording thread (not the recorder)."""
+        self._stopped.set()
+        self._wake.set()
+        if self._watcher is not None:
+            self._watcher.stop()
+            self._watcher = None
+        if self._thread is not None:
+            self._thread.join(timeout_seconds)
+            self._thread = None
+
+    def _record_loop(self):
+        while not self._stopped.is_set():
+            self._wake.clear()
+            try:
+                self._record()
+            except Exception:
+                log.exception("App track recording check crashed")
+            self._wake.wait(self._record_interval)
+
+    def _record(self):
+        enabled = self._enabled()
+        self._update_enabled(enabled)
+        if enabled and not self._stopped.is_set():
+            streams = self._streams()
+            if streams is not None:
+                self._recorder.set_targets(app_targets(streams))
+
+    def _update_enabled(self, enabled):
+        if self._was_enabled and not enabled:
+            self._recorder.stop()
+        self._was_enabled = enabled
+
+    def _streams(self):
+        """Every app's streams, or None if they can't be listed."""
+        try:
+            streams = self._list_streams()
+        except Exception as exc:
+            if not self._detect_failed:
+                log.warning(f"Can't tell which apps are playing sound ({exc}) - no app tracks or app names in clips.")
+                self._detect_failed = True
+            return None
+        self._detect_failed = False
+        return streams
 
     def tick(self):
         now = self._monotonic()
@@ -409,22 +529,18 @@ class AppTrackMonitor:
             self._publish(app)
 
     def _tick(self):
-        enabled, names_clips = self._enabled(), self._names_clips()
-        if self._was_enabled and not enabled:
-            self._recorder.stop()
-        self._was_enabled = enabled
+        recording_here = self._thread is None  # else the recording thread has it
+        enabled = recording_here and self._enabled()
+        if recording_here:
+            self._update_enabled(enabled)
+        names_clips = self._names_clips()
         if not names_clips:
             self._publish_active(None)
         if not (enabled or names_clips):
             return
-        try:
-            streams = self._list_streams()
-        except Exception as exc:
-            if not self._detect_failed:
-                log.warning(f"Can't tell which apps are playing sound ({exc}) - no app tracks or app names in clips.")
-                self._detect_failed = True
+        streams = self._streams()
+        if streams is None:
             return
-        self._detect_failed = False
         if enabled:
             self._recorder.set_targets(app_targets(streams))
         if names_clips:

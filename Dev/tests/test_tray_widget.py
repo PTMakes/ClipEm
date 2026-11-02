@@ -305,6 +305,28 @@ def test_shutting_down_stops_everything(app):
     client = app.client
     app._shutdown("reason")
     assert client.closed and "app_recorder.stop" in app.steps and "icon.stop" in app.steps
+    # The recording thread first, or it'd start the helpers the recorder just stopped.
+    assert app.steps.index("app_tracks.stop") < app.steps.index("app_recorder.stop")
+
+
+def test_quitting_stops_recording_apps_first(quitting):
+    app, icon = quitting
+    app._quit(icon, None)
+    assert app.steps.index("app_tracks.stop") < app.steps.index("app_recorder.stop")
+
+
+def test_apps_are_recorded_before_obs_is_even_reached(app, monkeypatch):
+    """OBS's replay buffer can be running while the tray waits (minutes) to
+    connect: the app tracks must already be recording, not wait for a poll."""
+    monkeypatch.delenv(tray_widget.OPEN_EDITOR_ENV, raising=False)
+    started = []
+    monkeypatch.setattr(tray_widget.threading, "Thread",
+                        lambda target, daemon=None: types.SimpleNamespace(start=lambda: started.append(target)))
+    app.icon.run = lambda: app.steps.append("icon.run")
+    app.run()
+    assert "app_tracks.start" in app.steps
+    assert app.steps.index("app_tracks.start") < app.steps.index("icon.run")
+    assert app._poll_loop in started  # which is what connects to OBS
 
 
 @pytest.fixture

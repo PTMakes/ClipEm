@@ -3,6 +3,8 @@ the recorder about them."""
 
 import json
 import sys
+import threading
+import time
 import types
 
 import pytest
@@ -152,6 +154,183 @@ def test_monitor_survives_not_being_able_to_list_apps():
     monitor.tick()
     monitor.tick()
     assert recorder.targets == []
+
+
+class Listing:
+    """Streams that change while a monitor's thread runs; `asked` is set at each look."""
+
+    def __init__(self, streams=()):
+        self.streams = list(streams)
+        self.asked = threading.Event()
+
+    def __call__(self):
+        self.asked.set()
+        return list(self.streams)
+
+
+def _wait_for(condition, seconds=2.0):
+    deadline = time.monotonic() + seconds
+    while not condition():
+        if time.monotonic() > deadline:
+            return False
+        time.sleep(0.005)
+    return True
+
+
+def started_monitor(request, listing, record_interval_seconds=60, watch=None):
+    recorder = FakeRecorder()
+    monitor = app_audio.AppTrackMonitor(recorder, list_streams=listing, enabled=lambda: True,
+                                        names_clips=lambda: False, publish=lambda app: None,
+                                        record_interval_seconds=record_interval_seconds, watch=watch)
+    monitor.start()
+    request.addfinalizer(monitor.stop)
+    return monitor, recorder
+
+
+def test_a_new_app_is_recorded_without_the_poll_loop(request):
+    """The poll loop waits on OBS - for minutes, while OBS restarts - but the
+    replay buffer may already be running: an app that starts then must be
+    recorded straight away, or its track misses the start of the clip."""
+    listing = Listing()
+    _monitor, recorder = started_monitor(request, listing, record_interval_seconds=0.02)
+    assert _wait_for(lambda: recorder.targets)  # no tick() at all
+    listing.streams = [stream("brave", ("pa", 7, "m"))]
+    assert _wait_for(lambda: recorder.targets[-1] == {"brave": ("Brave", [("pa", 7, "m")])}, 0.5)
+
+
+def test_the_os_saying_a_stream_started_records_it_at_once(request):
+    wakes = []
+
+    class Watch:
+        stopped = False
+
+        def __init__(self, wake):
+            wakes.append(wake)
+
+        def stop(self):
+            Watch.stopped = True
+
+    listing = Listing()
+    monitor, recorder = started_monitor(request, listing, record_interval_seconds=60, watch=Watch)
+    assert _wait_for(lambda: len(recorder.targets) == 1)
+    listing.streams = [stream("brave", ("pa", 7, "m"))]
+    wakes[0]()  # not the next timed check, a minute away
+    assert _wait_for(lambda: len(recorder.targets) == 2, 0.5)
+    assert recorder.targets[-1] == {"brave": ("Brave", [("pa", 7, "m")])}
+    monitor.stop()
+    assert Watch.stopped
+
+
+def test_once_started_the_poll_loop_only_names_clips(request):
+    published = []
+    listing = Listing([stream("deadlock", ("pa", 1, "m"))])
+    recorder = FakeRecorder()
+    monitor = app_audio.AppTrackMonitor(recorder, list_streams=listing, enabled=lambda: True, interval_seconds=0,
+                                        names_clips=lambda: True, publish=published.append,
+                                        record_interval_seconds=60, watch=None)
+    monitor.start()
+    request.addfinalizer(monitor.stop)
+    assert _wait_for(lambda: len(recorder.targets) == 1)
+    monitor.tick()
+    assert published == ["Deadlock"] and len(recorder.targets) == 1  # the thread records, not tick()
+
+
+def test_a_stopped_monitor_records_nothing_more(request):
+    listing = Listing()
+    monitor, recorder = started_monitor(request, listing, record_interval_seconds=0.01)
+    assert _wait_for(lambda: recorder.targets)
+    monitor.stop()
+    count = len(recorder.targets)
+    time.sleep(0.05)
+    assert len(recorder.targets) == count and recorder.stopped == 0  # the recorder is the tray's to stop
+
+
+def test_a_crashing_check_doesnt_end_the_recording_thread(request):
+    calls = []
+
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("bug")
+        return []
+
+    recorder = FakeRecorder()
+    monitor = app_audio.AppTrackMonitor(recorder, list_streams=lambda: [], enabled=lambda: True,
+                                        names_clips=lambda: False, record_interval_seconds=0.01, watch=None)
+    recorder.set_targets = lambda targets: flaky()
+    monitor.start()
+    request.addfinalizer(monitor.stop)
+    assert _wait_for(lambda: len(calls) >= 2)
+
+
+class FakeSubscribe:
+    """`pactl subscribe`: prints `lines`, then exits (or waits to be killed)."""
+
+    def __init__(self, lines, ends=True):
+        self.lines = lines
+        self.ends = ends
+        self.killed = threading.Event()
+        self.started = 0
+
+    def __call__(self, cmd, **_kwargs):
+        assert cmd == ["pactl", "subscribe"]
+        self.started += 1
+        fake = self
+
+        class Process:
+            def __init__(self):
+                self.stdout = self._read()
+
+            def _read(self):
+                yield from fake.lines
+                if not fake.ends:
+                    fake.killed.wait(2)
+
+            def kill(self):
+                fake.killed.set()
+
+            def poll(self):
+                return 0 if fake.killed.is_set() else None
+
+            def wait(self):
+                return 0
+
+        return Process()
+
+
+def test_the_stream_watch_wakes_for_app_streams_only():
+    wakes = []
+    popen = FakeSubscribe(["Event 'new' on sink-input #71\n", "Event 'change' on sink #2\n",
+                           "Event 'remove' on sink-input #70\n"], ends=False)
+    watch = app_audio.StreamWatch(lambda: wakes.append(1), popen=popen)
+    assert _wait_for(lambda: len(wakes) == 2)
+    watch.stop()
+    assert popen.killed.wait(1)
+    watch._thread.join(1)
+    assert not watch._thread.is_alive()
+
+
+def test_the_stream_watch_starts_pactl_again_when_it_exits(monkeypatch):
+    monkeypatch.setattr(app_audio, "STREAM_WATCH_RESTART_SECONDS", 0.01)
+    popen = FakeSubscribe([])
+    watch = app_audio.StreamWatch(lambda: None, popen=popen)
+    assert _wait_for(lambda: popen.started >= 2)
+    watch.stop()
+
+
+def test_without_pactl_the_stream_watch_just_stops():
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError("pactl")
+
+    watch = app_audio.StreamWatch(lambda: None, popen=missing)
+    watch._thread.join(1)
+    assert not watch._thread.is_alive()
+    watch.stop()
+
+
+def test_only_linux_can_say_when_streams_start():
+    assert app_audio.watch_streams(lambda: None, system="Windows") is None
+    assert app_audio.RECORD_CHECK_SECONDS["Windows"] <= 0.5  # so a new app loses at most half a second
 
 
 def _stream(key, label=None, corked=False):

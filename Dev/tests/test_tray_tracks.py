@@ -196,6 +196,17 @@ def test_finish_clip_gives_every_app_heard_its_own_track_named_after_it(tmp_path
     assert abs(info["duration"] - rec.seconds) < 0.2
     assert len(clip_edit.probe(SYSTEM_FFMPEG, str(clip))["audio"]) == 1  # the clip itself is just the mix
     assert not [p for p in tmp_path.iterdir() if p.suffix in (".partial", ".mov", ".pcm")]
+    # As played back - AAC's priming and all - each app sits where it is in the Desktop track.
+    desktop = _decoded_envelope(tracks_file, 2)
+    for number in (3, 4):
+        lag, score, _ = track_align.refine(desktop, _decoded_envelope(tracks_file, number), 0, 100)
+        assert abs(lag) <= 2 and score > 0.3, (info["audio"][number]["title"], lag, score)
+
+
+def _decoded_envelope(path, track):
+    pcm = subprocess.run([SYSTEM_FFMPEG, "-v", "error", "-i", str(path), "-map", f"0:a:{track}", "-ac", "1", "-ar",
+                          "8000", "-f", "s16le", "-"], capture_output=True, check=True).stdout
+    return track_align.mono_envelope(pcm, 8000)
 
 
 @needs_ffmpeg

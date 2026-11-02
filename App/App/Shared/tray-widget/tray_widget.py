@@ -685,6 +685,7 @@ class TrayApp:
 
     def _quit(self, icon, item):
         self.stop_children()
+        self.app_tracks.stop()
         self.app_recorder.stop()
         if self.client:
             self.client.close()
@@ -728,6 +729,7 @@ class TrayApp:
 
     def _shutdown(self, reason):
         log.warning(f"Shutting down: {reason}")
+        self.app_tracks.stop()
         self.app_recorder.stop()
         if self.client:
             self.client.close()
@@ -899,6 +901,7 @@ class TrayApp:
         # open it again - see run.py's REOPEN_EDITOR_FLAG.
         if os.environ.pop(OPEN_EDITOR_ENV, "") == "1":
             self._start_helper(CLIP_BROWSER_SCRIPT, "the clip editor")
+        self.app_tracks.start()  # records apps whether or not OBS is connected yet
         threading.Thread(target=self._poll_loop, daemon=True).start()
         threading.Thread(target=self._check_tray_available, daemon=True).start()
         self.icon.run()
