@@ -316,7 +316,10 @@ function select(name) {
   state.selected = name;
   for (const li of list.children) li.classList.toggle("selected", li.dataset.name === name);
   setStatus("");
-  player.src = mediaUrl(name);
+  // The file the editor works on (clip_browser.file_to_edit): a post-clip
+  // save's "-extra.mkv" runs on past the press, where the clip itself stops.
+  const clip = state.clips.find((c) => c.name === name);
+  player.src = mediaUrl((clip && clip.extra_file) || name);
   player.muted = true;
   loadEditor(name);
   renderDetails();

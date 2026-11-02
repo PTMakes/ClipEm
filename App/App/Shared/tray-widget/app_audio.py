@@ -49,7 +49,9 @@ STREAM_WATCH_RESTART_SECONDS = 5
 # land on a track of the next clip), and system/notification sound helpers.
 # Compared case-insensitively, minus any ".exe".
 IGNORED_APPS = {
-    "obs", "obs64", "obs32", "audiodg", "paplay", "aplay", "pw-play", "pw-cat",
+    # paplay is pacat under another name (as pw-play is pw-cat): its stream
+    # says binary "pacat", name "paplay" - ClipEm's own clip sounds use it.
+    "obs", "obs64", "obs32", "audiodg", "paplay", "pacat", "aplay", "pw-play", "pw-cat",
     "canberra-gtk-play", "speech-dispatcher", "sd_espeak-ng", "pipewire",
     "wireplumber", "pulseaudio", "python", "python3", "pythonw",
     "clipem-editor", "clipem editor",
@@ -72,7 +74,11 @@ Stream = namedtuple("Stream", "key exe label handle corked pid", defaults=(None,
 
 
 def is_ignored(exe, label=None):
-    return _app_key(exe) in IGNORED_APPS or (label or "").strip().lower() in IGNORED_APP_LABELS
+    """By the program, or by the name it gives its sound - a program can run
+    under another name than its binary's (paplay is pacat)."""
+    name = (label or "").strip()
+    return _app_key(exe) in IGNORED_APPS or (bool(name) and _app_key(name) in IGNORED_APPS) \
+        or name.lower() in IGNORED_APP_LABELS
 
 
 # What some apps put in application.name - the audio library's or engine's

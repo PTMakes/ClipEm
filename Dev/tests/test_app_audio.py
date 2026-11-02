@@ -69,6 +69,22 @@ def test_parse_pactl_streams_keeps_paused_streams_and_names_the_monitor():
     assert app_audio.active_apps(streams) == [("firefox", "firefox"), ("game", "game")]
 
 
+def test_clipems_own_clip_sound_is_never_an_app():
+    """paplay is pacat under another name: PipeWire says binary "pacat", name
+    "paplay" (as pactl showed for a clip's save sound, which then named the
+    clip and got a track of its own)."""
+    text = json.dumps([
+        {"index": 747646, "corked": False, "properties": {
+            "application.name": "paplay", "application.process.binary": "pacat", "node.name": "paplay",
+            "media.name": "/home/pt/ClipEm/App/Shared/Sounds/clip.wav"}},
+        {"index": 2, "corked": False, "properties": {"application.process.binary": "pw-cat", "application.name": "pw-play"}},
+        {"index": 3, "corked": False, "properties": {"application.process.binary": "brave", "application.name": "Brave"}},
+    ])
+    assert [s.key for s in app_audio.parse_pactl_streams(text)] == ["brave"]
+    assert app_audio.is_ignored("pacat") and app_audio.is_ignored("anything", "paplay")
+    assert not app_audio.is_ignored("brave", "Brave") and not app_audio.is_ignored("game", "")
+
+
 def test_an_app_updated_while_it_runs_is_still_the_same_app():
     text = json.dumps([{"index": 1, "corked": False, "properties": {"application.process.binary": "brave (deleted)",
                                                                    "application.name": "Brave"}}])
