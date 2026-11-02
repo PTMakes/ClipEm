@@ -4,26 +4,44 @@
     "date": "2026-10-31",
     "sections": {
       "New Features": [
-        "Clip names: drag the parts into any order, turn each one on or off, and add the game or app you were playing.",
-        "Clip editor: Trim for quick cuts on the video and Mix, or the Full Editor for every track.",
-        "The Full Editor adds video and audio tracks. Import videos, pictures and sound with Import or by dropping files on the tracks.",
-        "Move, trim, split and layer items on the timeline, and set their volume, opacity, size and position. Drag pictures right on the video.",
-        "Move the clip along the timeline to fit an intro before it or an outro after it.",
-        "Add fade ins and outs to items, tracks and the whole picture, and crossfade or slide transitions to items.",
-        "The Assets list shows what you've imported and deletes what's unused. Unused files also go by themselves after 30 days."
+        "Clip names: reorder the parts, turn each on or off, and add the game you were playing.",
+        "Clip editor: Trim for quick cuts, or the Full Editor for every track.",
+        "Full Editor: add video and audio tracks, and import videos, pictures and sound.",
+        "Move, trim, split and layer items, and set their volume, opacity, size and place on the video.",
+        "Move the clip along the timeline to fit an intro or outro.",
+        "Fades on items, tracks and the picture, and crossfade or slide transitions.",
+        "Assets deletes unused imports, or they go after 30 days.",
+        "Themes: Dark, Light, Halloween or Christmas, and save your own (Settings > UI Customization)."
       ],
       "Improvements": [
-        "Game names in clips: on KDE and Windows, ClipEm now prefers the fullscreen or focused app on the screen OBS captures, so music and chat don't win.",
-        "File names no longer have spaces. New clips look like Replay-2026-10-25-21-50-07-Deadlock.",
-        "The date is now six dropdowns: put year, month, day, hour, minute and second in any order, or set any of them to None.",
-        "Between Parts shows the current character, with a Reset button. It's added for you, so the name boxes and suffixes no longer need hyphens. Reset All puts every clip name option back, and your settings update automatically.",
-        "Exports include added tracks in the mix and as their own tracks in the .mkv."
+        "Game names prefer the fullscreen or focused app on screen (KDE, Windows).",
+        "No spaces in file names: Replay-2026-10-25-21-50-07-Deadlock.",
+        "The date is six dropdowns, in any order, each of which can be None.",
+        "Between Parts is added for you (no hyphens needed), with Reset; Reset All resets every name option.",
+        "Exports include added tracks, in the mix and in the .mkv.",
+        "Settings pages fit without scrolling on Windows."
+      ],
+      "Fixes": [
+        "App tracks no longer miss the start of a clip, even while OBS restarts.",
+        "ClipEm's clip sound no longer gets a track or names the clip.",
+        "Clip names can't be just spaces.",
+        "A malformed OBS clip hotkey falls back to the default.",
+        "Setup's file check says when it lists only some problems.",
+        "Windows: a restart no longer waits on a launch that has closed."
       ]
     },
     "new_settings": [
       {
         "key": "clip_names",
         "name": "the new clip name options"
+      },
+      {
+        "key": "themes",
+        "name": "Themes"
+      },
+      {
+        "key": "saved_themes",
+        "name": "Save as Theme"
       }
     ]
   },

@@ -354,8 +354,10 @@ def test_new_badges_cover_no_text(fake_obs_config, monkeypatch):
                     if box and left < box[2] and box[0] < right and top < box[3] and box[1] < bottom:
                         covered.append((tab, key, str(widget), box, (left, top, right, bottom)))
 
+    known = []
+    _in_settings(monkeypatch, lambda root: known.extend(root.layout["highlights"]))
     _in_settings(monkeypatch, look)
-    assert set(checked) == {"post_clip", "clip_names", "view_logs", "release_notes"}
+    assert set(checked) == set(known)  # every badge was looked at
     assert not covered, "\n".join(str(item) for item in covered)
 
 
@@ -381,8 +383,15 @@ def test_release_notes_window_can_show_the_new_settings(fake_obs_config, monkeyp
         seen.update(lit=set(root.layout["highlighted"]), windows=[w for w in root.winfo_children()
                                                                   if isinstance(w, tk.Toplevel) and w.winfo_viewable()])
 
+    import json
+
+    from conftest import APP_SHARED_DIR
+
+    with open(os.path.join(APP_SHARED_DIR, "release_notes.json"), encoding="utf-8") as f:
+        newest = json.load(f)[0]  # what this version's notes call new
     _in_settings(monkeypatch, look)
-    assert seen["lit"] == {"clip_names"} and not seen["windows"]
+    assert seen["lit"] == {item["key"] for item in newest["new_settings"]} and not seen["windows"]
+    assert {"themes", "saved_themes"} <= seen["lit"]
 
 
 def test_highlight_argument(tmp_path):

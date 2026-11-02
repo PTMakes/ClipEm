@@ -1177,8 +1177,12 @@ def open_dialog(start_tab=None, highlight=()):
     theme_row.grid(row=next_row, column=0, columnspan=2, sticky="w")
     next_row += 1
     tk.Label(theme_row, text="Theme:").pack(side="left")
-    theme_combo = ttk.Combobox(theme_row, state="readonly", width=28)
-    theme_combo.pack(side="left", padx=(px(8), 0))
+    # In a plain frame: a ttk widget can't take the "New" outline.
+    theme_box = tk.Frame(theme_row)
+    theme_box.pack(side="left", padx=(px(8), 0))
+    theme_combo = ttk.Combobox(theme_box, state="readonly", width=28)
+    theme_combo.pack()
+    highlightable("themes", theme_box, TAB_TRAY)
     theme_ids = []
     current_theme = {"id": ui_colors.configured_theme_id(run_config)}
 
@@ -1314,7 +1318,9 @@ def open_dialog(start_tab=None, highlight=()):
     theme_buttons.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(8), 0))
     next_row += 1
     tk.Button(theme_buttons, text="Reset to Defaults", command=reset_colors).pack(side="left")
-    tk.Button(theme_buttons, text="Save as Theme...", command=save_theme).pack(side="left", padx=(px(4), 0))
+    save_theme_button = tk.Button(theme_buttons, text="Save as Theme...", command=save_theme)
+    save_theme_button.pack(side="left", padx=(px(4), 0))
+    highlightable("saved_themes", save_theme_button, TAB_TRAY)
     delete_button = tk.Button(theme_buttons, text="Delete Theme", command=delete_theme)
     delete_button.pack(side="left", padx=(px(4), 0))
     list_themes(current_theme["id"])
