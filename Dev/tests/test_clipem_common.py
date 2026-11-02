@@ -214,7 +214,7 @@ def test_linux_reads_the_start_time_past_an_odd_command_name(tmp_path, monkeypat
     fields = ["S"] + ["0"] * 18 + ["250"] + ["0"] * 10  # field 22: 250 ticks after boot
     (tmp_path / "42" / "stat").write_text("42 (a) b ) c) " + " ".join(fields))
     (tmp_path / "stat").write_text("cpu 1 2 3\nbtime 1000\nprocesses 5\n")
-    monkeypatch.setattr(clipem_common.os, "sysconf", lambda name: 100)
+    monkeypatch.setattr(clipem_common.os, "sysconf", lambda name: 100, raising=False)  # Windows has none
     assert clipem_common._linux_process_start(42, proc=str(tmp_path)) == 1002.5
 
 
