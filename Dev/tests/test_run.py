@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 
 import pytest
 import run
@@ -467,6 +468,8 @@ def launch_gate(tmp_path, monkeypatch):
     "already open" prompt answered with set_answer() (records each reason)."""
     monkeypatch.setattr(sys, "argv", ["run.py"])
     monkeypatch.setattr(run, "RUN_LOCK_PATH", str(tmp_path / ".run.lock"))
+    monkeypatch.setattr(run, "RUN_RAISE_PATH", str(tmp_path / ".run.raise"))
+    monkeypatch.setattr(run, "RAISE_WAIT_SECONDS", 0.3)
     monkeypatch.setattr(run, "TRAY_LOCK_PATH", str(tmp_path / ".tray.lock"))
     monkeypatch.setattr(run.obs_process, "obs_running", lambda: False)
     asked = []
@@ -505,10 +508,70 @@ def test_cancel_when_another_launch_is_running(launch_gate):
         (tmp_path / ".run.lock").write_text(str(other.pid))
         with pytest.raises(SystemExit):
             run._claim_launch()
-        assert asked == ["ClipEm is still starting up or installing an update."]
+        [reason] = asked
+        assert f"(process {other.pid}, started " in reason
+        assert "installing an update, or stuck" in reason
+        assert f"find process {other.pid} in your task manager" in reason
+        assert not (tmp_path / ".run.raise").exists()  # unanswered, so taken back
     finally:
         other.kill()
         other.wait()
+
+
+def test_another_launch_is_asked_to_show_its_prompt(launch_gate):
+    tmp_path, asked, _answer = launch_gate
+    other = _other_process()
+    raise_request = tmp_path / ".run.raise"
+
+    def other_launch_answers():
+        while not raise_request.exists():
+            time.sleep(0.02)
+        raise_request.unlink()
+
+    answering = threading.Thread(target=other_launch_answers, daemon=True)
+    answering.start()
+    try:
+        (tmp_path / ".run.lock").write_text(str(other.pid))
+        with pytest.raises(SystemExit):
+            run._claim_launch()
+        [reason] = asked
+        assert f"(process {other.pid}, started " in reason
+        assert "now brought to the front" in reason
+    finally:
+        answering.join(2)
+        other.kill()
+        other.wait()
+
+
+def test_a_reused_pid_in_a_stale_launch_lock_is_ignored(launch_gate, monkeypatch):
+    # A reboot left the lock behind and an unrelated process (started since)
+    # now has its pid: this launch is the only one.
+    tmp_path, asked, _answer = launch_gate
+    lock = tmp_path / ".run.lock"
+    lock.write_text(str(os.getppid()))
+    os.utime(lock, (0, 0))
+    assert run._claim_launch() is True
+    assert asked == []
+    assert lock.read_text() == str(os.getpid())
+
+
+class _FakePrompt:
+    def __init__(self):
+        self.calls = []
+
+    def __getattr__(self, name):
+        return lambda *args: self.calls.append(name)
+
+
+def test_a_prompt_comes_to_the_front_when_another_launch_asks(tmp_path, monkeypatch):
+    monkeypatch.setattr(run, "RUN_RAISE_PATH", str(tmp_path / ".run.raise"))
+    prompt = _FakePrompt()
+    assert run._raise_when_asked(prompt) is False
+    assert prompt.calls == []
+    (tmp_path / ".run.raise").write_text("123")
+    assert run._raise_when_asked(prompt) is True
+    assert {"deiconify", "lift", "focus_force"} <= set(prompt.calls)
+    assert not (tmp_path / ".run.raise").exists()  # the asking launch sees it's been done
 
 
 def test_proceed_anyway_next_to_another_launch_leaves_updates_to_it(launch_gate):

@@ -63,6 +63,7 @@ from clipem_common import (  # noqa: E402
     is_tray_widget_process,
     load_run_config,
     pid_alive,
+    process_start_time,
     setup_logging,
     stop_clip_editor,
     stop_tray_widget,
@@ -85,6 +86,11 @@ RESTARTED_FLAG = "--restarted"
 # update prompt or installs an update. In App/, which updates never replace.
 RUN_LOCK_PATH = os.path.join(APP_DIR, ".run.lock")
 RESTART_WAIT_SECONDS = 15
+# Written by a second launch to have the launch holding RUN_LOCK_PATH bring
+# its prompt to the front; removed by that launch once it has (_run_prompt).
+RUN_RAISE_PATH = os.path.join(APP_DIR, ".run.raise")
+RAISE_POLL_MS = 300
+RAISE_WAIT_SECONDS = 1.5  # how long a second launch waits for that
 
 # Windows process-creation flags for everything run.py starts, so nothing
 # is tied to (or pops up) a console window: the desktop shortcut runs this
@@ -550,11 +556,36 @@ def _prompt_window(title):
     return root
 
 
+def _bring_to_front(root):
+    root.deiconify()
+    root.lift()
+    root.attributes("-topmost", True)
+    root.after(500, lambda: root.attributes("-topmost", False))
+    try:
+        root.focus_force()
+    except Exception:
+        pass
+
+
+def _raise_when_asked(root):
+    """Brings root to the front if another launch asked (RUN_RAISE_PATH) -
+    a prompt left behind other windows otherwise looks like a ClipEm that
+    won't start. Whether it was asked."""
+    try:
+        os.remove(RUN_RAISE_PATH)
+    except OSError:
+        return False
+    log.info("Another launch of ClipEm asked for this window - bringing it to the front.")
+    _bring_to_front(root)
+    return True
+
+
 def _run_prompt(root):
     """Shows root until it's closed. It belongs to this launch, not the tray
     widget, so quitting the tray wouldn't close it: once the tray widget
     started alongside it has quit, it's closed unanswered. The tray may not
-    be up yet when it opens, so it only counts once it's been seen running."""
+    be up yet when it opens, so it only counts once it's been seen running.
+    Another launch can ask for it to be brought to the front."""
 
     def close_with_tray(seen_tray=False):
         running = _tray_widget_running()
@@ -564,7 +595,12 @@ def _run_prompt(root):
             return
         root.after(TRAY_WATCH_MS, close_with_tray, seen_tray or running)
 
+    def raise_when_asked():
+        _raise_when_asked(root)
+        root.after(RAISE_POLL_MS, raise_when_asked)
+
     root.after(TRAY_WATCH_MS, close_with_tray)
+    root.after(RAISE_POLL_MS, raise_when_asked)
     root.mainloop()
 
 
@@ -740,11 +776,55 @@ def _read_pid(path):
         return None
 
 
+def _clock(timestamp):
+    """A time of day - with the date, when it isn't today."""
+    when = time.localtime(timestamp)
+    today = time.localtime()[:3] == when[:3]
+    return time.strftime("%H:%M" if today else "%b %d %H:%M", when)
+
+
+def _raise_other_launch():
+    """Asks the launch holding RUN_LOCK_PATH to bring its prompt (e.g. the
+    update prompt) to the front; whether it did within RAISE_WAIT_SECONDS.
+    A launch showing no prompt never takes the request, so it's taken back."""
+    try:
+        write_text_atomic(RUN_RAISE_PATH, str(os.getpid()))
+    except OSError:
+        return False
+    deadline = time.monotonic() + RAISE_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        if not os.path.exists(RUN_RAISE_PATH):
+            return True
+        time.sleep(0.1)
+    try:
+        os.remove(RUN_RAISE_PATH)
+    except FileNotFoundError:
+        return True  # taken just now
+    except OSError:
+        pass
+    return False
+
+
+def _another_launch_reason(pid):
+    """Says which launch holds RUN_LOCK_PATH, and what it's doing."""
+    started = process_start_time(pid) if pid else None
+    who = f"process {pid}" if pid else "an unknown process"
+    if started:
+        who += f", started {_clock(started)}"
+    if _raise_other_launch():
+        return (f"Its earlier launch ({who})\n"
+                "is waiting for an answer in its window, now brought to the front.")
+    return (f"Its earlier launch ({who})\n"
+            "is still running: installing an update, or stuck. If no ClipEm\n"
+            f"window is open, find process {pid} in your task manager and\n"
+            "end it if it's ClipEm (Python).")
+
+
 def _what_is_already_open():
     """Why this would be a second copy of ClipEm (another launch still
     running - e.g. showing its update prompt or installing an update - or
-    this install's OBS or tray widget already open), or None. Takes the
-    launch lock when it's free."""
+    this install's OBS or tray widget already open) and whether it's another
+    launch, or None. Takes the launch lock when it's free."""
     if RESTARTED_FLAG in sys.argv[1:]:
         # Started by the launch it replaces - give that one time to exit.
         previous = _read_pid(RUN_LOCK_PATH)
@@ -752,15 +832,15 @@ def _what_is_already_open():
         while previous and previous != os.getpid() and pid_alive(previous) and time.monotonic() < deadline:
             time.sleep(0.2)
     if not acquire_instance_lock(RUN_LOCK_PATH):
-        return "ClipEm is still starting up or installing an update."
+        return _another_launch_reason(_read_pid(RUN_LOCK_PATH)), True
     if RESTARTED_FLAG in sys.argv[1:]:
         return None  # the restarts close OBS and the tray widget first
     if obs_process.obs_running():
-        return "ClipEm's OBS is already running."
+        return "ClipEm's OBS is already running.", False
     if OBS_RESTART_FLAG in sys.argv[1:]:
         return None  # Settings' "Restart OBS": the tray widget stays, on purpose
     if _tray_widget_running():
-        return "ClipEm's tray icon is already running."
+        return "ClipEm's tray icon is already running.", False
     return None
 
 
@@ -839,11 +919,11 @@ def _claim_launch():
     whether this launch may install or offer updates - not while another
     launch is running, which could be doing the same. Another launch can't
     be killed from here: it may be installing an update."""
-    reason = _what_is_already_open()
-    if reason is None:
+    already_open = _what_is_already_open()
+    if already_open is None:
         return True
-    log.info(f"Already open: {reason} Asking the user.")
-    another_launch = reason.startswith("ClipEm is still starting")
+    reason, another_launch = already_open
+    log.info(f"Already open: {' '.join(reason.split())} Asking the user.")
     choice = _ask_already_open(reason, can_kill=not another_launch)
     if choice == ALREADY_OPEN_KILL:
         log.info("Killing the existing ClipEm and OBS.")

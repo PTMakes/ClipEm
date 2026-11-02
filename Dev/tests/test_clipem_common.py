@@ -9,6 +9,7 @@ import logging.handlers
 import os
 import subprocess
 import sys
+import time
 import types
 import uuid
 
@@ -197,11 +198,34 @@ def test_lock_file_times_get_two_seconds_of_leeway(tmp_path):
     assert not clipem_common.holds_lock(os.getpid(), str(lock), process_start=lambda pid: written + 3)
 
 
-def test_outside_windows_a_live_pid_is_enough(tmp_path, monkeypatch):
-    # pid_alive is faked: on real Windows its os.kill(pid, 0) would be a Ctrl+C.
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="reads /proc")
+def test_linux_checks_a_lock_against_when_its_process_started(tmp_path):
+    started = clipem_common.process_start_time(os.getpid())
+    assert started <= time.time() and time.time() - started < 24 * 3600
+    lock = tmp_path / "app.lock"
+    lock.write_text(str(os.getpid()))
+    assert clipem_common.holds_lock(os.getpid(), str(lock))
+    os.utime(lock, (0, 0))  # written before this process existed: a reused pid
+    assert not clipem_common.holds_lock(os.getpid(), str(lock))
+
+
+def test_linux_reads_the_start_time_past_an_odd_command_name(tmp_path, monkeypatch):
+    (tmp_path / "42").mkdir()
+    fields = ["S"] + ["0"] * 18 + ["250"] + ["0"] * 10  # field 22: 250 ticks after boot
+    (tmp_path / "42" / "stat").write_text("42 (a) b ) c) " + " ".join(fields))
+    (tmp_path / "stat").write_text("cpu 1 2 3\nbtime 1000\nprocesses 5\n")
+    monkeypatch.setattr(clipem_common.os, "sysconf", lambda name: 100)
+    assert clipem_common._linux_process_start(42, proc=str(tmp_path)) == 1002.5
+
+
+def test_macos_reads_the_start_time_from_ps(monkeypatch):
+    monkeypatch.setattr(subprocess, "run", lambda *a, **k: types.SimpleNamespace(stdout="Mon Nov  2 14:52:35 2026\n"))
+    assert clipem_common._ps_process_start(7) == time.mktime((2026, 11, 2, 14, 52, 35, 0, 0, -1))
+
+
+def test_an_unreadable_start_time_is_unknown(monkeypatch):
     monkeypatch.setattr(clipem_common.sys, "platform", "linux")
-    monkeypatch.setattr(clipem_common, "pid_alive", lambda pid: True)
-    assert clipem_common.holds_lock(os.getpid(), str(tmp_path / "no.lock")) is True
+    assert clipem_common.process_start_time(2 ** 22 + 1) is None
 
 
 def test_releasing_a_lock_thats_gone_is_fine(tmp_path):

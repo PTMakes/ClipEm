@@ -220,3 +220,27 @@ def test_a_clip_opened_before_its_copy_is_finished_is_opened_again_from_it(tmp_p
         assert tools.js("player.currentSrc").endswith(wanted)
         assert tools.js("ed.info.mark") == pytest.approx(mark, abs=0.05)
         assert tools.js("player.duration") == pytest.approx(tools.js("ed.info.duration"), abs=0.15)
+
+
+def test_trim_and_the_full_editor_warn_of_sub_track_edits_the_mix_track_covers(tmp_path, page):
+    """Mic's edits aren't heard or in the exported mix while the recorded
+    Mix track is used - Trim always uses it, and going back to Trim hands
+    the Full Editor's Mix / Sub-tracks choice and any solo back."""
+    name = post_clip_save(tmp_path)
+    tools = page(tmp_path)
+    tools.js(f"select({json.dumps(name)})")
+    assert tools.wait_for("ed.info && ed.info.split && ed.name === " + json.dumps(name)), "no split clip loaded"
+    note = "$('discord-note').textContent"
+    tools.js("setMode('trim')")
+    assert "Mic" not in tools.js(note)
+    tools.js("change(() => { trackOf(1).volume_db = -6; })")
+    assert "Mic has edits that Trim doesn't play or export" in tools.js(note)
+
+    tools.js("setMode('multi'); chooseSources(() => { trackOf(0).muted = false; })")
+    assert "while the Mix track is used - pick Sub-tracks" in tools.js(note)
+    tools.js("chooseSources(() => { trackOf(0).muted = true; })")
+    assert "Mic" not in tools.js(note)
+
+    tools.js("ed.solo.add(1); setMode('trim')")
+    assert tools.js("[trackOf(0).muted, ed.sources, ed.solo.size]") == [False, "auto", 0]
+    assert "Mic has edits that Trim doesn't play or export" in tools.js(note)

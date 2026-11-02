@@ -258,7 +258,7 @@ function edited() {
   renderTimeline();
   renderPanel();
   renderToolbar();
-  renderCustomExport();
+  renderExportBar(); // its warnings follow the edit, not the save
   renderMaster();
   scheduleSave();
 }
@@ -658,7 +658,7 @@ function scrubSeek(t) {
 function videoRow() {
   const row = el("div", "row video-row");
   const head = el("div", "row-head");
-  head.append(el("strong", null, "Clip Video"), el("span", "muted small", "Trim & cut"));
+  head.append(el("strong", null, "Clip Video"));
   if (ed.mode === "multi") head.append(clipStartLine());
   const at = mark();
   if (at !== null) head.append(extraToggle(at));
@@ -712,6 +712,32 @@ function mixInputs() {
   if (!ed.info.split) return ed.info.tracks.length ? [ed.info.tracks[0].index] : [];
   const heard = ed.tracks.filter((t) => !t.muted && containers(t.index).every((c) => trackOf(c).muted));
   return heard.length ? heard.map((t) => t.index) : [0];
+}
+
+// A sub-track's edits that change how it sounds (a mute just takes it out).
+function hasSoundEdits(t) {
+  return !!(t.volume_db || t.offset || hasEffects(t) || t.regions.length || t.fade_in || t.fade_out);
+}
+
+// Edited sub-tracks that aren't heard or in the exported mix because the
+// track they're recorded inside is used instead: the Mix track, or (for an
+// app) the Desktop Mix. One warning per covering track.
+function coveredWarnings() {
+  if (!ed.info || !ed.info.split || ed.solo.size) return [];
+  const covered = new Map(); // covering track index -> edited track titles
+  for (const t of ed.tracks) {
+    if (t.index === 0 || t.muted || !hasSoundEdits(t)) continue;
+    const over = [...containers(t.index)].reverse().find((c) => !trackOf(c).muted); // the outermost one heard
+    if (over === undefined) continue;
+    covered.set(over, [...(covered.get(over) || []), trackTitle(t.index)]);
+  }
+  return [...covered].map(([over, titles]) => {
+    const names = titles.length > 1 ? `${titles.slice(0, -1).join(", ")} and ${titles.at(-1)} have` : `${titles[0]} has`;
+    if (ed.mode === "trim") return `${names} edits that Trim doesn't play or export - it uses the recorded Mix.`;
+    return over === 0
+      ? `${names} edits that aren't played or exported while the Mix track is used - pick Sub-tracks.`
+      : `${names} edits that aren't played or exported while the Desktop Mix is used - pick App Tracks.`;
+  });
 }
 
 // Not heard - and not exported - right now (it's still its own .mkv track).
@@ -1851,15 +1877,14 @@ function renderExportBar() {
     return;
   }
   const d = ed.discord;
-  if (!d) {
-    note.textContent = "";
-    return;
-  }
-  $("export-discord").textContent = `Export for Discord (${d.target_mb} MB)`;
   // Only warnings - the button already says the size, so the bar fits one line.
   const warnings = [];
   if (ed.solo.size) warnings.push("Solo is on - only the soloed tracks are exported.");
-  if (d.too_long) warnings.push(`Too long for ${d.target_mb} MB - trim it for a sharper video.`);
+  warnings.push(...coveredWarnings());
+  if (d) {
+    $("export-discord").textContent = `Export for Discord (${d.target_mb} MB)`;
+    if (d.too_long) warnings.push(`Too long for ${d.target_mb} MB - trim it for a sharper video.`);
+  }
   note.textContent = warnings.join(" ");
   note.classList.toggle("warn", warnings.length > 0);
 }

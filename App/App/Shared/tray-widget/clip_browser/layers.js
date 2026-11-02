@@ -95,9 +95,17 @@ function setMode(mode) {
   ed.item = null;
   ed.fx = null;
   ed.showAssets = false;
-  if (syncSources()) scheduleSave();
+  // Back in Trim the recorded Mix is what's trimmed, whatever the Full Editor
+  // picked: hand the choice back so syncSources() turns the Mix track on.
+  const chosen = mode === "trim" && ed.sources === "chosen";
+  if (chosen) ed.sources = "auto";
+  // Trim has no solo buttons - a solo left on would play and export a track
+  // that isn't even shown.
+  if (mode === "trim") ed.solo.clear();
+  if (syncSources() || chosen) scheduleSave();
   renderTimeline();
   renderPanel();
+  renderExportBar();
 }
 
 // The Full Editor works on what the Mix is made of: Mix and Desktop start on

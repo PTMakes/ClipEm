@@ -191,16 +191,50 @@ def _windows_process_start(pid):
     return ticks / 10_000_000 - 11644473600
 
 
+def _linux_process_start(pid, proc="/proc"):
+    """When a process started, in seconds since the epoch, from /proc: its
+    start in clock ticks after boot, plus when the system booted."""
+    with open(os.path.join(proc, str(pid), "stat"), "r", encoding="utf-8", errors="replace") as f:
+        stat = f.read()
+    # Field 22, counted past the command name - which can hold spaces and ")".
+    ticks = int(stat.rsplit(")", 1)[1].split()[19])
+    with open(os.path.join(proc, "stat"), "r", encoding="utf-8") as f:
+        boot = next(int(line.split()[1]) for line in f if line.startswith("btime "))
+    return boot + ticks / os.sysconf("SC_CLK_TCK")
+
+
+def _ps_process_start(pid):
+    """When a process started, in seconds since the epoch, from ps (macOS)."""
+    import subprocess
+
+    out = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                         env=dict(os.environ, LC_ALL="C"), timeout=5).stdout.strip()
+    return time.mktime(time.strptime(out, "%a %b %d %H:%M:%S %Y")) if out else None
+
+
+def process_start_time(pid):
+    """When a process started, in seconds since the epoch; None if unknown."""
+    try:
+        if sys.platform == "win32":
+            return _windows_process_start(pid)
+        if sys.platform.startswith("linux"):
+            return _linux_process_start(pid)
+        if sys.platform == "darwin":
+            return _ps_process_start(pid)
+    except Exception:  # unreadable or unexpected: then it's taken at its word
+        pass
+    return None
+
+
 def holds_lock(pid, lock_path, process_start=None):
     """Whether pid, read from lock_path, is really the process that wrote it.
-    Windows reuses PIDs soon, so after an unclean exit and a reboot the pid can
-    be some system process: one started after the lock was written isn't its
-    writer, and left standing it would block every launch from then on."""
+    PIDs get reused - on Linux, low ones early in every boot - so after an
+    unclean exit and a reboot the pid can be some system process: one started
+    after the lock was written isn't its writer, and left standing it would
+    block every launch from then on."""
     if not pid_alive(pid):
         return False
-    if sys.platform != "win32" and process_start is None:
-        return True
-    started = (process_start or _windows_process_start)(pid)
+    started = (process_start or process_start_time)(pid)
     try:
         return started is None or started <= os.path.getmtime(lock_path) + 2  # file times are coarse
     except OSError:

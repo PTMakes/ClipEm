@@ -54,6 +54,8 @@ __pycache__/
 /App/App/Shared/.update-staging/
 /App/App/Shared/.update-backup/
 /App/App/Shared/update_config.json
+/App/App/.run.lock
+/App/App/.run.raise
 /App/App/Shared/tray-widget/.tray.lock
 /App/App/Shared/tray-widget/.settings.lock
 /App/App/Shared/tray-widget/.settings.raise
