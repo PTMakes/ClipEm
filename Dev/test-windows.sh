@@ -96,6 +96,8 @@ remote "\"$PYTHON\" -m pip install --quiet --disable-pip-version-check --no-warn
 
 # --- The tests ---------------------------------------------------------------
 restart() {
+  # Stopped early (release.sh stopping, Ctrl+C): end the tests on the VM first.
+  remote "schtasks /End /TN $TASK >nul 2>nul & schtasks /Delete /TN $TASK /F >nul 2>nul" >/dev/null 2>&1 || true
   if (( KEEP_CLOSED )); then
     remote "del $REMOTE\\was_running.json 2>nul" || true
   else

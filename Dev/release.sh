@@ -91,21 +91,31 @@ step() {
   echo -e "\n=== [$STEP_NUM${STEP_TOTAL:+/$STEP_TOTAL}] $* ==="
 }
 
-# run_with_progress <log> <command...> - runs the command with its output in
-# <log> and shows it's alive meanwhile: a live elapsed-time line (with pytest's
-# percentage) on a terminal, a line every 10s otherwise. Returns its status.
-run_with_progress() {
-  local log="$1" status=0 started=$SECONDS pid pct elapsed
-  shift
-  "$@" > "$log" 2>&1 &
-  pid=$!
+# The last pytest percentage ("[ 42%]") in a log, or nothing.
+test_percent() { grep -o '\[ *[0-9]*%\]' "$1" 2>/dev/null | tail -n 1 || true; }
+
+# The Windows tests run in the background alongside the Linux ones (see
+# start_windows_tests); WINDOWS_PID is theirs until they're waited for.
+WINDOWS_LOG="$DIST_DIR/windows-tests.log"
+WINDOWS_PID=""
+
+# wait_with_progress <pid> <log> <what> - waits for a background command
+# whose output goes to <log>, showing it's alive meanwhile: a live
+# elapsed-time line (with pytest's percentage, and the Windows tests' while
+# they run too) on a terminal, a line every 10s otherwise. Returns its status.
+wait_with_progress() {
+  local pid="$1" log="$2" what="$3" status=0 started=$SECONDS pct elapsed windows
   while kill -0 "$pid" 2>/dev/null; do
     elapsed=$((SECONDS - started))
-    pct="$(grep -o '\[ *[0-9]*%\]' "$log" 2>/dev/null | tail -n 1 || true)"
+    pct="$(test_percent "$log")"
+    windows=""
+    if [[ -n "$WINDOWS_PID" && "$pid" != "$WINDOWS_PID" ]] && kill -0 "$WINDOWS_PID" 2>/dev/null; then
+      windows="  (Windows: $(test_percent "$WINDOWS_LOG" | grep . || echo "starting"))"
+    fi
     if [[ -t 1 ]]; then
-      printf '\r\033[K   running tests... %s %s' "$(fmt_duration "$elapsed")" "$pct"
+      printf '\r\033[K   %s... %s %s%s' "$what" "$(fmt_duration "$elapsed")" "$pct" "$windows"
     elif (( elapsed > 0 && elapsed % 10 == 0 )); then
-      echo "   running tests... $(fmt_duration "$elapsed") $pct"
+      echo "   $what... $(fmt_duration "$elapsed") $pct$windows"
     fi
     sleep 1
   done
@@ -113,6 +123,30 @@ run_with_progress() {
   [[ -t 1 ]] && printf '\r\033[K'
   return "$status"
 }
+
+# run_with_progress <log> <command...> - runs the command with its output in
+# <log>, as wait_with_progress shows it. Returns its status.
+run_with_progress() {
+  local log="$1"
+  shift
+  "$@" > "$log" 2>&1 &
+  wait_with_progress "$!" "$log" "running tests"
+}
+
+# Ends Windows tests still running when the release stops early (test-windows.sh
+# then ends its task on the VM and starts ClipEm there again).
+stop_windows_tests() {
+  if [[ -n "$WINDOWS_PID" ]] && kill -0 "$WINDOWS_PID" 2>/dev/null; then
+    echo " - Stopping the Windows tests..." >&2
+    kill -TERM "$WINDOWS_PID" 2>/dev/null || true
+    # And what it's waiting on (a $(...) subshell polling the VM), or its
+    # trap would only run once that's done.
+    pkill -TERM -P "$WINDOWS_PID" 2>/dev/null || true
+    wait "$WINDOWS_PID" 2>/dev/null || true
+  fi
+  WINDOWS_PID=""
+}
+trap stop_windows_tests EXIT
 
 # --- Versions --------------------------------------------------------------
 # Upstream artifact versions: setup.py is the single source of truth for
@@ -205,7 +239,7 @@ fi
 # Preflight, lint/tests, shared, Linux OBS, ffmpeg, Python, manifest,
 # Windows installer, portable bundle, signing - plus the optional ones
 # (editor screenshot for a real release; upload; website + commit for a real release).
-STEP_TOTAL=$((10 + WINDOWS_TESTS + (DEV == 0 ? 1 : 0) + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
+STEP_TOTAL=$((12 + WINDOWS_TESTS + (DEV == 0 ? 1 : 0) + (${#PRE_COMMIT_MSG} > 0 ? 1 : 0) + (UPLOAD == 1 ? (DEV == 1 ? 1 : 3) : 0)))
 
 VERSION_MANIFEST="$WEBSITE_UPDATES/install-manifest.json"
 [[ -f "$VERSION_MANIFEST" ]] || die "Current manifest not found: $VERSION_MANIFEST"
@@ -249,6 +283,13 @@ echo " - macOS OBS $MACOS_OBS_VERSION, Linux OBS $LINUX_OBS_VERSION, Linux Pytho
 echo " - Release assets: $(python3 "$SCRIPT_DIR/release/release_common.py" asset-url "$new_version" "")"
 
 step "Lint and tests"
+mkdir -p "$DIST_DIR"
+if [[ "$WINDOWS_TESTS" == 1 ]]; then
+  # On the VM meanwhile: they take longer than everything here (waited for below).
+  echo " - Windows tests started alongside (log: $WINDOWS_LOG)"
+  "$SCRIPT_DIR/test-windows.sh" > "$WINDOWS_LOG" 2>&1 &
+  WINDOWS_PID=$!
+fi
 # The OBS script tests check against obspython's real API as of our Linux
 # OBS build - regenerate the snapshot whenever that build changes.
 python3 "$SCRIPT_DIR/generate_obspython_api.py" --check \
@@ -258,7 +299,6 @@ python3 "$SCRIPT_DIR/generate_obspython_api.py" --check \
 if [[ -z "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]]; then
   echo "WARNING: no display - the GUI layout test will be skipped (run it under xvfb-run before releasing)." >&2
 fi
-mkdir -p "$DIST_DIR"
 TEST_LOG="$DIST_DIR/test_results.txt"
 if ! (cd "$SCRIPT_DIR" && run_with_progress "$TEST_LOG" python3 -m pytest -q -rs tests); then
   cat "$TEST_LOG"
@@ -268,8 +308,13 @@ tail -n 1 "$TEST_LOG"
 grep '^SKIPPED' "$TEST_LOG" || true  # why any test was skipped
 
 if [[ "$WINDOWS_TESTS" == 1 ]]; then
-  step "Tests on Windows"
-  "$SCRIPT_DIR/test-windows.sh" || die "Windows tests FAILED - see $DIST_DIR/windows-tests (--skip-windows-tests skips them)"
+  step "Tests on Windows (started with the Linux ones)"
+  windows_status=0
+  wait_with_progress "$WINDOWS_PID" "$WINDOWS_LOG" "waiting for the Windows tests" || windows_status=$?
+  WINDOWS_PID=""
+  grep -vE '^ +Windows tests\.\.\.' "$WINDOWS_LOG" || true  # its summary, without the progress lines
+  (( windows_status == 0 )) \
+    || die "Windows tests FAILED - see $DIST_DIR/windows-tests and $WINDOWS_LOG (--skip-windows-tests skips them)"
 fi
 
 # A dev build leaves the source tree alone, so it keeps the last screenshot.
