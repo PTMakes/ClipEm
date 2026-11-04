@@ -94,19 +94,23 @@ def test_linux_close_request_signals_our_pids(monkeypatch):
 def test_find_obs_pids_matches_a_real_process_inside_this_install(tmp_path, monkeypatch):
     """A real process whose executable is App/Linux/obs-install/bin/obs
     inside the install counts; the same binary elsewhere doesn't."""
-    sleep = shutil.which("sleep")
+    # A copy of bash, not sleep: multi-call coreutils builds (uutils, as on
+    # GitHub's Ubuntu runners) pick the tool from the executable's file name
+    # and exit at once when it's "obs". bash runs the same under any name;
+    # the builtin `read` blocks on a pipe nobody writes, with no child process.
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("needs bash")
     ours = tmp_path / "ClipEm" / "App" / "Linux" / "obs-install" / "bin" / "obs"
     theirs = tmp_path / "elsewhere" / "obs"
     for path in (ours, theirs):
         path.parent.mkdir(parents=True)
-        shutil.copy(sleep, path)
+        shutil.copy(bash, path)
     monkeypatch.setattr(obs_process, "ROOT_DIR", str(tmp_path / "ClipEm"))
 
-    # argv[0] stays "sleep": multi-call coreutils builds (uutils, busybox)
-    # pick the tool by argv[0] and would exit at once as "obs". /proc/<pid>/exe
-    # still resolves to the copy, which is what find_obs_pids reads.
-    procs = [subprocess.Popen(["sleep", "30"], executable=str(p)) for p in (ours, theirs)]
+    procs = [subprocess.Popen([str(p), "-c", "read -r _"], stdin=subprocess.PIPE) for p in (ours, theirs)]
     try:
+        assert all(proc.poll() is None for proc in procs)
         found = obs_process.find_obs_pids()
         assert procs[0].pid in found
         assert procs[1].pid not in found
@@ -115,6 +119,7 @@ def test_find_obs_pids_matches_a_real_process_inside_this_install(tmp_path, monk
         for proc in procs:
             proc.kill()
             proc.wait()
+            proc.stdin.close()
     assert procs[0].pid not in obs_process.find_obs_pids()
 
 
