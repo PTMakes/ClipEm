@@ -102,7 +102,10 @@ def test_find_obs_pids_matches_a_real_process_inside_this_install(tmp_path, monk
         shutil.copy(sleep, path)
     monkeypatch.setattr(obs_process, "ROOT_DIR", str(tmp_path / "ClipEm"))
 
-    procs = [subprocess.Popen([str(p), "30"]) for p in (ours, theirs)]
+    # argv[0] stays "sleep": multi-call coreutils builds (uutils, busybox)
+    # pick the tool by argv[0] and would exit at once as "obs". /proc/<pid>/exe
+    # still resolves to the copy, which is what find_obs_pids reads.
+    procs = [subprocess.Popen(["sleep", "30"], executable=str(p)) for p in (ours, theirs)]
     try:
         found = obs_process.find_obs_pids()
         assert procs[0].pid in found
