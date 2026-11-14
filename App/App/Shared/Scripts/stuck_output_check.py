@@ -1,7 +1,9 @@
 import ctypes
+import json
 import math
 import os
 import platform
+import time
 
 import obspython as obs
 
@@ -37,14 +39,26 @@ def dbg(debug_message):
 # post-fader peak in dBFS; the callback only records the loudest one, and
 # peak_guard_tick() (an OBS timer) turns the volume down if it hit clip level.
 #
+# Turning down isn't for good: once a lowered source has gone
+# PEAK_GUARD_RESTORE_QUIET_SECONDS without clipping, its volume goes back up
+# PEAK_GUARD_RESTORE_STEP_DB at a time, until it's back where it was. One that
+# clips again soon after a step up waits twice as long before the next (up
+# to PEAK_GUARD_RESTORE_MAX_WAIT_SECONDS). One that does that
+# PEAK_GUARD_SETTLE_AFTER times really is too loud where it was: it stays at
+# the level that stopped the clipping, which becomes its volume - no more
+# steps up. A volume changed by hand while
+# lowered is the user's call: it's left there. Where each lowered source was
+# is kept in PEAK_GUARD_STATE_PATH, so restoring carries on after OBS restarts.
+#
 # Privacy: nothing here can be turned back into speech or other audio. The
 # meter hands over only level numbers (one dB value per channel per audio
 # packet) - never samples - and only the post-fader peak is read. Anything
 # below clip level is dropped on arrival, so normal talking leaves no trace;
 # at most one number per source (its loudest clip-level peak) is held, in
 # memory, until the next tick. Nothing is written to disk except one log
-# line per source per session (no levels or times of later clips) and the
-# lowered volume itself, which OBS saves like any slider change.
+# line per source per session (no levels or times of later clips), the
+# lowered volume itself, which OBS saves like any slider change, and the
+# volume it had before (PEAK_GUARD_STATE_PATH) - slider positions only.
 #
 # ctypes.CDLL (not PyDLL) releases the GIL during each libobs call - needed
 # so obs_volmeter_destroy() can wait out an in-flight callback (which needs
@@ -58,7 +72,21 @@ PEAK_GUARD_RESCAN_TICKS = 50  # re-look for new/removed audio sources every 5s
 _FloatArray = ctypes.POINTER(ctypes.c_float)
 VOLMETER_CALLBACK = ctypes.CFUNCTYPE(None, ctypes.c_void_p, _FloatArray, _FloatArray, _FloatArray)
 
+# Where each lowered source's volume was: App/cache, next to the tray's files.
+PEAK_GUARD_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(SCRIPTS_DIR)), "cache", "peak_guard.json")
+PEAK_GUARD_RESTORE_QUIET_SECONDS = 30
+PEAK_GUARD_RESTORE_STEP_DB = 1.0
+PEAK_GUARD_RESTORE_MAX_WAIT_SECONDS = 10 * 60
+# Clips right after a step up before a source stays where it was turned down to.
+PEAK_GUARD_SETTLE_AFTER = 2
+VOLUME_TOLERANCE = 1e-4  # OBS keeps volumes as 32-bit floats
+
 libobs = None
+# source uuid -> {"base": its volume before it was lowered, "set": what the
+# guard last set it to (None: not known yet - after a restart), "changed_at",
+# "wait": seconds without clipping before the next step up, "raised_at",
+# "reclips": times it clipped again right after a step up}
+lowered = {}
 peak_meters = {}  # source uuid -> {"meter": c_void_p, "callback": VOLMETER_CALLBACK}
 loudest_peaks = {}  # source uuid -> loudest post-fader peak (dBFS) since the last tick
 peak_guard_ticks = 0
@@ -151,6 +179,94 @@ def sync_peak_meters():
         attach_peak_meter(uuid)
 
 
+def load_lowered(now):
+    """The lowered sources saved last session - what they're at now is
+    looked at on the next tick."""
+    try:
+        with open(PEAK_GUARD_STATE_PATH, encoding="utf-8") as f:
+            saved = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(saved, dict):
+        return {}
+    loaded = {}
+    for uuid, value in saved.items():
+        # {"base", "reclips"}; older saves had just the base volume.
+        base, reclips = (value.get("base"), value.get("reclips", 0)) if isinstance(value, dict) else (value, 0)
+        if isinstance(base, (int, float)) and base > 0 and isinstance(reclips, int):
+            loaded[uuid] = {"base": float(base), "set": None, "changed_at": now,
+                            "wait": PEAK_GUARD_RESTORE_QUIET_SECONDS, "raised_at": None, "reclips": reclips}
+    return loaded
+
+
+def save_lowered():
+    try:
+        os.makedirs(os.path.dirname(PEAK_GUARD_STATE_PATH), exist_ok=True)
+        partial = PEAK_GUARD_STATE_PATH + ".partial"
+        with open(partial, "w", encoding="utf-8") as f:
+            json.dump({uuid: {"base": entry["base"], "reclips": entry["reclips"]} for uuid, entry in lowered.items()},
+                      f)
+        os.replace(partial, PEAK_GUARD_STATE_PATH)
+    except OSError as e:
+        dbg(f"Couldn't save the peak guard's volumes: {e}")
+
+
+def note_lowered(uuid, volume, new_volume, now):
+    """The guard turned uuid down from volume to new_volume. True if it's
+    now settled there: it kept clipping whenever it was turned back up."""
+    entry = lowered.get(uuid)
+    if entry is None or entry["set"] is None or abs(volume - entry["set"]) > VOLUME_TOLERANCE:
+        # Not lowered before - or moved by hand since: that's the level to go back to.
+        entry = {"base": volume, "wait": PEAK_GUARD_RESTORE_QUIET_SECONDS, "raised_at": None, "reclips": 0}
+    elif entry["raised_at"] is not None and now - entry["raised_at"] < entry["wait"]:
+        # Clipped again soon after being turned up: slower next time - or, if
+        # it keeps doing that, no next time.
+        entry["reclips"] += 1
+        if entry["reclips"] >= PEAK_GUARD_SETTLE_AFTER:
+            lowered.pop(uuid, None)
+            save_lowered()
+            return True
+        entry["wait"] = min(entry["wait"] * 2, PEAK_GUARD_RESTORE_MAX_WAIT_SECONDS)
+    entry["set"] = new_volume
+    entry["changed_at"] = now
+    lowered[uuid] = entry
+    save_lowered()
+    return False
+
+
+def restore_lowered(now):
+    """Steps each lowered source that's been quiet long enough back up."""
+    changed = False
+    for uuid, entry in list(lowered.items()):
+        source = obs.obs_get_source_by_uuid(uuid)
+        if source is None:
+            continue  # gone for now - it may come back (a scene collection switch)
+        try:
+            volume = obs.obs_source_get_volume(source)
+            if entry["set"] is None:
+                entry["set"] = volume  # first look since a restart
+            if abs(volume - entry["set"]) > VOLUME_TOLERANCE or volume >= entry["base"] - VOLUME_TOLERANCE:
+                # Moved by hand (or already back): the user's level stays.
+                del lowered[uuid]
+                changed = True
+                continue
+            if now - entry["changed_at"] < entry["wait"]:
+                continue
+            new_volume = min(entry["base"], volume * 10 ** (PEAK_GUARD_RESTORE_STEP_DB / 20))
+            obs.obs_source_set_volume(source, new_volume)
+            if new_volume >= entry["base"] - VOLUME_TOLERANCE:
+                del lowered[uuid]
+                obs.script_log(obs.LOG_INFO, f"[ClipEm] '{obs.obs_source_get_name(source)}' stopped clipping; "
+                                             "its volume is back where it was")
+            else:
+                entry.update(set=new_volume, changed_at=now, raised_at=now)
+            changed = True
+        finally:
+            obs.obs_source_release(source)
+    if changed:
+        save_lowered()
+
+
 def stop_peak_guard():
     obs.timer_remove(peak_guard_tick)
     if libobs is not None:
@@ -171,6 +287,8 @@ def start_peak_guard():
             obs.script_log(obs.LOG_WARNING, "[ClipEm] Audio peak guard unavailable: couldn't load libobs")
             return
     peak_guard_ticks = 0
+    lowered.clear()
+    lowered.update(load_lowered(time.monotonic()))
     sync_peak_meters()
     obs.timer_add(peak_guard_tick, PEAK_GUARD_TICK_MS)
 
@@ -191,6 +309,7 @@ def reduced_volume(volume, peak_db, ceiling_db):
 def peak_guard_tick():
     global peak_guard_ticks
     try:
+        now = time.monotonic()
         peak_guard_ticks += 1
         if peak_guard_ticks >= PEAK_GUARD_RESCAN_TICKS:
             peak_guard_ticks = 0
@@ -208,7 +327,13 @@ def peak_guard_tick():
                 new_volume = reduced_volume(volume, peak_db, peak_ceiling_db)
                 if new_volume < volume:
                     obs.obs_source_set_volume(source, new_volume)
-                    if uuid not in peak_guard_logged:
+                    if note_lowered(uuid, volume, new_volume, now):
+                        obs.script_log(
+                            obs.LOG_INFO,
+                            f"[ClipEm] '{obs.obs_source_get_name(source)}' kept clipping whenever it was turned "
+                            "back up; leaving its volume where it stopped clipping",
+                        )
+                    elif uuid not in peak_guard_logged:
                         peak_guard_logged.add(uuid)
                         obs.script_log(
                             obs.LOG_INFO,
@@ -217,6 +342,7 @@ def peak_guard_tick():
                         )
             finally:
                 obs.obs_source_release(source)
+        restore_lowered(now)
     except Exception as e:
         dbg(f"Error in audio peak guard: {e}")
 
@@ -312,7 +438,7 @@ def start_reload_requests():
 # OBS Script Hooks
 # -------------------------------------------------------------------------------------------------------------------------------------------------
 def script_description():
-    return ("Audio peak guard: when an audio source's level gets within 1 dB of full scale (where OBS's meters show clipping), turns its volume down so the peak sits at the ceiling below."
+    return ("Audio peak guard: when an audio source's level gets within 1 dB of full scale (where OBS's meters show clipping), turns its volume down so the peak sits at the ceiling below - and back up a step at a time once it stops."
             "\n\nAlso restarts a PipeWire screen capture's session when the ClipEm tray icon asks (its stuck-screen detection - see its Settings).")
 
 # Default Config Variables

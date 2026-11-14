@@ -270,7 +270,10 @@ with the clip's Desktop track and writes `<clip>-tracks.mkv` with one extra
 track for every app that made sound during the clip, named after the app
 (nothing to configure; the order is the order the apps were first heard),
 then strips the clip itself back to the mix. Where the tray can't record
-apps (macOS), `clip_reexport.py` splits the three OBS tracks itself.
+apps (macOS), `clip_reexport.py` splits the three OBS tracks itself - and it
+does the same, without app tracks, for any clip the tray didn't claim within
+a few seconds of the save (the tray wasn't running or connected; see
+`Scripts/clip_claim.py`), so no clip is left unfinished.
 `build/build-app-capture.sh` cross-compiles the Windows helper from
 `Dev/app-capture/` into `App/Shared/Tools/` (`release.sh` runs it).
 

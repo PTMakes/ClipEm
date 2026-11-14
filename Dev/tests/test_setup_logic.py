@@ -448,6 +448,7 @@ def root(tmp_path, monkeypatch):
     scripts.mkdir(parents=True)
     monkeypatch.setattr(setup, "ROOT_DIR", str(root))
     monkeypatch.setattr(setup, "UNINSTALL_SCRIPTS_SRC_DIR", str(scripts))
+    monkeypatch.setattr(setup, "SHIPPED_SCRIPTS_DIR", str(root / "App" / "Shared" / "Installer" / "Scripts"))
     return root, scripts
 
 
@@ -474,6 +475,24 @@ def test_only_this_platforms_uninstall_script_lands_in_the_root(root, monkeypatc
     assert (folder / name).read_text() == "uninstall" and (scripts / name).exists() and not (folder / other).exists()
     if name.endswith(".sh"):
         assert os.access(folder / name, os.X_OK)
+
+
+def test_the_uninstall_script_comes_from_where_it_ships(root, monkeypatch):
+    """Shared/Installer/Scripts/ - App/Setup-Uninstall_Scripts/ only exists
+    in older layouts, and an install that has no such folder still gets one."""
+    folder, scripts = root
+    shipped = folder / "App" / "Shared" / "Installer" / "Scripts"
+    shipped.mkdir(parents=True)
+    (shipped / "UninstallAutostartLinux.sh").write_text("shipped")
+    (scripts / "UninstallAutostartLinux.sh").write_text("old layout")
+    monkeypatch.setattr(setup.platform, "system", lambda: "Linux")
+    setup.install_uninstall_scripts()
+    assert (folder / "UninstallAutostartLinux.sh").read_text() == "shipped"
+
+
+def test_the_shipped_scripts_folder_is_the_real_one():
+    for name in setup.UNINSTALL_SCRIPT_NAMES.values():
+        assert os.path.isfile(os.path.join(setup.SHIPPED_SCRIPTS_DIR, name))
 
 
 def test_an_uninstall_script_already_there_is_kept(root, monkeypatch):

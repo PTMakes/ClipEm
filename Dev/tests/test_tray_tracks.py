@@ -291,6 +291,26 @@ def test_the_obs_script_stands_aside_when_the_tray_finishes_clips():
     assert "if tray_tracks_enabled:" in source
 
 
+def test_the_tray_claims_each_clip_as_it_hears_of_it(monkeypatch, tmp_path):
+    """So the OBS script, waiting for that, leaves it alone."""
+    claims = []
+    monkeypatch.setattr(tray_tracks, "find_ffmpeg", lambda: None)
+    finisher = tray_tracks.ClipFinisher(FakeRecorder(), enabled=lambda: True,
+                                        claim=lambda path, who: claims.append((path, who)) or True)
+    finisher.on_replay_saved({"savedReplayPath": str(tmp_path / "Replay.mp4")})
+    assert claims == [(str(tmp_path / "Replay.mp4"), "tray")]
+    assert tray_tracks.clip_claim.claim(str(tmp_path / "Other.mp4"), "tray")
+    assert tray_tracks.clip_claim.claimed_by(str(tmp_path / "Other.mp4")) == "tray"
+
+
+def test_a_clip_the_obs_script_already_took_is_left_to_it(monkeypatch):
+    snapshots = []
+    recorder = types.SimpleNamespace(snapshot=lambda: snapshots.append(1))
+    finisher = tray_tracks.ClipFinisher(recorder, enabled=lambda: True, claim=lambda path, who: False)
+    finisher.on_replay_saved({"savedReplayPath": "/x.mp4"})
+    assert snapshots == []
+
+
 def test_the_bundled_ffmpeg_comes_first(monkeypatch, tmp_path):
     bundled = tmp_path / "Linux" / "ffmpeg" / "bin" / "ffmpeg"
     monkeypatch.setattr(tray_tracks, "APP_DIR", str(tmp_path))

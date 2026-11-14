@@ -35,18 +35,17 @@ DISK_SPACE = (
 )
 
 MIC_CHECK = (
-    "While OBS is saving clips, ClipEm checks your mic every 10 seconds. If it has been taken off the "
-    "track clips keep, or turned almost all the way down, ClipEm puts it back. If no sound at all has come "
-    "from it for 2 minutes (unplugged, or the device changed), ClipEm reopens it, and tells you if that "
-    "doesn't help. If it's muted in OBS, ClipEm lets you know. Only the mixer's level numbers are read, "
-    "never the sound itself."
+    "While OBS is saving clips, ClipEm checks your mic and desktop audio every 10 seconds. A mic taken off "
+    "the clip track or turned right down is put back. If the mic goes silent for a minute, or desktop audio "
+    "hears nothing while an app plays sound, ClipEm reopens it and switches it to your default device - "
+    "then tells you, every 5 minutes, until it's fixed. Only sound levels are measured; nothing is kept."
 )
 
 PEAK_GUARD = (
-    "OBS watches the level of each audio source (your mic, desktop audio and so on). When one gets within "
-    "1 dB of the maximum - where OBS's meters show clipping and recordings start to distort - its volume is "
-    "turned down so that peak would land on the ceiling below, but never below -20 dB. Only level numbers "
-    "are read, never the sound itself, and the lowered volume stays until you change it in OBS's Audio Mixer."
+    "OBS watches each audio source's level (mic, desktop audio and so on). When one gets within 1 dB of "
+    "the maximum - clipping - its volume is turned down so that peak lands on the ceiling below (never "
+    "below -20 dB), then back up 1 dB at a time - unless it keeps clipping, when it stays down. A volume "
+    "you change by hand is left alone. Only level numbers are read, never the sound."
 )
 
 SCRIPT_DEBUG = (

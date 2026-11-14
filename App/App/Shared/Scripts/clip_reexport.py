@@ -7,7 +7,10 @@ Post-processes every saved replay-buffer clip, in a background thread:
    each track named (Mix, Mic, Desktop), and strips the clip itself back to
    track 1, the full mix, so it plays the same everywhere. Where the tray
    widget records the apps too (tray_tracks_enabled), it does all of this
-   itself, adding their tracks, and this script leaves the clip alone.
+   itself, adding their tracks, and this script leaves the clip to it -
+   unless the tray hasn't claimed it CLAIM_WAIT_SECONDS later (see
+   clip_claim.py: it was disconnected, restarting or not running), when
+   this script finishes it without the app tracks.
 2. Post-clip saves (see clip_post.py): split into the clip and its
    "-extra.mkv" before anything else - the clip then gets its smaller copy.
 3. Smaller copy (reexport_enabled): the last `crop_seconds` of the clip,
@@ -31,13 +34,15 @@ import shutil
 import subprocess  # noqa: F401 - tests patch clip_tracks' subprocess.run through this name
 import sys
 import threading
+import time
 
 import obspython as obs
 
 # clip_tracks.py sits next to this script; OBS runs scripts with their folder
 # on the path, but not everything that loads this one does.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import clip_naming  # noqa: E402 - next to this script too
+import clip_claim  # noqa: E402 - next to this script too
+import clip_naming  # noqa: E402
 import clip_post  # noqa: E402
 from clip_tracks import (  # noqa: F401 - the rest are this script's public names
     AUDIO_BITRATE_KBPS,
@@ -117,6 +122,35 @@ def process_clip(ffmpeg, clip_path, options, log):
         reexport(ffmpeg, clip_path, options["target_mb"], options["crop_seconds"], log, clip_naming.suffix(naming, "small"))
 
 
+def finish_unclaimed(clip_path, post_state, naming, wait_seconds=None):
+    """With the tray finishing clips: waits for it to claim clip_path, and
+    finishes the clip here if it doesn't (without app tracks). Runs on a
+    background thread."""
+    time.sleep(clip_claim.CLAIM_WAIT_SECONDS if wait_seconds is None else wait_seconds)
+    if not clip_claim.claim(clip_path, "obs"):
+        return  # the tray has it
+    if not os.path.isfile(clip_path):
+        _log(f"saved clip {clip_path} is gone - nothing to finish")
+        return
+    _log(f"the ClipEm tray didn't pick up {os.path.basename(clip_path)} (not running or not connected to OBS) "
+         "- finishing it here, without app tracks")
+    ffmpeg = find_ffmpeg(SCRIPTS_DIR)
+    if post_state is not None:
+        if not ffmpeg:
+            _log("no ffmpeg found (re-run ClipEm Setup to install it) - the clip keeps its post-clip seconds")
+            return
+        finish_post_save(ffmpeg, clip_path, post_state, {"naming": naming, "reexport": reexport_enabled,
+                                                        "target_mb": target_mb, "crop_seconds": crop_seconds})
+        return
+    clip_path = clip_naming.rename_clip(clip_path, naming, log=_log)
+    if not ffmpeg:
+        _log("no ffmpeg found (re-run ClipEm Setup to install it) - skipping")
+        return
+    process_clip(ffmpeg, clip_path, {"split_tracks": split_tracks_enabled, "app_labels": [],
+                                     "reexport": reexport_enabled, "target_mb": target_mb,
+                                     "crop_seconds": crop_seconds, "naming": naming}, _log)
+
+
 def finish_post_save(ffmpeg, clip_path, state, options):
     try:
         clip_post.finish_post_save(ffmpeg, clip_path, state, options, _log)
@@ -180,17 +214,20 @@ def _log(message):
 def on_event(event):
     if event != obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED:
         return
-    if tray_tracks_enabled:
-        # The tray widget records the app tracks and finishes the clip -
-        # naming it too (tray-widget/tray_tracks.py); two writers would race on it.
-        return
     clip_path = obs.obs_frontend_get_last_replay()
     if not clip_path or not os.path.isfile(clip_path):
         _log(f"saved clip not found ({clip_path!r}) - skipping")
         return
-    # Read each time: Settings changes it while OBS runs.
+    # Read each time: Settings changes it while OBS runs. The post-clip state
+    # now, too: the next press replaces it.
     naming = clip_naming.load()
-    post_state = clip_post.read_state()
+    post_state = clip_post.read_state(clip_path=clip_path)
+    if tray_tracks_enabled:
+        # The tray widget records the app tracks and finishes the clip -
+        # naming it too (tray-widget/tray_tracks.py); two writers would race
+        # on it, so this only steps in if the tray never claims it.
+        threading.Thread(target=finish_unclaimed, args=(clip_path, post_state, naming), daemon=True).start()
+        return
     if post_state is not None:
         ffmpeg = find_ffmpeg(SCRIPTS_DIR)
         if not ffmpeg:

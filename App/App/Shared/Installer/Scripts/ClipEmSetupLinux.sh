@@ -11,7 +11,7 @@
 #
 # Usage:
 #   curl -fsSL https://github.com/PTMakes/ClipEm/releases/latest/download/ClipEmSetupLinux.sh | bash
-#   ./Setup_Linux.sh [install-dir]
+#   ./ClipEmSetupLinux.sh [install-dir]
 set -euo pipefail
 
 case "${1:-}" in

@@ -26,7 +26,7 @@ if [ ! -x "$PYTHON_BIN" ]; then
 fi
 
 if [ -z "$PYTHON_BIN" ]; then
-    echo "No python3 found - run Setup_Linux.sh (or App/Setup-Uninstall_Scripts/Setup_Linux.sh) at least once first."
+    echo "No python3 found - run ClipEmSetupLinux.sh at least once first."
     exit 1
 fi
 

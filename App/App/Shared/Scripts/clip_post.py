@@ -44,8 +44,8 @@ RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
 STATE_PATH = os.path.join(SHARED_DIR, "post_clip_state.json")
 # A save this long after post_clip.py asked for it is someone else's. Generous:
 # the state is read when OBS finishes writing, and a long buffer on a slow disk
-# takes a while. Every save goes through post_clip.py while post-clip is on,
-# and turning it off clears the state, so nothing else can pick this up.
+# takes a while. post_clip.py also gives up on (and clears) a save OBS hasn't
+# finished by then, and tells the user.
 STATE_FRESH_SECONDS = 120
 
 DEFAULTS = {"enabled": False, "seconds": 10, "sound_after": False}
@@ -100,7 +100,9 @@ def extra_seconds(settings):
 
 def write_state(state, path=None):
     """state: {"pressed_at", "requested_at" (epoch seconds), "clip_seconds",
-    "sound": the .wav played at the press, or None}."""
+    "sound": the .wav played at the press, or None} - and, once OBS has
+    saved it, "saved_path": the file that save made (OBS's name for it), so
+    no later save is taken for it."""
     path = path or STATE_PATH
     partial = path + ".partial"
     with open(partial, "w", encoding="utf-8") as f:
@@ -115,9 +117,16 @@ def clear_state(path=None):
         pass
 
 
-def read_state(path=None, now=None):
+def same_file(a, b):
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def read_state(path=None, now=None, clip_path=None):
     """The state post_clip.py wrote for the save that just happened, or None
-    if this save isn't a post-clip one."""
+    if this save isn't a post-clip one. clip_path: the file the save made -
+    a state post_clip.py has already matched to another save (e.g. its own
+    save failed and someone else saved the replay buffer since) isn't this
+    one's."""
     try:
         with open(path or STATE_PATH, encoding="utf-8") as f:
             state = json.load(f)
@@ -127,7 +136,12 @@ def read_state(path=None, now=None):
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
     now = datetime.datetime.now().timestamp() if now is None else now
-    return state if requested - 1 <= now <= requested + STATE_FRESH_SECONDS else None
+    if not requested - 1 <= now <= requested + STATE_FRESH_SECONDS:
+        return None
+    saved = state.get("saved_path")
+    if clip_path and isinstance(saved, str) and saved and not same_file(saved, clip_path):
+        return None
+    return state
 
 
 def span(duration, state):

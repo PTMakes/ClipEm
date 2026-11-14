@@ -7,6 +7,13 @@ where the press was. A second press while waiting saves straight away.
 
 The tray's Save Clip triggers this hotkey by name (HOTKEY_NAME) over
 obs-websocket. With post-clip off a press just saves, like OBS's hotkey.
+
+Each save asked for is watched: when OBS says it saved the replay buffer,
+the file it made is written into the state ("saved_path"), so a later save
+by anyone else can't be taken for this one. If OBS hasn't saved it
+clip_post.STATE_FRESH_SECONDS later, the save failed (OBS's own error is in
+its log): the state is cleared and the failure logged as an error, which
+ClipEm's OBS plugin shows as a notification.
 """
 
 import datetime
@@ -24,6 +31,7 @@ HOTKEY_SETTING = "post_clip_hotkey"  # what Settings writes the keys into
 
 hotkey_id = None
 pending = None  # {"pressed_at", "clip_seconds", "sound"} while waiting to save
+awaiting = None  # the state written for a save OBS hasn't finished yet
 
 
 def script_description():
@@ -37,6 +45,7 @@ def script_load(settings):
     keys = obs.obs_data_get_array(settings, HOTKEY_SETTING)
     obs.obs_hotkey_load(hotkey_id, keys)
     obs.obs_data_array_release(keys)
+    obs.obs_frontend_add_event_callback(on_event)
 
 
 def script_save(settings):
@@ -49,6 +58,8 @@ def script_save(settings):
 
 def script_unload():
     obs.timer_remove(save_now)
+    obs.timer_remove(save_overdue)
+    obs.obs_frontend_remove_event_callback(on_event)
 
 
 def _log(message):
@@ -114,4 +125,41 @@ def save_now():
     except OSError as exc:
         _log(f"couldn't note the press ({exc}) - this save is finished as a plain clip")
         clip_post.clear_state()  # an older press mustn't be taken for this one
+    else:
+        await_save(state)
     obs.obs_frontend_replay_buffer_save()
+
+
+def await_save(state):
+    global awaiting
+    awaiting = state
+    obs.timer_remove(save_overdue)
+    obs.timer_add(save_overdue, clip_post.STATE_FRESH_SECONDS * 1000)
+
+
+def on_event(event):
+    """OBS saved the replay buffer: the save asked for, if one is awaited."""
+    global awaiting
+    if event != obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED or awaiting is None:
+        return
+    state, awaiting = awaiting, None
+    obs.timer_remove(save_overdue)
+    saved_path = obs.obs_frontend_get_last_replay()
+    if not saved_path:
+        return
+    try:
+        clip_post.write_state(dict(state, saved_path=saved_path))
+    except OSError as exc:
+        _log(f"couldn't note which file the save made ({exc})")
+
+
+def save_overdue():
+    global awaiting
+    obs.timer_remove(save_overdue)
+    if awaiting is None:
+        return
+    pressed = datetime.datetime.fromtimestamp(float(awaiting["pressed_at"])).strftime("%H:%M:%S")
+    awaiting = None
+    clip_post.clear_state()
+    obs.script_log(obs.LOG_ERROR, f"post_clip: OBS didn't save the clip from the press at {pressed} "
+                                  f"within {clip_post.STATE_FRESH_SECONDS}s - no clip was saved (see OBS's log)")

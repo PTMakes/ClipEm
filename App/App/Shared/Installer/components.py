@@ -7,7 +7,10 @@ Configuration) were installed with.
 check() compares each with the signed install manifest:
 - OBS: the version in the manifest entry's file name vs. the installed OBS's
   own version (falling back to obs_install.INSTALLED_VERSIONS_PATH).
-- Python: the same, vs. the bundled interpreter's version.
+- Python: the same, vs. the bundled interpreter's version. On Windows any
+  difference counts, older too: the manifest's Python is the one to have
+  (python.org stopped publishing Windows 3.12 builds after 3.12.10, so a
+  release can go back to an earlier one). Linux's only ever goes up.
 - ffmpeg: the manifest entry's sha256 vs. the one recorded when it was
   installed (a rebuild with new features keeps FFmpeg's version) - only
   if ClipEm's ffmpeg is installed at all.
@@ -16,7 +19,7 @@ check() compares each with the signed install manifest:
   (installs from before the clip editor had its own window).
 - Packages: the exact pins in requirements.txt vs. what's installed - only
   for sets that were installed at all (the tray widget is optional).
-Only ever upgrades, never downgrades.
+Apart from Windows' Python, only ever upgrades, never downgrades.
 
 install() must run with OBS and every ClipEm Python process closed - run.py
 does it at launch, before starting anything. Each part is downloaded and
@@ -307,6 +310,10 @@ def outdated_package_sets(system):
 # Checking
 # ---------------------------------------------------------------------------
 
+def _differs(remote, local):
+    return bool(remote and local) and updater._parse_version(remote) != updater._parse_version(local)
+
+
 def check(manifest, system=None):
     """What's outdated compared with `manifest`, e.g.
     {"obs": ("32.2.2", "32.3.0"), "python": ("3.12.10", "3.12.11"),
@@ -323,7 +330,7 @@ def check(manifest, system=None):
             continue
         remote = updater.artifact_version(entry)
         local = local_versions[name] = installed(system)
-        if updater.is_newer(remote, local):
+        if updater.is_newer(remote, local) or (name == "python" and system == "Windows" and _differs(remote, local)):
             found[name] = (local, remote)
     # Linux's OBS is ClipEm's own build, and a rebuild (e.g. with the
     # PipeWire app audio plugin added) keeps OBS's version - like ffmpeg, its

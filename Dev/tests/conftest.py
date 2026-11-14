@@ -118,9 +118,12 @@ def tk_garbage_stays_on_the_main_thread():
 def active_app_file(tmp_path, monkeypatch):
     """Clip names' game or app, which the tray publishes - never the real one."""
     sys.path.insert(0, SCRIPTS_DIR)
+    import clip_claim
     import clip_naming
 
     monkeypatch.setattr(clip_naming, "ACTIVE_APP_PATH", str(tmp_path / "cache" / "active_app.json"))
+    # Who finishes each saved clip (tray or OBS script) - never the real claims.
+    monkeypatch.setattr(clip_claim, "CLAIMS_DIR", str(tmp_path / "cache" / "clip_claims"))
 
 
 @pytest.fixture

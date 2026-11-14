@@ -1,9 +1,9 @@
 """
 Universal setup entry point for ClipEm.
 
-Setup_Windows.bat, SetupMac.command, and Setup_Linux.sh are thin shims that
-just find (or, on Linux, bootstrap) a Python interpreter and exec this
-file - all the actual platform-dispatch logic (fetching ClipEm's own OBS
+Setup_Windows.bat and ClipEmSetupLinux.sh (Installer/Scripts/, with
+ClipEmSetupWindows.exe wrapping the former) are thin shims that just find
+(or bootstrap) a Python interpreter and exec this file - all the actual platform-dispatch logic (fetching ClipEm's own OBS
 build if it's missing, asking where to save clips, offering to install the
 tray widget) lives here once instead of being duplicated per-OS.
 
@@ -2086,6 +2086,9 @@ SETUP_SCRIPT_NAMES = ["Setup_Windows.bat", "SetupMac.command", "Setup_Linux.sh"]
 STALE_RUN_SCRIPT_NAMES = ["RunWindows.bat", "RunMac.command", "RunLinux.sh"]
 UNINSTALL_SCRIPT_NAMES = {"Windows": "UninstallAutostartWindows.bat", "Linux": "UninstallAutostartLinux.sh"}
 UNINSTALL_SCRIPTS_SRC_DIR = os.path.join(APP_DIR, "Setup-Uninstall_Scripts")
+# Where the Uninstall scripts ship (Shared/Installer/Scripts/, beside the
+# installers). UNINSTALL_SCRIPTS_SRC_DIR is where older layouts kept them.
+SHIPPED_SCRIPTS_DIR = os.path.join(INSTALLER_DIR, "Scripts")
 
 
 def relocate_setup_scripts():
@@ -2105,19 +2108,20 @@ def relocate_setup_scripts():
 
 
 def install_uninstall_scripts():
-    """Copies (not moves - App/Setup-Uninstall_Scripts/ stays as the
-    template) the Uninstall script for *this* platform into the root, but
-    only once setup has actually completed. It lives tucked away under
-    App/ until then so there's nothing named "Uninstall..." sitting next
-    to Setup* scripts before there's anything installed to uninstall -
-    and only the current platform's copy ever lands in the root, not the
-    other OS's."""
+    """Copies (not moves - the shipped copy in Shared/Installer/Scripts/,
+    or App/Setup-Uninstall_Scripts/ in older layouts, stays as the template)
+    the Uninstall script for *this* platform into the root, but only once
+    setup has actually completed. It lives tucked away under App/ until then
+    so there's nothing named "Uninstall..." sitting next to the Setup
+    scripts before there's anything installed to uninstall - and only the
+    current platform's copy ever lands in the root, not the other OS's."""
     name = UNINSTALL_SCRIPT_NAMES.get(platform.system())
     if not name:
         return
-    src = os.path.join(UNINSTALL_SCRIPTS_SRC_DIR, name)
+    src = next((path for path in (os.path.join(SHIPPED_SCRIPTS_DIR, name), os.path.join(UNINSTALL_SCRIPTS_SRC_DIR, name))
+                if os.path.exists(path)), None)
     dest = os.path.join(ROOT_DIR, name)
-    if os.path.exists(src) and not os.path.exists(dest):
+    if src and not os.path.exists(dest):
         shutil.copy2(src, dest)
         if name.endswith(".sh"):
             os.chmod(dest, 0o755)

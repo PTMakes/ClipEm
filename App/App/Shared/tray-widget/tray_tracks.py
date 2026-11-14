@@ -14,7 +14,9 @@ A post-clip save (Scripts/clip_post.py) is split into the clip and its
 
 OBS tells the tray a clip was saved over obs-websocket (ReplayBufferSaved) -
 the snapshot of the recorded audio is taken right then, before the rings move
-on; the rest runs on a worker thread at low priority.
+on; the rest runs on a worker thread at low priority. The clip is claimed
+first (Scripts/clip_claim.py): a clip saved while the tray wasn't connected
+is finished by the OBS script instead, and one it already took is left to it.
 """
 
 import logging
@@ -32,6 +34,7 @@ from app_recorder import RATE
 from clipem_common import APP_DIR
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "Scripts"))
+import clip_claim  # noqa: E402 - Scripts/clip_claim.py, shared with the OBS script
 import clip_naming  # noqa: E402 - Scripts/clip_naming.py, shared with the OBS script
 import clip_post  # noqa: E402 - Scripts/clip_post.py, shared with the OBS script
 import clip_tracks  # noqa: E402 - Scripts/clip_tracks.py, shared with the OBS script
@@ -202,9 +205,10 @@ class ClipFinisher:
     """Hooks the tray up to OBS's ReplayBufferSaved event."""
 
     def __init__(self, recorder, enabled=lambda: obs_config.load_tray_tracks()
-                 and obs_config.app_capture_supported()):
+                 and obs_config.app_capture_supported(), claim=clip_claim.claim):
         self._recorder = recorder
         self._enabled = enabled
+        self._claim = claim
 
     def on_replay_saved(self, event):
         """Runs on the websocket's thread: only takes the snapshot, which has
@@ -215,8 +219,11 @@ class ClipFinisher:
             clip_path = (event or {}).get("savedReplayPath")
             if not clip_path:
                 return
+            if not self._claim(clip_path, "tray"):
+                log.warning(f"{clip_path} was already taken by ClipEm's OBS script - leaving it to it.")
+                return
             snapshot = self._recorder.snapshot()
-            post_state = clip_post.read_state()  # now: the next press replaces it
+            post_state = clip_post.read_state(clip_path=clip_path)  # now: the next press replaces it
             settings = obs_config.load_clip_script_settings()
         except Exception:
             log.exception("Couldn't start finishing the saved clip")

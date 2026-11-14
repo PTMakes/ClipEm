@@ -713,3 +713,29 @@ def test_windows_python_is_handed_to_a_script_once_clipem_exits(app, monkeypatch
     assert args[args.index("-WaitPid") + 1] == str(os.getpid())
     assert args[args.index("-RunArgs") + 1].split("|")[1:] == ["--boot", "--post-update"]
     assert kwargs["creationflags"] == 3
+
+
+def test_windows_python_matches_the_manifest_even_if_older(app, monkeypatch):
+    """A release can pin an older Windows Python (a rollback): installs
+    with a newer one get the manifest's, during the upgrade to it."""
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: None)
+    monkeypatch.setattr(components, "installed_python_version", lambda system: "3.12.16")
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    manifest = _manifest(
+        windows_python="https://x.invalid/cpython-3.12.10+20250409-x86_64-pc-windows-msvc-install_only.tar.gz",
+    )
+    plan = components.check(manifest, "Windows")
+    assert plan == {"python": ("3.12.16", "3.12.10")}
+    assert components.describe(plan) == ["ClipEm's Python 3.12.16 -> 3.12.10"]
+    monkeypatch.setattr(components, "installed_python_version", lambda system: "3.12.10")
+    assert components.check(manifest, "Windows") == {}  # already the manifest's
+    monkeypatch.setattr(components, "installed_python_version", lambda system: None)
+    assert components.check(manifest, "Windows") == {}  # unknown: left alone
+
+
+def test_linux_python_is_never_downgraded(app, monkeypatch):
+    monkeypatch.setattr(components, "installed_obs_version", lambda system: None)
+    monkeypatch.setattr(components, "installed_python_version", lambda system: "3.12.16")
+    monkeypatch.setattr(components, "outdated_package_sets", lambda system: [])
+    manifest = _manifest(linux_python="https://x.invalid/cpython-3.12.10+20250409-x86_64-install_only.tar.gz")
+    assert components.check(manifest, "Linux") == {}

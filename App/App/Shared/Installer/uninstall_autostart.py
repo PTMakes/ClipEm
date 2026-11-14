@@ -1,8 +1,10 @@
 """
 Removes the OS-level boot/login autostart entry created by Setup's
 autostart step (see apply_boot_autostart) - and on Windows the Start Menu
-entry - without re-running the rest of Setup. UninstallAutostart.bat/.sh are thin per-OS shims that just find a
-Python interpreter and exec this file, same pattern as Setup*.
+entry - without re-running the rest of Setup. UninstallAutostartWindows.bat / UninstallAutostartLinux.sh
+(Installer/Scripts/, copied into the ClipEm folder once Setup has run) are
+thin per-OS shims that just find a Python interpreter and exec this file,
+same pattern as the Setup scripts.
 
 Safe to run any time - a no-op if nothing was ever registered. Only removes
 this ClipEm folder's own entry, never another copy's.

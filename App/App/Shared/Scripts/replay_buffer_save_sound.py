@@ -53,7 +53,8 @@ def on_event(event):
     if event == obs.OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED and sound_enabled:
         # With post-clip on, post_clip.py already played it at the press -
         # again now only if Settings asks for it.
-        if clip_post.read_state() is not None and not clip_post.load_settings()["sound_after"]:
+        post_save = clip_post.read_state(clip_path=obs.obs_frontend_get_last_replay())
+        if post_save is not None and not clip_post.load_settings()["sound_after"]:
             return
         play_sound(audio_file, audio_volume)
 

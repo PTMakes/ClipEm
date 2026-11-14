@@ -187,10 +187,9 @@ def prepare(platform_dir, config_link_name="config"):
     config_link_name: name of the directory (inside platform_dir) that
     should contain the OBS config link. Windows/macOS use "config" directly
     beside the OBS binary/bundle, matching OBS's own portable-mode
-    convention. Linux's launcher instead points $XDG_CONFIG_HOME at a
-    folder here (see Linux/launch.sh for why - AppImages execute from a
-    temporary FUSE mount, so "beside the executable" isn't stable there)
-    and passes a different config_link_name for that layout. Either way,
+    convention. Linux runs ClipEm's own OBS build in -p portable mode,
+    which reads <install prefix>/config, so run.py passes
+    "obs-install/config" (see run.py's Linux launch). Either way,
     OBS itself appends "obs-studio" to whichever of these it resolves to -
     see the module docstring - so config_link_name is made a real
     directory here, with the actual link nested one level inside it.

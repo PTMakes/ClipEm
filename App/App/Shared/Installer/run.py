@@ -1,11 +1,13 @@
 """
 Universal run entry point for ClipEm.
 
-RunWindows.bat, RunMac.command, and RunLinux.sh are all thin shims that
-just find a Python interpreter and exec this file - all the actual
-platform-dispatch logic (which OBS binary to start, how to wire in the
-shared config, whether to also start the tray widget) lives here, once,
-instead of being duplicated across three shell dialects.
+The ClipEm shortcut Setup makes (autostart.create_shortcut - ClipEm.lnk,
+the .desktop entry, or the macOS alias) and the boot autostart entry run
+this file directly with ClipEm's Python. (The RunWindows.bat /
+RunMac.command / RunLinux.sh shims older versions used are removed by
+Setup.) All the platform-dispatch logic - which OBS binary to start, how to
+wire in the shared config, whether to also start the tray widget - lives
+here, once.
 
 Started detached: OBS (and the tray widget, if its dependencies are
 installed) keep running after this script exits.

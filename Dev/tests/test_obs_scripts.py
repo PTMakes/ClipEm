@@ -23,7 +23,7 @@ from conftest import SCRIPTS_DIR
 
 API = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "obspython_api.json")))
 # Modules the scripts import, not scripts OBS loads.
-HELPER_MODULES = {"clip_tracks.py", "clip_naming.py", "clip_post.py"}
+HELPER_MODULES = {"clip_tracks.py", "clip_naming.py", "clip_post.py", "clip_claim.py"}
 SCRIPTS = sorted(p for p in glob.glob(os.path.join(SCRIPTS_DIR, "*.py")) if os.path.basename(p) not in HELPER_MODULES)
 
 
@@ -126,6 +126,8 @@ class FakeObspython(types.ModuleType):
         self.hotkeys = {}  # name -> callback
         self.replay_saves = 0
         self.replay_active = True
+        self.save_fails = False
+        self.save_path = None  # the file the next save makes, if set
         self.audio_source = Handle("source")
         self.volumes = {self.audio_source: 1.0}
         # A PipeWire screen capture the tray widget has asked to restart.
@@ -153,6 +155,17 @@ class FakeObspython(types.ModuleType):
     def constant(self, name):
         return getattr(self, name)
 
+    def _save_replay(self):
+        """What OBS does: saves, then tells every script - unless saving
+        fails (save_fails), when it only logs that in its own log."""
+        self.replay_saves += 1
+        if self.save_fails:
+            return
+        if self.save_path:
+            self.last_replay = self.save_path
+        for callback in list(self.event_callbacks):
+            callback(self.constant("OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED"))
+
     def _fakes(self):
         data_types = {"bool": False, "int": 0, "double": 0.0, "string": ""}
         fakes = {
@@ -165,7 +178,7 @@ class FakeObspython(types.ModuleType):
             "obs_frontend_get_last_replay": lambda: self.last_replay,
             "obs_hotkey_register_frontend": lambda name, description, callback: self.hotkeys.__setitem__(
                 name, callback) or name,
-            "obs_frontend_replay_buffer_save": lambda: setattr(self, "replay_saves", self.replay_saves + 1),
+            "obs_frontend_replay_buffer_save": self._save_replay,
             "obs_frontend_replay_buffer_active": lambda: self.replay_active,
             "config_get_int": lambda config, section, key: 70 if (section, key) == ("AdvOut", "RecRBTime") else 0,
             "obs_enum_sources": lambda: [Handle("source"), self.audio_source, self.capture_source],
@@ -247,6 +260,7 @@ def test_script_runs_its_whole_lifecycle_against_the_real_api(path, tmp_path, mo
     if name == "stuck_output_check.py":
         libobs = FakeLibobs()
         monkeypatch.setattr(script, "load_libobs", lambda: libobs)
+        monkeypatch.setattr(script, "PEAK_GUARD_STATE_PATH", str(tmp_path / "cache" / "peak_guard.json"))
     if name == "post_clip.py":
         import clip_post
 
@@ -326,6 +340,7 @@ def _post_clip_script(tmp_path, monkeypatch):
     state_path = tmp_path / "post_clip_state.json"
     monkeypatch.setattr(clip_post, "STATE_PATH", str(state_path))
     monkeypatch.setattr(clip_post, "load_settings", lambda path=None: dict(clip_post.DEFAULTS, enabled=True, seconds=10))
+    fake.event_callbacks.append(script.on_event)  # what script_load does (with the hotkey)
     played = []
     monkeypatch.setattr(script, "clip_sound", lambda: types.SimpleNamespace(
         sound_enabled=True, audio_file="clip.wav", audio_volume=0.5, play_sound=lambda *a: played.append(a)))
@@ -492,7 +507,7 @@ class ReexportScript:
         self.state = None
         self.runs = []
         monkeypatch.setattr(clip_naming, "load", lambda path=None: dict(clip_naming.DEFAULTS))
-        monkeypatch.setattr(clip_post, "read_state", lambda path=None, now=None: self.state)
+        monkeypatch.setattr(clip_post, "read_state", lambda path=None, now=None, clip_path=None: self.state)
         monkeypatch.setattr(self.script, "find_ffmpeg", lambda scripts_dir: "ffmpeg")
         monkeypatch.setattr(self.script, "process_clip", lambda *args: self.runs.append(("process", args)))
         monkeypatch.setattr(self.script, "finish_post_save", lambda *args: self.runs.append(("post", args)))
@@ -511,9 +526,46 @@ def test_other_frontend_events_leave_the_clip_alone(tmp_path, monkeypatch):
 
 def test_a_clip_the_tray_finishes_is_left_to_the_tray(tmp_path, monkeypatch):
     """Two writers would race on it - naming it included."""
+    import clip_claim
+
     obs = ReexportScript(tmp_path, monkeypatch, tray_tracks_enabled=True, split_tracks_enabled=True)
+    waited = []
+    monkeypatch.setattr(obs.script.time, "sleep", waited.append)
+    assert clip_claim.claim(str(obs.clip), "tray")  # what the tray does as the event arrives
     obs.saved()
+    assert waited == [clip_claim.CLAIM_WAIT_SECONDS]
     assert obs.runs == [] and obs.clip.exists()
+
+
+def test_a_clip_the_tray_never_claims_is_finished_here_without_app_tracks(tmp_path, monkeypatch):
+    """The tray wasn't connected when it was saved (OBS restarting, the tray
+    reconnecting or not running): nothing else would ever finish it."""
+    import clip_claim
+
+    obs = ReexportScript(tmp_path, monkeypatch, tray_tracks_enabled=True, split_tracks_enabled=True)
+    monkeypatch.setattr(obs.script.time, "sleep", lambda seconds: None)
+    obs.saved()
+    (kind, (_ffmpeg, path, options, _log)), = obs.runs
+    assert kind == "process" and os.path.basename(path).startswith("Replay-") and not obs.clip.exists()
+    assert options["split_tracks"] and options["app_labels"] == []
+    assert clip_claim.claimed_by(str(obs.clip)) == "obs"
+    assert any("didn't pick up" in line for line in obs.fake.logs)
+
+
+def test_an_unclaimed_post_clip_save_is_finished_here_too(tmp_path, monkeypatch):
+    obs = ReexportScript(tmp_path, monkeypatch, tray_tracks_enabled=True, split_tracks_enabled=True)
+    monkeypatch.setattr(obs.script.time, "sleep", lambda seconds: None)
+    obs.state = {"pressed_at": 1.0, "requested_at": 2.0, "clip_seconds": 3}
+    obs.saved()
+    (kind, (_ffmpeg, path, state, _options)), = obs.runs
+    assert kind == "post" and path == str(obs.clip) and state is obs.state
+
+
+def test_a_clip_gone_before_the_wait_is_up_is_left(tmp_path, monkeypatch):
+    obs = ReexportScript(tmp_path, monkeypatch, tray_tracks_enabled=True, split_tracks_enabled=True)
+    monkeypatch.setattr(obs.script.time, "sleep", lambda seconds: obs.clip.unlink())
+    obs.saved()
+    assert obs.runs == []
 
 
 @pytest.mark.parametrize("replay", [None, "", "gone.mkv"])
@@ -618,3 +670,53 @@ def test_the_scripts_properties_are_what_obs_shows(tmp_path, monkeypatch):
     assert isinstance(props, Handle) and [item[0] for item in added] == [
         "split_tracks_enabled", "reexport_enabled", "target_mb", "crop_seconds"]
     assert added[3] == ("crop_seconds", 1, 3600, 1)
+
+
+def _press_and_save(fake, script):
+    script.on_hotkey(True)
+    fake.timers.pop(script.save_now)
+    script.save_now()
+
+
+def test_a_post_clip_save_notes_the_file_it_made(tmp_path, monkeypatch):
+    """So a later save by anyone else isn't taken for this press."""
+    import clip_post
+
+    fake, script, state_path, _played = _post_clip_script(tmp_path, monkeypatch)
+    fake.save_path = str(tmp_path / "Replay 1.mkv")
+    _press_and_save(fake, script)
+    state = json.loads(state_path.read_text())
+    assert state["saved_path"] == fake.save_path
+    assert script.awaiting is None and script.save_overdue not in fake.timers
+    assert clip_post.read_state(clip_path=fake.save_path) == state
+    assert clip_post.read_state(clip_path=str(tmp_path / "Replay 2.mkv")) is None
+
+
+def test_a_save_obs_never_finishes_is_reported_and_forgotten(tmp_path, monkeypatch):
+    import clip_post
+
+    fake, script, state_path, _played = _post_clip_script(tmp_path, monkeypatch)
+    fake.save_fails = True
+    _press_and_save(fake, script)
+    assert state_path.exists() and fake.timers == {script.save_overdue: clip_post.STATE_FRESH_SECONDS * 1000}
+    script.save_overdue()
+    assert not state_path.exists() and not fake.timers
+    assert any("didn't save the clip" in line for line in fake.logs)
+    # The next save someone makes is a plain clip, not this press's.
+    fake.save_fails = False
+    fake.event_callbacks[0](fake.constant("OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED"))
+    assert not state_path.exists()
+
+
+def test_a_save_nobody_asked_for_leaves_the_state_alone(tmp_path, monkeypatch):
+    fake, script, state_path, _played = _post_clip_script(tmp_path, monkeypatch)
+    script.on_event(fake.constant("OBS_FRONTEND_EVENT_REPLAY_BUFFER_SAVED"))
+    assert not state_path.exists()
+
+
+def test_unloading_stops_watching_for_the_save(tmp_path, monkeypatch):
+    fake, script, _state_path, _played = _post_clip_script(tmp_path, monkeypatch)
+    fake.save_fails = True
+    _press_and_save(fake, script)
+    script.script_unload()
+    assert not fake.timers and fake.event_callbacks == []
