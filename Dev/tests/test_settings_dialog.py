@@ -383,15 +383,17 @@ def test_release_notes_window_can_show_the_new_settings(fake_obs_config, monkeyp
         seen.update(lit=set(root.layout["highlighted"]), windows=[w for w in root.winfo_children()
                                                                   if isinstance(w, tk.Toplevel) and w.winfo_viewable()])
 
-    import json
-
-    from conftest import APP_SHARED_DIR
-
-    with open(os.path.join(APP_SHARED_DIR, "release_notes.json"), encoding="utf-8") as f:
-        newest = json.load(f)[0]  # what this version's notes call new
+    # Fixed notes, not the shipped file: a release with no new settings has
+    # no Show New Settings button.
+    history = [
+        {"version": "9.9.1", "date": "2026-11-15", "sections": {"Fixes": ["A fix."]},
+         "new_settings": [{"key": "themes", "name": "Themes"}, {"key": "saved_themes", "name": "Save as Theme"}]},
+        {"version": "9.9.0", "date": "2026-11-01", "sections": {"Fixes": ["An older fix."]},
+         "new_settings": [{"key": "clip_names", "name": "Clip names"}]},
+    ]
+    monkeypatch.setattr(settings_dialog.release_notes, "load", lambda *args, **kwargs: history)
     _in_settings(monkeypatch, look)
-    assert seen["lit"] == {item["key"] for item in newest["new_settings"]} and not seen["windows"]
-    assert {"themes", "saved_themes"} <= seen["lit"]
+    assert seen["lit"] == {"themes", "saved_themes"} and not seen["windows"]
 
 
 def test_highlight_argument(tmp_path):

@@ -15,6 +15,17 @@
       <input id="folder-path" type="text" readonly aria-label="Clip folder" title="The folder these clips are in">
       <button id="change-folder" class="icon-btn" title="Choose another folder to view clips from" aria-label="Change folder" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25v8a1 1 0 0 0 1 1h10.5a1 1 0 0 0 1-1v-6.5a1 1 0 0 0-1-1H8L6.5 3.25H2.75a1 1 0 0 0-1 1z"/></svg></button>
     </header>
+    <div id="clip-filters" role="group" aria-label="Filter clips">
+      <label title="Only clips from this game or app">Game
+        <select id="filter-game"><option value="">All</option></select></label>
+      <label title="Only clips from this day, or this hour of the last 24 hours">Date
+        <select id="filter-date"><option value="">All</option></select></label>
+      <span class="filter-checks">
+        <label title="Only clips with a -tracks copy (one file per audio track)"><input type="checkbox" id="filter-tracks">Tracks</label>
+        <label title="Only clips with a -small copy"><input type="checkbox" id="filter-small">Small</label>
+        <label title="Only videos exported from the editor"><input type="checkbox" id="filter-exports">Exports</label>
+      </span>
+    </div>
     <div id="sound-banner" class="banner" hidden>Click anywhere to turn on hover sound</div>
     <ul id="clip-list" aria-label="Clips, newest first"></ul>
     <p id="empty" class="muted" hidden>No clips yet - save one with your clip hotkey.</p>

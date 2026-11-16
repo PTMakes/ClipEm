@@ -17,6 +17,7 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const list = $("clip-list");
+const EMPTY_TEXT = $("empty").textContent;
 const player = $("player");
 const hoverVideo = document.createElement("video");
 hoverVideo.preload = "auto";
@@ -254,9 +255,143 @@ async function deleteClip(name) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Filters (the row under the title): game, day or hour, and which copies
+// ---------------------------------------------------------------------------
+
+const DAY_MS = 24 * 3600 * 1000;
+const filters = { game: "", date: "", tracks: false, small: false, exports: false };
+const filterControls = {
+  game: $("filter-game"), date: $("filter-date"),
+  tracks: $("filter-tracks"), small: $("filter-small"), exports: $("filter-exports"),
+};
+
+function dayKey(when) {
+  const d = new Date(when);
+  return `day:${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function hourStart(when) {
+  const d = new Date(when);
+  d.setMinutes(0, 0, 0);
+  return d.getTime();
+}
+
+function dayName(when) {
+  const key = dayKey(when);
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (key === dayKey(Date.now())) return "Today";
+  if (key === dayKey(yesterday)) return "Yesterday";
+  return new Date(when).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
+}
+
+function hourName(start) {
+  const time = new Date(start).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+  return `${dayName(start)} ${time}`;
+}
+
+// Whether a clip is in the date filter's day, or hour ("hour:<start ms>").
+function inDate(clip, value) {
+  const when = clip.mtime * 1000;
+  if (value.startsWith("hour:")) {
+    const start = Number(value.slice(5));
+    return when >= start && when < start + 3600 * 1000;
+  }
+  return dayKey(when) === value;
+}
+
+function matchesFilters(clip) {
+  if (filters.game && (clip.game || "") !== filters.game) return false;
+  if (filters.date && !inDate(clip, filters.date)) return false;
+  // Ticked boxes: the clips with any of them.
+  const kinds = [[filters.tracks, !!clip.tracks_file], [filters.small, !!clip.small_file],
+    [filters.exports, !!clip.exported_from]].filter(([on]) => on);
+  return kinds.length === 0 || kinds.some(([, has]) => has);
+}
+
+function filtering() {
+  return !!(filters.game || filters.date || filters.tracks || filters.small || filters.exports);
+}
+
+function visibleClips() {
+  return filtering() ? state.clips.filter(matchesFilters) : state.clips;
+}
+
+function countUp(map, key, label) {
+  const entry = map.get(key) || { label, count: 0 };
+  entry.count += 1;
+  map.set(key, entry);
+}
+
+// Fills a <select> with [{value, label}] or [{group, options}], unless it
+// already has them (rebuilding it would close it while it's open).
+function setOptions(select, items) {
+  const signature = JSON.stringify(items);
+  if (select.dataset.signature === signature) return;
+  select.dataset.signature = signature;
+  const option = ({ value, label }) => new Option(label, value);
+  select.replaceChildren(new Option("All", ""), ...items.map((item) => {
+    if (!item.group) return option(item);
+    const group = document.createElement("optgroup");
+    group.label = item.group;
+    group.append(...item.options.map(option));
+    return group;
+  }));
+}
+
+// The games and dates the clips have, with how many of each. One that's
+// picked stays listed (with 0) after its clips are gone or its hour is past.
+function renderFilterOptions() {
+  const games = new Map();
+  const days = new Map();
+  const hours = new Map();
+  const since = Date.now() - DAY_MS;
+  for (const clip of state.clips) {
+    const when = clip.mtime * 1000;
+    if (clip.game) countUp(games, clip.game, clip.game);
+    countUp(days, dayKey(when), dayName(when));
+    if (when >= since) {
+      const start = hourStart(when);
+      countUp(hours, `hour:${start}`, hourName(start));
+    }
+  }
+  if (filters.game && !games.has(filters.game)) games.set(filters.game, { label: filters.game, count: 0 });
+  if (filters.date.startsWith("hour:") && !hours.has(filters.date)) {
+    hours.set(filters.date, { label: hourName(Number(filters.date.slice(5))), count: 0 });
+  } else if (filters.date.startsWith("day:") && !days.has(filters.date)) {
+    const [y, m, d] = filters.date.slice(4).split("-").map(Number);
+    days.set(filters.date, { label: dayName(new Date(y, m - 1, d).getTime()), count: 0 });
+  }
+  const options = (map) => [...map].map(([value, { label, count }]) => ({ value, label: `${label} (${count})` }));
+  const gameOptions = options(games).sort((a, b) => a.value.localeCompare(b.value, undefined, { sensitivity: "base" }));
+  // Newest first; keys of the same kind sort by time as text too.
+  const newest = (a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0);
+  const hourOptions = [...hours].sort((a, b) => Number(b[0].slice(5)) - Number(a[0].slice(5)))
+    .map(([value, { label, count }]) => ({ value, label: `${label} (${count})` }));
+  const dateItems = [];
+  if (hourOptions.length) dateItems.push({ group: "Last 24 hours", options: hourOptions });
+  if (days.size) dateItems.push({ group: "Days", options: options(days).sort(newest) });
+  setOptions(filterControls.game, gameOptions);
+  setOptions(filterControls.date, dateItems);
+  filterControls.game.value = filters.game;
+  filterControls.date.value = filters.date;
+  filterControls.game.classList.toggle("active", !!filters.game);
+  filterControls.date.classList.toggle("active", !!filters.date);
+}
+
+for (const [key, control] of Object.entries(filterControls)) {
+  control.addEventListener("change", () => {
+    filters[key] = control.type === "checkbox" ? control.checked : control.value;
+    renderList();
+  });
+}
+
 function renderList() {
+  renderFilterOptions();
+  const shown = visibleClips();
   const existing = new Map([...list.children].map((li) => [li.dataset.name, li]));
-  const wanted = state.clips.map((clip) => {
+  const wanted = shown.map((clip) => {
     const li = existing.get(clip.name) || clipItem(clip);
     existing.delete(clip.name);
     updateItem(li, clip);
@@ -269,8 +404,10 @@ function renderList() {
   wanted.forEach((li, index) => {
     if (list.children[index] !== li) list.insertBefore(li, list.children[index] || null);
   });
-  $("clip-count").textContent = state.clips.length ? `${state.clips.length}` : "";
-  $("empty").hidden = state.clips.length > 0;
+  const total = state.clips.length;
+  $("clip-count").textContent = !total ? "" : filtering() ? `${shown.length} of ${total}` : `${total}`;
+  $("empty").textContent = total ? "No clips match these filters." : EMPTY_TEXT;
+  $("empty").hidden = shown.length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -388,8 +525,9 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   if (!["ArrowUp", "ArrowDown"].includes(e.key)) return;
-  const index = state.clips.findIndex((c) => c.name === state.selected);
-  const next = state.clips[index + (e.key === "ArrowDown" ? 1 : -1)];
+  const shown = visibleClips();
+  const index = shown.findIndex((c) => c.name === state.selected);
+  const next = shown[index + (e.key === "ArrowDown" ? 1 : -1)];
   if (next) {
     e.preventDefault();
     select(next.name);

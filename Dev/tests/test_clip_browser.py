@@ -209,6 +209,16 @@ def test_page_and_clip_list(server):
     assert data["clips"][0]["tracks_file"] == "a-tracks.mkv" and data["clips"][0]["duration"] == 12.0
 
 
+def test_clips_are_listed_with_their_game_and_an_export_with_its_clips(server, tmp_path, monkeypatch):
+    monkeypatch.setattr(clip_browser.clip_naming, "load", lambda: dict(clip_browser.clip_naming.DEFAULTS))
+    clips = tmp_path / "clips"
+    _touch(clips, "Replay-2026-10-25-21-50-07-Deadlock.mp4", b"x", mtime=200)
+    _touch(clips, "Replay-2026-10-25-21-50-07-Deadlock-discord.mp4", b"x", mtime=300)
+    games = {c["name"]: c["game"] for c in json.loads(_get(server, "api/clips")[2])["clips"]}
+    assert games == {"a.mp4": None, "Replay-2026-10-25-21-50-07-Deadlock.mp4": "Deadlock",
+                     "Replay-2026-10-25-21-50-07-Deadlock-discord.mp4": "Deadlock"}
+
+
 def test_page_and_theme_carry_settings_colors(server, monkeypatch):
     config = {"dark_mode": False, "custom_colors": {"light": {"wave": "#123456"}, "dark": {"wave": "#654321"}}}
     monkeypatch.setattr(clip_browser, "load_run_config", lambda: config)

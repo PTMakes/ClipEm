@@ -517,3 +517,20 @@ def test_reset_all_puts_back_everything_order_too(form):
     assert _picks(shown) == [label for _code, label in clip_naming.DATE_PARTS]
     assert [shown._rows[key][2].grid_info()["row"] for key in clip_naming.PARTS] == [0, 1, 2, 3]
 
+
+
+@pytest.mark.parametrize("settings, name, app", [
+    (naming(), "Replay-2026-10-25-21-50-07-Deadlock.mp4", "Deadlock"),
+    (naming(), "Replay-2026-10-25-21-50-07-Counter-Strike-2.mp4", "Counter-Strike-2"),  # the rest of the name
+    (naming(), "Replay-2026-10-25-21-50-07.mp4", None),  # saved while nothing played sound
+    (naming(), "Replay 2026-10-25 21-50-07.mp4", None),  # OBS's own name
+    (naming(), "holiday.mp4", None),
+    (naming(order=["app", "prefix", "id", "date"], id="number"), "Deadlock-Replay-0042-2026-10-25-21-50-07.mp4",
+     "Deadlock"),
+    (naming(order=["app", "prefix", "id", "date"], id="number"), "Replay-0042-2026-10-25-21-50-07.mp4", None),
+    (naming(order=["prefix", "app", "date"]), "Replay-Counter-Strike-2-2026-10-25-21-50-07-discord.mp4",
+     "Counter-Strike-2"),
+    (naming(prefix="Clip"), "Replay-2026-10-25-21-50-07-Deadlock.mp4", "Deadlock"),  # named before a change
+])
+def test_the_game_or_app_is_read_back_from_a_clips_name(settings, name, app):
+    assert clip_naming.app_of(name, settings) == app

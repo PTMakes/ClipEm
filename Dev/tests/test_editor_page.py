@@ -244,3 +244,48 @@ def test_trim_and_the_full_editor_warn_of_sub_track_edits_the_mix_track_covers(t
     tools.js("ed.solo.add(1); setMode('trim')")
     assert tools.js("[trackOf(0).muted, ed.sources, ed.solo.size]") == [False, "auto", 0]
     assert "Mic has edits that Trim doesn't play or export" in tools.js(note)
+
+
+def test_the_filters_narrow_the_clip_list(tmp_path, page):
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp_path / "source.mp4")], check=True)
+    now = time.time()
+    files = {  # name: age in hours
+        "Replay-2026-10-25-21-50-07-Deadlock.mp4": 1, "Replay-2026-10-25-21-50-07-Deadlock-tracks.mkv": 1,
+        "Replay-2026-10-25-21-50-07-Deadlock-discord.mp4": 0.5,
+        "Replay-2026-10-20-10-00-00-Sober.mp4": 24 * 5, "Replay-2026-10-20-10-00-00-Sober-small.mp4": 24 * 5,
+    }
+    for name, hours in files.items():
+        shutil.copy(tmp_path / "source.mp4", tmp_path / name)
+        os.utime(tmp_path / name, (now - hours * 3600, now - hours * 3600))
+    (tmp_path / "source.mp4").unlink()
+    tools = page(tmp_path)
+    shown = "[...document.querySelectorAll('#clip-list .clip')].map((li) => li.dataset.name)"
+    assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock-discord.mp4",
+                               "Replay-2026-10-25-21-50-07-Deadlock.mp4", "Replay-2026-10-20-10-00-00-Sober.mp4"]
+    assert tools.js("[...$('filter-game').options].map((o) => o.text)") == ["All", "Deadlock (2)", "Sober (1)"]
+    groups = tools.js("[...$('filter-date').querySelectorAll('optgroup')].map((g) => [g.label, g.children.length])")
+    assert [label for label, _count in groups] == ["Last 24 hours", "Days"]  # hours and days with clips
+
+    def pick(control, value):
+        tools.js(f"(() => {{ const c = $('{control}'); if (c.type === 'checkbox') c.checked = {json.dumps(value)};"
+                 f" else c.value = {json.dumps(value)}; c.dispatchEvent(new Event('change')); }})()")
+
+    pick("filter-game", "Sober")
+    assert tools.js(shown) == ["Replay-2026-10-20-10-00-00-Sober.mp4"]
+    assert tools.js("$('clip-count').textContent") == "1 of 3"
+    pick("filter-tracks", True)
+    assert tools.js(shown) == [] and tools.js("$('empty').hidden") is False
+    pick("filter-game", "")
+    assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock.mp4"]
+    pick("filter-exports", True)  # either box
+    assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock-discord.mp4",
+                               "Replay-2026-10-25-21-50-07-Deadlock.mp4"]
+    pick("filter-tracks", False)
+    pick("filter-exports", False)
+    hour = tools.js("$('filter-date').querySelector('optgroup').children[0].value")
+    pick("filter-date", hour)
+    assert "Replay-2026-10-20-10-00-00-Sober.mp4" not in tools.js(shown)
+    old_day = tools.js("[...$('filter-date').querySelectorAll('optgroup')[1].children].at(-1).value")
+    pick("filter-date", old_day)
+    assert tools.js(shown) == ["Replay-2026-10-20-10-00-00-Sober.mp4"]

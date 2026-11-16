@@ -1,5 +1,25 @@
 [
   {
+    "version": "1.5.1",
+    "date": "2026-11-15",
+    "sections": {
+      "New Features": [
+        "Missing-audio detection now watches desktop audio too: if OBS hears nothing while an app is playing sound, ClipEm reopens it and tells you if that doesn't help.",
+        "The audio peak guard now turns a volume it lowered back up, 1 dB at a time, once the source stops clipping. One that keeps clipping stays down, and a volume you change by hand is left alone."
+      ],
+      "Improvements": [
+        "A silent mic is noticed after 1 minute instead of 2. ClipEm tries up to three fixes, including switching to your default device, then reminds you every 5 minutes until it's working, and tells you when it is.",
+        "A mic with a noise gate is no longer taken for missing when the room is just quiet.",
+        "The bundled Python on Windows goes back from 3.12.16 to 3.12.10, the last version signed by python.org, because 3.12.16 set off Windows security errors. Updating moves Windows installs back to it."
+      ],
+      "Fixes": [
+        "Clips saved while the tray was closed/restarting/not connected to OBS are now still named and get their copies, without app tracks.",
+        "A post-clip save that OBS never finishes is no longer mixed up with a later clip, and you're told it failed.",
+        "The clip sound now plays or stays quiet correctly when a post-clip save and another save happen close together."
+      ]
+    }
+  },
+  {
     "version": "1.5.0",
     "date": "2026-10-31",
     "sections": {

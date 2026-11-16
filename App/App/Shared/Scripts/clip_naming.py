@@ -236,6 +236,45 @@ def _number_pattern(settings):
     return re.compile(rf"^{pattern}(?:{between}.*)?$")
 
 
+def _app_pattern(settings):
+    """Matches a clip's name with these parts, the game or app in group
+    "app" (missing when the name has none). Last in the name, it takes the
+    rest - a game's own separators ("Left-4-Dead-2") are part of it."""
+    between = rf"(?:{re.escape(settings['separator'])}| )"
+    pattern, started, app_last = "", False, False
+    for key in settings["order"]:
+        if key == "app":
+            if settings["app"]:
+                pattern += rf"(?:{between}(?P<app>.+))?" if started else rf"(?:(?P<app>.+?){between})?"
+                app_last = started
+            continue
+        if key == "prefix" and not (settings["prefix_on"] and settings["prefix"]) \
+                or key == "date" and not settings["date"] or key == "id" and settings["id"] == ID_NONE:
+            continue
+        part = {"prefix": re.escape(_no_spaces(settings["prefix"], settings["separator"])),
+                "id": r"\d{1,12}" if settings["id"] == ID_NUMBER else r"[0-9a-fA-F-]{36}",
+                "date": _date_pattern(settings)}[key]
+        pattern += (between if started else "") + part
+        started, app_last = True, False
+    if not started:
+        return None  # only the game or app - nothing to tell it apart by
+    tail = "" if app_last else rf"(?:{between}.*)?"
+    return re.compile(rf"^{pattern}{tail}$")
+
+
+def app_of(name, settings=None):
+    """The game or app in a clip's file name, or None - read with the naming
+    settings, else the defaults (clips named before they were changed)."""
+    base = os.path.splitext(name)[0]
+    for candidate in (settings or load(), DEFAULTS):
+        pattern = _app_pattern(candidate)
+        match = pattern and pattern.match(base)
+        app = match and (match.group("app") or "").strip()
+        if app:
+            return app
+    return None
+
+
 def next_number(folder, settings):
     """One more than the highest number a clip with this prefix has in folder,
     or the starting number if that's higher."""

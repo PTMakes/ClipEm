@@ -1086,12 +1086,16 @@ class Handler(BaseHTTPRequestHandler):
             exports = self.server.editor.last_exports(folder)
             origins = self.server.editor.export_origins(folder, [clip["name"] for clip in clips])
             mtimes = {clip["name"]: clip["mtime"] for clip in clips}
+            naming = clip_naming.load()
+            games = {clip["name"]: clip_naming.app_of(clip["name"], naming) for clip in clips}
             for clip in clips:
                 path = os.path.join(folder, clip["name"])
                 clip["duration"] = self.server.thumbnailer.info(path).get("duration")
                 clip["last_export"] = exports.get(clip["name"])
                 origin = origins.get(clip["name"])
                 clip["exported_from"] = {"name": origin, "time": mtimes[origin]} if origin else None
+                # An export goes under its clip's game (its own name has its suffix too).
+                clip["game"] = games[origin] if origin else games[clip["name"]]
             self._json({"folder": folder, "clips": clips})
         elif route == "api/editors":
             self._json(editors_info())
