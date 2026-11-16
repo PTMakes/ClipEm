@@ -369,9 +369,10 @@ def test_progress_bar_is_silent_without_a_terminal():
 def test_release_asset_urls_point_at_github_releases():
     assert release_common.release_asset_url("1.4.0", "clipem-shared-1.4.0.zip") == (
         f"https://github.com/{release_common.RELEASE_REPO}/releases/download/v1.4.0/clipem-shared-1.4.0.zip")
-    # Dev builds all live on the rolling "dev" prerelease.
-    assert release_common.release_tag("1.4.1-dev.202610142130") == "dev"
-    assert "/releases/download/dev/" in release_common.release_asset_url("1.4.1-dev.202610142130", "x.zip")
+    # Each dev build is its own prerelease (published releases are immutable).
+    assert release_common.release_tag("1.4.1-dev.202610142130") == "v1.4.1-dev.202610142130"
+    assert "/releases/download/v1.4.1-dev.202610142130/" in release_common.release_asset_url(
+        "1.4.1-dev.202610142130", "x.zip")
 
 
 HISTORY = [{"version": "1.4.9", "date": "2026-11-01", "sections": {"New Features": ["A.", "B."], "Fixes": ["C."]}},
@@ -746,26 +747,42 @@ def test_publishing_tags_the_release_commit(monkeypatch):
     assert cmd[cmd.index("--target") + 1] == "abc123" and "--draft=false" in cmd and "--latest" in cmd
 
 
-def test_the_first_dev_build_makes_the_prerelease(tmp_path, monkeypatch):
-    gh = FakeGh(monkeypatch, {"release view": (1, "", "release not found")})
-    release_common.upload_release("1.2.3-dev.5", _assets(tmp_path, "a.zip"), "abc123")
-    create = gh.calls[-1]
-    assert create[1:4] == ["release", "create", "dev"] and "--prerelease" in create and "--draft" not in create
+NO_RELEASES = {"release list": (0, "[]", "")}
+
+
+def test_a_dev_build_is_its_own_prerelease_published_once_every_asset_is_up(tmp_path, monkeypatch):
+    gh = FakeGh(monkeypatch, NO_RELEASES)
+    release_common.upload_release("1.2.3-dev.5", _assets(tmp_path, "install-manifest.json", "a.zip"), "abc123")
+    create = next(cmd for cmd in gh.calls if cmd[1:3] == ["release", "create"])
+    assert create[3] == "v1.2.3-dev.5" and "--draft" in create and "--prerelease" in create
+    assert create[create.index("--target") + 1] == "abc123"  # GitHub has the commit
     assert "abc123" in create[create.index("--notes") + 1]
+    assert [os.path.basename(arg) for arg in create if arg.startswith(str(tmp_path))] == [
+        "a.zip", "install-manifest.json"]
+    publish = next(cmd for cmd in gh.calls if cmd[1:3] == ["release", "edit"])
+    assert publish[3] == "v1.2.3-dev.5" and "--draft=false" in publish and "--prerelease" in publish
+    assert gh.calls.index(create) < gh.calls.index(publish)
+    # Nothing is replaced or removed from a published (immutable) release.
+    assert not [cmd for cmd in gh.calls if cmd[1:3] in (["release", "upload"], ["release", "delete-asset"])]
 
 
-def test_a_later_dev_build_replaces_the_assets_manifests_last_then_drops_stale_ones(tmp_path, monkeypatch):
-    files = _assets(tmp_path, "install-manifest.json", "new.zip")
-    assets = json.dumps({"assets": [{"name": "old.zip"}, {"name": "new.zip"}, {"name": "install-manifest.json"}]})
-    gh = FakeGh(monkeypatch, {"release view --json assets": (0, assets, "")})
-    release_common.upload_release("1.2.3-dev.5", files, "abc123")
-    uploads = [cmd for cmd in gh.calls if cmd[1:3] == ["release", "upload"]]
-    assert [[os.path.basename(arg) for arg in cmd if arg.startswith(str(tmp_path))] for cmd in uploads] == [
-        ["new.zip"], ["install-manifest.json"]]
-    assert all("--clobber" in cmd for cmd in uploads)
-    deletes = [cmd for cmd in gh.calls if cmd[1:3] == ["release", "delete-asset"]]
-    assert [cmd[4] for cmd in deletes] == ["old.zip"] and "--yes" in deletes[0]
-    assert gh.calls.index(uploads[-1]) < gh.calls.index(deletes[0])
+def test_a_dev_build_of_an_unpushed_commit_tags_the_default_branch(tmp_path, monkeypatch):
+    gh = FakeGh(monkeypatch, {"api": (1, "", "HTTP 422: No commit found"), **NO_RELEASES})
+    release_common.upload_release("1.2.3-dev.5", _assets(tmp_path, "a.zip"), "abc123")
+    create = next(cmd for cmd in gh.calls if cmd[1:3] == ["release", "create"])
+    assert "--target" not in create
+
+
+def test_old_dev_prereleases_are_deleted_past_the_newest_ones_kept(tmp_path, monkeypatch):
+    releases = [{"tagName": f"v1.2.{minor}-dev.{stamp}", "isDraft": False, "isPrerelease": True}
+                for minor, stamp in ((3, 9), (3, 10), (2, 50), (3, 8))]
+    releases += [{"tagName": "v1.2.2", "isDraft": False, "isPrerelease": False},
+                 {"tagName": "dev", "isDraft": False, "isPrerelease": True},  # the old rolling one
+                 {"tagName": "v1.2.3-dev.1", "isDraft": True, "isPrerelease": True}]
+    gh = FakeGh(monkeypatch, {"release list": (0, json.dumps(releases), "")})
+    release_common.prune_dev_releases(keep=2)
+    deletes = [cmd for cmd in gh.calls if cmd[1:3] == ["release", "delete"]]
+    assert [cmd[3] for cmd in deletes] == ["v1.2.3-dev.8", "v1.2.2-dev.50"] and all("--yes" in c for c in deletes)
 
 
 # --- The CLI release.sh runs ------------------------------------------------------

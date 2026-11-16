@@ -29,15 +29,16 @@ signed release manifest - then runs ClipEm's setup.
   -h, --help    Show this help and exit.
 
 Environment:
-  CLIPEM_MANIFEST_URL   Install from another manifest, e.g. the dev build:
-                        https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json
+  CLIPEM_MANIFEST_URL   Install from another manifest, e.g. a dev build's (each is
+                        its own pre-release, tagged v<version>):
+                        https://github.com/PTMakes/ClipEm/releases/download/v<version>/install-manifest.json
 USAGE
         exit 0
         ;;
 esac
 
-# CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json
-# installs the current dev build instead (see Dev/release.sh --dev).
+# CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/v<version>/install-manifest.json
+# installs that dev build instead (see Dev/release.sh --dev).
 MANIFEST_URL="${CLIPEM_MANIFEST_URL:-https://github.com/PTMakes/ClipEm/releases/latest/download/install-manifest.json}"
 
 # Base64 Ed25519 public key the manifest must be signed with. Stamped in by

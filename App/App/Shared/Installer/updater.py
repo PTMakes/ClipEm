@@ -49,11 +49,15 @@ UPDATE_CONFIG_PATH = os.path.join(SHARED_DIR, "update_config.json")
 # source_repo: the GitHub repo ("owner/name") whose releases updates come
 #   from. Its manifests still have to be signed with signing_public_key.txt.
 # update_channel: CHANNEL_RELEASES follows published releases,
-#   CHANNEL_LATEST the rolling "dev" prerelease (Dev/release.sh --dev).
+#   CHANNEL_LATEST the newest release of any kind - each dev build
+#   (Dev/release.sh --dev) is its own prerelease, tagged v<version>.
 DEFAULT_SOURCE_REPO = "PTMakes/ClipEm"
 CHANNEL_RELEASES, CHANNEL_LATEST = "releases", "latest"
 UPDATE_CHANNELS = (CHANNEL_RELEASES, CHANNEL_LATEST)
-DEV_RELEASE_TAG = "dev"
+# Releases (newest first) the "latest" channel looks through for the newest
+# version - dev builds are each their own (immutable) prerelease.
+RELEASES_API_PAGE = 30
+MAX_RELEASES_API_BYTES = 4 * 1024 * 1024
 DEFAULT_UPDATE_CONFIG = {
     "check_for_updates": True,
     "install_on_next_launch": False,
@@ -168,14 +172,40 @@ def repo_from_url(text):
 def manifest_url(config=None):
     """Where the signed install manifest lives for the configured source repo
     and channel. GitHub's /releases/latest/ never points at a prerelease, so
-    the "releases" channel can't pick up a dev build."""
+    the "releases" channel can't pick up a dev build; the "latest" channel
+    asks GitHub's API for the newest release of any kind (newest_release_tag)."""
     config = config or load_update_config()
     repo = config.get("source_repo") or DEFAULT_SOURCE_REPO
     if not is_valid_repo(repo):
         raise UpdateError(f"The update source repo {repo!r} isn't a GitHub \"owner/name\".")
     if config.get("update_channel") == CHANNEL_LATEST:
-        return f"https://github.com/{repo}/releases/download/{DEV_RELEASE_TAG}/{MANIFEST_NAME}"
+        return f"https://github.com/{repo}/releases/download/{newest_release_tag(repo)}/{MANIFEST_NAME}"
     return f"https://github.com/{repo}/releases/latest/download/{MANIFEST_NAME}"
+
+
+_RELEASE_TAG_RE = re.compile(r"^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?$")
+
+
+def newest_release_tag(repo):
+    """The tag (v<version>) of the newest published release or prerelease of
+    repo that has a signed manifest - by version, not publish order. Only
+    which manifest to fetch comes from here: it's trusted for its signature."""
+    url = f"https://api.github.com/repos/{repo}/releases?per_page={RELEASES_API_PAGE}"
+    try:
+        releases = json.loads(_read_url(url, REQUEST_TIMEOUT_SECONDS, MAX_RELEASES_API_BYTES))
+    except (OSError, ValueError) as exc:  # HTTP errors (403: rate limited), bad JSON
+        raise UpdateError(f"Couldn't list {repo}'s releases on GitHub: {exc}") from exc
+    tags = []
+    for release in releases if isinstance(releases, list) else ():
+        if not isinstance(release, dict) or release.get("draft"):
+            continue
+        tag = release.get("tag_name")
+        assets = {asset.get("name") for asset in release.get("assets") or () if isinstance(asset, dict)}
+        if isinstance(tag, str) and _RELEASE_TAG_RE.match(tag) and {MANIFEST_NAME, MANIFEST_NAME + ".sig"} <= assets:
+            tags.append(tag)
+    if not tags:
+        raise UpdateError(f"{repo} has no release with a signed install manifest.")
+    return max(tags, key=_parse_version)
 
 
 # ---------------------------------------------------------------------------

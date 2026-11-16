@@ -68,7 +68,7 @@ TOGGLE_HOTKEY_TITLES = {"recording": "Start/Stop Recording", "replay_buffer": "S
 NO_HOTKEY = obs_config.NO_HOTKEY
 
 # Update channel -> the name Settings shows for it (Main follows the published
-# releases, Dev the rolling "dev" pre-release).
+# releases, Dev every dev build's pre-release too).
 UPDATE_BRANCHES = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "Dev"}
 
 # The step list's names for the pages below.

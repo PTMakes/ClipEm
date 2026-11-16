@@ -13,8 +13,10 @@ stamped into ClipEmSetupLinux.sh; clients refuse any manifest it didn't sign.
 Releases are GitHub Releases of RELEASE_REPO (PTMakes/ClipEm, or
 $CLIPEM_RELEASE_REPO), made with the GitHub CLI (`gh`, logged in with
 `gh auth login`). A release's binaries and its signed manifests are all
-assets of tag v<version>; dev builds (versions like 1.3.6-dev.202610142130,
-see release.sh --dev) replace the assets of the rolling "dev" prerelease.
+assets of tag v<version> - dev builds (versions like 1.3.6-dev.202610142130,
+see release.sh --dev) too, as prereleases. Releases are immutable once
+published (the repo's release immutability), so every asset goes up while
+the release is still a draft.
 
 CLI:
   release_common.py sign <file>...             write <file>.sig for each file
@@ -25,8 +27,8 @@ CLI:
   release_common.py check-github               fail unless gh is installed and logged in
   release_common.py release-exists <version>   exit 0 if that version's release exists
   release_common.py upload <version> <file>... create the (draft) release with these
-                                               assets, or for a dev version replace the
-                                               "dev" prerelease's assets with them
+                                               assets - a dev version's is published
+                                               as a prerelease straight away
   release_common.py publish <version>          publish the draft release (tags the pushed HEAD)
   release_common.py asset-url <version> <name> print a release asset's download URL
   release_common.py zip-dir <base> <top> <out> deterministic zip of <base>/<top> (entries
@@ -67,7 +69,9 @@ LINUX_INSTALLER_KEY_PREFIX = 'CLIPEM_SIGNING_PUBLIC_KEY="'
 # website (clipem.app) only mirrors the signed manifests, for installs from
 # before updates moved to GitHub (<= 1.3.5), which only know clipem.app.
 RELEASE_REPO = os.environ.get("CLIPEM_RELEASE_REPO") or "PTMakes/ClipEm"
-DEV_RELEASE_TAG = "dev"
+# Dev prereleases kept on GitHub - older ones are deleted after each dev
+# build (their tags stay: an immutable release's tag can't be removed).
+DEV_RELEASES_KEPT = 10
 # Uploaded last, so a client never sees a manifest whose files aren't there yet.
 MANIFEST_FILES = ("install-manifest.json", "install-manifest.json.sig", "clipem-latest.json", "clipem-latest.json.sig")
 
@@ -411,7 +415,7 @@ def is_dev_version(version: str) -> bool:
 
 
 def release_tag(version: str) -> str:
-    return DEV_RELEASE_TAG if is_dev_version(version) else f"v{version}"
+    return f"v{version}"
 
 
 def release_asset_url(version: str, name: str) -> str:
@@ -477,11 +481,6 @@ def release_exists(tag: str) -> bool:
     raise SystemExit(f"Couldn't check GitHub for release {tag}:\n{result.stderr.strip()}")
 
 
-def release_asset_names(tag: str) -> set:
-    assets = json.loads(_gh_ok("release", "view", tag, "--json", "assets"))["assets"]
-    return {asset["name"] for asset in assets}
-
-
 def _ordered_uploads(files) -> list:
     """Manifests (and their signatures) last."""
     return sorted((Path(f) for f in files), key=lambda f: f.name in MANIFEST_FILES)
@@ -521,11 +520,13 @@ def check_release_notes(history_path, version: str) -> None:
 
 
 def upload_release(version: str, files, commit: str, release_history=None) -> None:
-    """A release: a draft release v<version> with every file as an asset -
+    """A draft release v<version> with every file as an asset. A release is
     published (tagging the release commit) by publish_release once that is
-    pushed. `commit` is what the files were built from, `release_history`
-    the release_notes.json with its notes. A dev version: the rolling "dev" prerelease's assets are
-    replaced by these files, manifests last, then stale ones removed."""
+    pushed. A dev version is published as a prerelease right away - tagging
+    `commit` if GitHub has it (it may not be pushed), else the default
+    branch - and older dev prereleases beyond DEV_RELEASES_KEPT are deleted.
+    `commit` is what the files were built from, `release_history` the
+    release_notes.json with its notes."""
     files = _ordered_uploads(files)
     for f in files:
         print(f" - {f.name} ({f.stat().st_size / 1048576:,.1f} MB)", flush=True)
@@ -538,19 +539,31 @@ def upload_release(version: str, files, commit: str, release_history=None) -> No
                "--notes", notes or f"ClipEm {version}", *[str(f) for f in files])
         return
     notes = f"Development build {version} (commit {commit}) - for testing, not a release."
-    if not release_exists(tag):
-        _gh_ok("release", "create", tag, "--prerelease", "--title", "ClipEm dev build", "--notes", notes,
-               *[str(f) for f in files])
-        return
-    _gh_ok("release", "edit", tag, "--prerelease", "--notes", notes)
-    payload = [f for f in files if f.name not in MANIFEST_FILES]
-    manifests = [f for f in files if f.name in MANIFEST_FILES]
-    for batch in (payload, manifests):
-        if batch:
-            _gh_ok("release", "upload", tag, "--clobber", *[str(f) for f in batch])
-    for stale in sorted(release_asset_names(tag) - {f.name for f in files}):
-        print(f" - removing stale {stale}")
-        _gh_ok("release", "delete-asset", tag, stale, "--yes")
+    target = ["--target", commit] if remote_has_commit(commit) else []
+    if not target:
+        print(f" - commit {commit[:12]} isn't on GitHub - tagging the default branch instead")
+    _gh_ok("release", "create", tag, "--draft", "--prerelease", "--title", f"ClipEm dev build {version}",
+           "--notes", notes, *target, *[str(f) for f in files])
+    _gh_ok("release", "edit", tag, "--draft=false", "--prerelease")
+    prune_dev_releases(keep=DEV_RELEASES_KEPT)
+
+
+def remote_has_commit(commit: str) -> bool:
+    result = subprocess.run(["gh", "api", f"repos/{RELEASE_REPO}/commits/{commit}", "--silent"],
+                            capture_output=True, text=True, check=False)
+    return result.returncode == 0
+
+
+def prune_dev_releases(keep: int) -> None:
+    """Deletes all but the newest `keep` published dev prereleases."""
+    releases = json.loads(_gh_ok("release", "list", "--limit", "1000", "--json", "tagName,isDraft,isPrerelease"))
+    dev = [r["tagName"] for r in releases
+           if r["isPrerelease"] and not r["isDraft"] and r["tagName"].startswith("v")
+           and is_dev_version(r["tagName"][1:])]
+    dev.sort(key=lambda tag: [int(part) for part in re.findall(r"\d+", tag)], reverse=True)
+    for tag in dev[keep:]:
+        print(f" - deleting old dev build {tag}")
+        _gh_ok("release", "delete", tag, "--yes")
 
 
 def publish_release(version: str, commit: str) -> None:

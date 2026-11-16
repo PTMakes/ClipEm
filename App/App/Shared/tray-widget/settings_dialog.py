@@ -1671,7 +1671,7 @@ def open_dialog(start_tab=None, highlight=()):
         ).pack(side="left", padx=(px(4), 0))
         next_row += 1
 
-        # Main follows the published releases, Dev the rolling "dev" pre-release.
+        # Main follows the published releases, Dev every dev build's pre-release too.
         branch_labels = {updater.CHANNEL_RELEASES: "Main", updater.CHANNEL_LATEST: "Dev"}
         branch_var = tk.StringVar(value=branch_labels.get(update_config["update_channel"], "Main"))
         saved_branch = {"label": branch_var.get()}
@@ -1683,8 +1683,8 @@ def open_dialog(start_tab=None, highlight=()):
             channel = next(key for key, text in branch_labels.items() if text == label)
             if channel == updater.CHANNEL_LATEST:
                 explanation = (
-                    "The Dev branch installs development builds published for testing (the \"dev\" "
-                    "pre-release on GitHub) before they become a release. They may be unfinished or "
+                    "The Dev branch installs development builds published for testing (pre-releases "
+                    "on GitHub) before they become a release. They may be unfinished or "
                     "broken.\n\nSwitch to Dev?"
                 )
             else:

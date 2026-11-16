@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import urllib.error
 import urllib.request
 import zipfile
 
@@ -147,15 +148,63 @@ def test_dev_versions_sort_between_releases():
     assert updater.is_dev_version("1.3.6-dev.1") and not updater.is_dev_version("1.3.6")
 
 
-def test_manifest_url_follows_repo_and_channel():
+def _release(tag, draft=False, assets=("install-manifest.json", "install-manifest.json.sig")):
+    return {"tag_name": tag, "draft": draft, "prerelease": "-" in tag, "assets": [{"name": a} for a in assets]}
+
+
+def _serve_releases(monkeypatch, releases):
+    asked = []
+
+    def read_url(url, timeout, max_bytes):
+        asked.append(url)
+        assert max_bytes == updater.MAX_RELEASES_API_BYTES
+        return json.dumps(releases).encode()
+
+    monkeypatch.setattr(updater, "_read_url", read_url)
+    return asked
+
+
+def test_manifest_url_follows_repo_and_channel(monkeypatch):
     assert updater.manifest_url({"source_repo": "PTMakes/ClipEm", "update_channel": "releases"}) == (
         "https://github.com/PTMakes/ClipEm/releases/latest/download/install-manifest.json")
+    asked = _serve_releases(monkeypatch, [_release("v1.2.4-dev.202611160359")])
     assert updater.manifest_url({"source_repo": "me/fork", "update_channel": "latest"}) == (
-        "https://github.com/me/fork/releases/download/dev/install-manifest.json")
+        "https://github.com/me/fork/releases/download/v1.2.4-dev.202611160359/install-manifest.json")
+    assert asked == [f"https://api.github.com/repos/me/fork/releases?per_page={updater.RELEASES_API_PAGE}"]
     for bad in ("nope", "a/b/c", "../x", "a/b?x=1", "https://github.com/a/b"):
         assert not updater.is_valid_repo(bad)
         with pytest.raises(updater.UpdateError):
             updater.manifest_url({"source_repo": bad})
+
+
+def test_the_latest_channel_takes_the_newest_version_with_a_signed_manifest(monkeypatch):
+    _serve_releases(monkeypatch, [
+        _release("v1.2.5-dev.3", draft=True),  # not published
+        _release("v1.2.5-dev.2", assets=("install-manifest.json",)),  # still uploading - no signature
+        _release("dev"),  # the old rolling prerelease
+        _release("v1.2.4"),  # a release made after the newest dev build of it...
+        _release("v1.2.4-dev.9"),
+        _release("v1.2.5-dev.1"),  # ...and one published out of order
+    ])
+    assert updater.newest_release_tag("me/fork") == "v1.2.5-dev.1"
+    _serve_releases(monkeypatch, [_release("v1.2.4-dev.9"), _release("v1.2.4")])
+    assert updater.newest_release_tag("me/fork") == "v1.2.4"
+
+
+@pytest.mark.parametrize("answer", [[], [_release("dev")], {"message": "API rate limit exceeded"}])
+def test_the_latest_channel_with_nothing_to_offer_is_an_update_error(monkeypatch, answer):
+    _serve_releases(monkeypatch, answer)
+    with pytest.raises(updater.UpdateError, match="no release"):
+        updater.newest_release_tag("me/fork")
+
+
+def test_github_refusing_the_release_list_is_an_update_error(monkeypatch):
+    def refused(url, timeout, max_bytes):
+        raise urllib.error.HTTPError(url, 403, "rate limit exceeded", {}, None)
+
+    monkeypatch.setattr(updater, "_read_url", refused)
+    with pytest.raises(updater.UpdateError, match="403"):
+        updater.manifest_url({"source_repo": "me/fork", "update_channel": "latest"})
 
 
 def test_repo_from_url_accepts_github_links():

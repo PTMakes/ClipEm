@@ -28,15 +28,17 @@
 #                  first (the build info records it)
 #   --no-upload    stop after step 3 - for a dry run; nothing is published
 #   --auto-upload  answer yes to the "Upload ... now?" question (the draft
-#                  release, or the dev prerelease with --dev) so the run
+#                  release, or the dev build's prerelease with --dev) so the run
 #                  needs no terminal for it. The final "Push main and
 #                  publish" question is still asked: that one goes live.
 #   --skip-windows-tests  don't run the tests on the Windows VM - needed
 #                  when it's off or nobody is logged in on it, which
 #                  otherwise stops the release (test-windows.sh)
 #   --dev          a test build of HEAD for the "Latest" update channel:
-#                  version <next>-dev.<UTC timestamp>, uploaded over the
-#                  rolling "dev" prerelease. Nothing is committed and the
+#                  version <next>-dev.<UTC timestamp>, published as its own
+#                  prerelease v<version> (releases are immutable, so each
+#                  dev build gets a new one; older dev prereleases beyond
+#                  the newest 10 are deleted). Nothing is committed and the
 #                  website isn't touched; installs on the "Releases"
 #                  channel never see it.
 set -euo pipefail
@@ -260,10 +262,8 @@ else
 fi
 if [[ "$DEV" == 1 ]]; then
   new_version="$new_version-dev.$(date -u +%Y%m%d%H%M)"
-  TAG="dev"
-else
-  TAG="v$new_version"
 fi
+TAG="v$new_version"
 
 # What's new is written by hand in release_notes.json: shown in the update
 # prompts and the GitHub release. A dev build shows its coming version's.
@@ -329,7 +329,8 @@ if [[ -n "$PRE_COMMIT_MSG" ]]; then
 fi
 
 # --- 2. Build --------------------------------------------------------------
-RELEASE_DIR="$DIST_DIR/$TAG"
+# Dev builds share one folder, so they don't pile up.
+if [[ "$DEV" == 1 ]]; then RELEASE_DIR="$DIST_DIR/dev"; else RELEASE_DIR="$DIST_DIR/$TAG"; fi
 rm -rf "$RELEASE_DIR"
 mkdir -p "$RELEASE_DIR"
 
@@ -503,7 +504,7 @@ RELEASE_FILES=(
   "$RELEASE_DIR/clipem-latest.json" "$RELEASE_DIR/clipem-latest.json.sig"
 )
 # Nothing has left this machine yet - ask before anything does.
-if [[ "$DEV" == 1 ]]; then upload_target="the \"dev\" prerelease"; else upload_target="a draft GitHub release $TAG"; fi
+if [[ "$DEV" == 1 ]]; then upload_target="a new GitHub prerelease $TAG"; else upload_target="a draft GitHub release $TAG"; fi
 if [[ "$AUTO_UPLOAD" == 1 ]]; then
   answer=y
   echo "--auto-upload: uploading $new_version to $upload_target without asking."
@@ -518,7 +519,7 @@ if [[ ! "$answer" =~ ^[Yy] ]]; then
   exit 0
 fi
 if [[ "$DEV" == 1 ]]; then
-  step "Uploading dev build $new_version to the \"dev\" prerelease"
+  step "Publishing dev build $new_version as prerelease $TAG"
   python3 "$SCRIPT_DIR/release/release_common.py" upload --commit "$BUILD_COMMIT" "$new_version" "${RELEASE_FILES[@]}"
   end_step
   echo
