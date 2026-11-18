@@ -4,24 +4,32 @@ editor-screenshot.webp) and on the setup wizard's Clip Editor page
 (App/App/Shared/Installer/editor-screenshot*.png).
 
 The real editor (tray-widget/clip_browser.py's server and page) is run on a
-few generated sample clips and captured with headless Chromium - nothing of
-the user's own clips, settings or caches is read or written.
+few generated sample clips and captured in ClipEm's own editor window - the
+pinned Electron (Chromium) Setup installs, through Dev/devtools.py, headless
+on Linux - so it shows the editor as users see it. Nothing of the user's own
+clips, settings or caches is read or written.
 
   --if-changed  only retake it when the editor's page (clip_browser/*, clip_browser.py) or
                 this script changed since the last screenshot - release.sh
                 runs it this way. EDITOR_HASH_FILE records what it was taken of.
 
-Needs ffmpeg, Chromium (or Chrome) and Pillow."""
+  --out PNG     save just the capture there, and leave the screenshots be
+
+Needs ffmpeg, ClipEm's editor window (run Setup, or set CLIPEM_EDITOR_WINDOW)
+and Pillow."""
 
 import argparse
+import base64
 import datetime
 import hashlib
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
 import threading
+import time
+
+import devtools
 
 DEV_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(DEV_DIR)
@@ -41,6 +49,13 @@ WINDOW = (1600, 900)
 SCALE = 2  # captured at 2x, so the website's copy is sharp on HiDPI screens
 WEBSITE_WIDTH = 2000
 SHOWN_FOLDER = "~/Videos/Clips"
+# Every thumbnail and waveform in, the clip ready to play: what's shown.
+READY = ("typeof state !== 'undefined' && state.clips.length === %d && !!state.selected && !!ed.info"
+         " && state.clips.every((clip) => clip.duration)"
+         " && ed.info.tracks.every((t) => ed.peaks[t.index]) && player.readyState >= 2"
+         " && [...document.images].every((img) => img.complete)")
+READY_SECONDS = 60
+SETTLE_SECONDS = 1.5  # for the last of it to be drawn
 
 # (video source, minutes past 21:00) - the newest clip is the one opened.
 CLIPS = [
@@ -73,14 +88,6 @@ def editor_hash():
         with open(path, "rb") as f:
             digest.update(f.read())
     return digest.hexdigest()
-
-
-def find_chromium():
-    for name in ("chromium", "chromium-browser", "google-chrome", "google-chrome-stable"):
-        path = shutil.which(name)
-        if path:
-            return path
-    sys.exit("Chromium or Google Chrome is needed to take the editor screenshot.")
 
 
 def encode(path, source, tracks, minute):
@@ -141,17 +148,35 @@ def capture(work, out_png):
                                    exports_path=os.path.join(cache, "exports.json")),
     )
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    chromium = find_chromium()
+    exe = devtools.editor_window_path()
+    if not exe:
+        sys.exit("ClipEm's editor window is needed to take the editor screenshot - run Setup, "
+                 "or set CLIPEM_EDITOR_WINDOW.")
+    window = tools = None
     try:
-        # The first load makes the thumbnails and waveforms, the second shows them all.
-        for _ in range(2):
-            subprocess.run([
-                chromium, "--headless=new", "--no-sandbox", "--hide-scrollbars", "--mute-audio",
-                f"--user-data-dir={os.path.join(work, 'profile')}", f"--window-size={WINDOW[0]},{WINDOW[1]}",
-                f"--force-device-scale-factor={SCALE}", "--virtual-time-budget=15000",
-                f"--screenshot={out_png}", server.launch_url,
-            ], check=True, timeout=180, capture_output=True)
+        window, tools = devtools.start_editor_window(server.url, os.path.join(work, "profile"), exe)
+        tools.call("Emulation.setDeviceMetricsOverride", width=WINDOW[0], height=WINDOW[1],
+                   deviceScaleFactor=SCALE, mobile=False)
+        tools.call("Emulation.setScrollbarsHidden", hidden=True)
+        # The first load makes the thumbnails (and learns the clips' lengths),
+        # the second shows them all.
+        for load in range(2):
+            if load:
+                tools.call("Page.reload")
+                time.sleep(SETTLE_SECONDS)
+            if not tools.wait_for(READY % len(CLIPS), seconds=READY_SECONDS):
+                sys.exit("The editor didn't finish loading the sample clips.")
+        time.sleep(SETTLE_SECONDS)
+        shot = tools.call("Page.captureScreenshot", format="png", captureBeyondViewport=False)
+        with open(out_png, "wb") as f:
+            f.write(base64.b64decode(shot["data"]))
+    except RuntimeError as exc:
+        sys.exit(str(exc))
     finally:
+        if tools:
+            tools.close()
+        if window:
+            devtools.stop(window)
         server.shutdown()
 
 
@@ -169,7 +194,13 @@ def save(png):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--if-changed", action="store_true")
+    parser.add_argument("--out")
     args = parser.parse_args()
+    if args.out:
+        with tempfile.TemporaryDirectory(prefix="clipem-screenshot-") as work:
+            capture(work, args.out)
+        print(f"Wrote {args.out}")
+        return
     current = editor_hash()
     if args.if_changed and all(os.path.exists(path) for path in [WEBSITE_OUT, *INSTALLER_OUTS]):
         try:

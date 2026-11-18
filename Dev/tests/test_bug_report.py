@@ -83,9 +83,9 @@ def temp_zips(install, monkeypatch):
     paths = []
     create = bug_report.create_bug_report
 
-    def recording_create(dest):
+    def recording_create(dest, error=None):
         paths.append(dest)
-        return create(dest)
+        return create(dest, error)
 
     monkeypatch.setattr(bug_report, "create_bug_report", recording_create)
     return paths
@@ -266,3 +266,25 @@ def test_log_viewer_reads_each_log_on_its_own(install, request):
     root.update()
     assert text.get("1.0", "end").strip() == "saved"
     root.destroy()
+
+
+def test_the_error_a_report_was_sent_from_is_kept_redacted(install, temp_zips, monkeypatch):
+    sent = {}
+    monkeypatch.setattr(bug_report, "_post", lambda url, body, content_type: sent.update(
+        parts=_upload_parts(body, content_type)) or {"id": "x"})
+    bug_report.send_bug_report("It broke", error=f"Export failed: password {PASSWORD}")
+    with zipfile.ZipFile(io.BytesIO(sent["parts"]["logs"])) as zf:
+        error = zf.read("error.txt").decode()
+    assert error.startswith("Export failed: password") and PASSWORD not in error
+    dest = str(install / "plain.zip")
+    bug_report.create_bug_report(dest)
+    with zipfile.ZipFile(dest) as zf:
+        assert "error.txt" not in zf.namelist()  # Settings' own report: no error to keep
+
+
+def test_a_report_from_an_error_starts_with_it_without_the_home_folder(monkeypatch, tmp_path):
+    import bug_report_dialog
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    text = bug_report_dialog.starting_description(f"Couldn't write {tmp_path}{os.sep}Videos{os.sep}a.mp4")
+    assert str(tmp_path) not in text and f"~{os.sep}Videos{os.sep}a.mp4" in text

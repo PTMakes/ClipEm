@@ -1,20 +1,19 @@
-"""The clip editor's page itself (tray-widget/clip_browser/*.js), run in a
-headless Chromium against the real server - what the Python tests of the
-server can't see: which file the page actually plays. Skipped where there's
-no Chromium (the Windows VM)."""
+"""The clip editor's page itself (tray-widget/clip_browser/*.js), run in
+ClipEm's own editor window - the pinned Electron Setup installs
+(Installer/editor_window.py), running tray-widget/editor-window/ - against the
+real server: what the Python tests of the server can't see, such as which file
+the page actually plays. Headless on Linux (Ozone's headless platform); on
+Windows it opens on the desktop, so the Windows VM runs these in the
+logged-in session (Dev/test-windows.sh). Skipped where no editor window is
+installed: CLIPEM_EDITOR_WINDOW can point at one (Dev/devtools.py)."""
 
-import base64
 import json
 import os
 import shutil
-import socket
-import struct
 import subprocess
 import sys
 import threading
 import time
-import urllib.parse
-import urllib.request
 
 import pytest
 from conftest import TRAY_WIDGET_DIR
@@ -23,86 +22,12 @@ sys.path.insert(0, TRAY_WIDGET_DIR)
 
 import clip_browser  # noqa: E402
 
-CHROMIUM = next((shutil.which(name) for name in ("chromium", "chromium-browser", "google-chrome", "chrome")
-                 if shutil.which(name)), None)
+import devtools  # noqa: E402 - Dev/devtools.py
+
+EDITOR_WINDOW = devtools.editor_window_path()
 FFMPEG = shutil.which("ffmpeg")
-pytestmark = pytest.mark.skipif(not (CHROMIUM and FFMPEG), reason="needs Chromium and ffmpeg")
-
-
-class DevTools:
-    """Just enough of the DevTools protocol (over a WebSocket, standard
-    library only) to run JavaScript in a page."""
-
-    def __init__(self, ws_url):
-        url = urllib.parse.urlparse(ws_url)
-        self.sock = socket.create_connection((url.hostname, url.port), timeout=10)
-        key = base64.b64encode(os.urandom(16)).decode()
-        self.sock.sendall((f"GET {url.path} HTTP/1.1\r\nHost: {url.netloc}\r\nUpgrade: websocket\r\n"
-                           f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
-                          .encode())
-        response = b""
-        while b"\r\n\r\n" not in response:
-            response += self.sock.recv(1)
-        assert b" 101 " in response.split(b"\r\n")[0]
-        self.next_id = 0
-
-    def _send(self, text):
-        data = text.encode()
-        mask = os.urandom(4)
-        header = bytes([0x81])
-        if len(data) < 126:
-            header += bytes([0x80 | len(data)])
-        elif len(data) < 65536:
-            header += bytes([0x80 | 126]) + struct.pack(">H", len(data))
-        else:
-            header += bytes([0x80 | 127]) + struct.pack(">Q", len(data))
-        self.sock.sendall(header + mask + bytes(b ^ mask[i % 4] for i, b in enumerate(data)))
-
-    def _exact(self, count):
-        data = b""
-        while len(data) < count:
-            chunk = self.sock.recv(count - len(data))
-            if not chunk:
-                raise ConnectionError("DevTools closed")
-            data += chunk
-        return data
-
-    def _receive(self):
-        message = b""
-        while True:
-            first, second = self._exact(2)
-            length = second & 0x7F
-            if length == 126:
-                length = struct.unpack(">H", self._exact(2))[0]
-            elif length == 127:
-                length = struct.unpack(">Q", self._exact(8))[0]
-            message += self._exact(length)
-            if first & 0x80:
-                return json.loads(message)
-
-    def js(self, expression):
-        """The value of a JavaScript expression (awaited if it's a promise)."""
-        self.next_id += 1
-        self._send(json.dumps({"id": self.next_id, "method": "Runtime.evaluate", "params": {
-            "expression": expression, "awaitPromise": True, "returnByValue": True}}))
-        while True:
-            message = self._receive()
-            if message.get("id") == self.next_id:
-                result = message["result"]
-                if "exceptionDetails" in result:
-                    raise AssertionError(result["exceptionDetails"])
-                return result["result"].get("value")
-
-    def wait_for(self, expression, seconds=15):
-        deadline = time.monotonic() + seconds
-        while True:
-            value = self.js(expression)
-            if value or time.monotonic() > deadline:
-                return value
-            time.sleep(0.1)
-
-    def close(self):
-        self.sock.close()
+pytestmark = pytest.mark.skipif(not (EDITOR_WINDOW and FFMPEG),
+                                reason="needs ClipEm's editor window (run Setup) and ffmpeg")
 
 
 @pytest.fixture
@@ -113,38 +38,24 @@ def page(tmp_path):
     def open_page(folder):
         srv = clip_browser.ClipBrowserServer(lambda: str(folder), token="tok")
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        with socket.socket() as s:
-            s.bind(("127.0.0.1", 0))
-            port = s.getsockname()[1]
-        chrome = subprocess.Popen([CHROMIUM, "--headless=new", f"--remote-debugging-port={port}",
-                                   f"--user-data-dir={tmp_path / 'profile'}", "--no-first-run", "--mute-audio",
-                                   "--autoplay-policy=no-user-gesture-required", srv.url],
-                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        opened.append((srv, chrome))
-        deadline = time.monotonic() + 20
-        while True:
-            try:
-                with urllib.request.urlopen(f"http://127.0.0.1:{port}/json", timeout=2) as res:
-                    targets = [t for t in json.load(res) if t["type"] == "page"]
-                if targets:
-                    break
-            except OSError:
-                pass
-            if time.monotonic() > deadline:
-                pytest.fail("Chromium didn't start")
-            time.sleep(0.2)
-        tools = DevTools(targets[0]["webSocketDebuggerUrl"])
+        opened.append((srv, None))
+        try:
+            window, tools = devtools.start_editor_window(srv.url, str(tmp_path / f"profile{len(opened)}"),
+                                                         EDITOR_WINDOW)
+        except RuntimeError as exc:
+            pytest.fail(str(exc))
+        opened.append((None, window))
         opened.append((None, tools))
         assert tools.wait_for("typeof state !== 'undefined' && state.clips.length > 0"), "the page listed no clips"
         return tools
 
     yield open_page
     for srv, other in reversed(opened):
-        if srv is None:
+        if isinstance(other, devtools.DevTools):
             other.close()
+        elif other is not None:
+            devtools.stop(other)
         else:
-            other.kill()
-            other.wait()
             srv.shutdown()
             srv.server_close()
 
@@ -289,3 +200,23 @@ def test_the_filters_narrow_the_clip_list(tmp_path, page):
     old_day = tools.js("[...$('filter-date').querySelectorAll('optgroup')[1].children].at(-1).value")
     pick("filter-date", old_day)
     assert tools.js(shown) == ["Replay-2026-10-20-10-00-00-Sober.mp4"]
+
+
+def test_an_error_on_the_status_line_can_be_copied_and_reported(tmp_path, page, monkeypatch):
+    started = []
+    monkeypatch.setattr(clip_browser, "open_bug_report", lambda title, message: started.append((title, message)))
+    post_clip_save(tmp_path)
+    tools = page(tmp_path)
+    assert tools.js("$('status-actions').hidden")
+    tools.js("setStatus('Export failed: ffmpeg failed (analysing)', true)")
+    assert not tools.js("$('status-actions').hidden")
+    tools.js("$('status-copy').click()", gesture=True)
+    assert tools.wait_for("$('status-copy').textContent !== 'Copy'"), "Copy did nothing"
+    assert tools.js("$('status-copy').textContent") == "Copied"
+    tools.js("$('status-report').click()")
+    deadline = time.monotonic() + 5
+    while not started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert started == [("ClipEm Editor", "Export failed: ffmpeg failed (analysing)")]
+    tools.js("setStatus('Exported.')")
+    assert tools.js("$('status-actions').hidden")  # not for news that isn't an error

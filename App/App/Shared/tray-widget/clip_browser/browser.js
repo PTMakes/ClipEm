@@ -58,12 +58,52 @@ async function api(path, body) {
   return data;
 }
 
+// The error the status line shows, for its Copy and Send Bug Report.
+let statusError = null;
+
 function setStatus(message, isError = false) {
   const status = $("status");
   status.textContent = message || "";
   status.title = message || "";
   status.classList.toggle("error", isError);
+  statusError = isError && message ? message : null;
+  $("status-actions").hidden = !statusError;
+  $("status-copy").textContent = "Copy";
 }
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (err) { // no clipboard API in this window: the old way
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.style.position = "fixed";
+    area.style.opacity = "0";
+    document.body.appendChild(area);
+    area.select();
+    const copied = document.execCommand("copy");
+    area.remove();
+    if (!copied) throw err;
+  }
+}
+
+$("status-copy").addEventListener("click", async () => {
+  if (!statusError) return;
+  try {
+    await copyText(statusError);
+    $("status-copy").textContent = "Copied";
+  } catch (err) {
+    $("status-copy").textContent = "Couldn't copy";
+  }
+});
+
+$("status-report").addEventListener("click", () => {
+  if (!statusError) return;
+  const message = statusError;
+  // ClipEm's Send Bug Report window opens, this error starting its description.
+  api("api/bug-report", { title: "ClipEm Editor", message })
+    .catch((err) => setStatus(`${message} (and Send Bug Report didn't open: ${err.message})`, true));
+});
 
 // ---------------------------------------------------------------------------
 // Sidebar
@@ -251,7 +291,7 @@ async function deleteClip(name) {
     setStatus(`Moved ${name} to the ${TRASH_NAME}.`);
   } catch (err) {
     await loadClips();
-    window.alert(`Couldn't delete ${name}: ${err.message}`);
+    setStatus(`Couldn't delete ${name}: ${err.message}`, true);
   }
 }
 

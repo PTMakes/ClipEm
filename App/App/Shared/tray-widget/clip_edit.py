@@ -965,7 +965,7 @@ def _hardware_input_args(export):
     return ["-vaapi_device", export["device"]] if export["encoder"] == "vaapi" and export.get("device") else []
 
 
-def build_graph(project, info, video_height=None, fps=None, audio="tracks", with_video=True, upload=False):
+def build_graph(project, info, video_height=None, audio="tracks", with_video=True, upload=False):
     """(filter_complex, video label, [audio labels]) for an export.
 
     audio: "tracks" - the rebuilt mix, then every other track (MKV);
@@ -998,8 +998,6 @@ def build_graph(project, info, video_height=None, fps=None, audio="tracks", with
                         f":d={project['fade_out']:g}")
         if video_height:
             post.append(f"scale=-2:{int(video_height)}:flags=lanczos")
-        if fps:
-            post.append(f"fps={fps:g}")
         post += ["format=nv12", "hwupload"] if upload else ["format=yuv420p"]
         vout = graph.label("vout")
         graph.add([video], post, [vout])
@@ -1181,28 +1179,31 @@ def custom_settings(info, height, fps, video_kbps):
 
 def two_pass_commands(ffmpeg, source, project, info, settings, out_mp4, passlog, export=None):
     """Two-pass H.264 at settings' bitrate, so the size is predictable - with
-    x264: hardware encoders make one pass, which lands near it."""
+    x264: hardware encoders make one pass, which lands near it. A lower
+    frame rate is the output's -r, not the fps filter: ClipEm's own ffmpeg
+    builds don't have that filter (Dev/build/build-ffmpeg.sh)."""
     export = export or DEFAULT_EXPORT
     ffmpeg = export.get("ffmpeg") or ffmpeg
     height = settings["height"] if settings["height"] != cropped_info(info, project)["height"] else None
     fps = settings["fps"] if info["fps"] and settings["fps"] < info["fps"] - 0.5 else None
+    rate = ["-r", f"{fps:g}"] if fps else []  # both passes, so pass 2 matches pass 1's stats
     if export["encoder"] != "x264":
         inputs = _hardware_input_args(export) + input_args(source, project)
-        graph, vout, audio_outs = build_graph(project, info, video_height=height, fps=fps, audio="mix",
+        graph, vout, audio_outs = build_graph(project, info, video_height=height, audio="mix",
                                               upload=export["encoder"] == "vaapi")
         cmd = _base(ffmpeg) + [*inputs, "-filter_complex", graph, "-map", f"[{vout}]"]
         for label in audio_outs:
             cmd += ["-map", f"[{label}]"]
-        cmd += _video_args(export, settings["video_kbps"])
+        cmd += rate + _video_args(export, settings["video_kbps"])
         if audio_outs:
             cmd += ["-c:a", "aac", "-b:a", f"{settings['audio_kbps'] or DISCORD_AUDIO_KBPS}k"]
         return [(cmd + ["-movflags", "+faststart", "-f", "mp4", out_mp4], "Encoding", 1.0)]
-    video_args = _video_args(export, settings["video_kbps"]) + ["-passlogfile", passlog]
+    video_args = rate + _video_args(export, settings["video_kbps"]) + ["-passlogfile", passlog]
     inputs = input_args(source, project)
-    graph1, vout1, _ = build_graph(project, info, video_height=height, fps=fps, audio=None)
+    graph1, vout1, _ = build_graph(project, info, video_height=height, audio=None)
     pass1 = _base(ffmpeg) + [*inputs, "-filter_complex", graph1, "-map", f"[{vout1}]"] + video_args + [
         "-pass", "1", "-an", "-f", "null", os.devnull]
-    graph2, vout2, audio_outs = build_graph(project, info, video_height=height, fps=fps, audio="mix")
+    graph2, vout2, audio_outs = build_graph(project, info, video_height=height, audio="mix")
     pass2 = _base(ffmpeg) + [*inputs, "-filter_complex", graph2, "-map", f"[{vout2}]"]
     for label in audio_outs:
         pass2 += ["-map", f"[{label}]"]

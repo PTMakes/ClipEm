@@ -334,7 +334,7 @@ def test_every_filter_output_is_used_exactly_once():
                 project["tracks"][index]["muted"] = True
         project["keep"] = [[0.0, 3.0], [4.0, 6.0], [7.0, 10.0]]
         project["tracks"][-1]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0, "channel": 0}]
-        graph, vout, outs = clip_edit.build_graph(project, info, video_height=720, fps=30, audio=audio)
+        graph, vout, outs = clip_edit.build_graph(project, info, video_height=720, audio=audio)
         produced, consumed = [], []
         for line in graph.split(";"):
             match = re.fullmatch(r"((?:\[[^\]]+\])+)([^\[]+)((?:\[[^\]]+\])*)", line)
@@ -1037,3 +1037,88 @@ def test_a_failed_hardware_export_falls_back(tmp_path):
     while job.running() and time.monotonic() < deadline:
         time.sleep(0.01)
     assert ran == ["hardware", "x264"] and job.status["state"] == "done" and final.exists()
+
+
+# --- ClipEm's own ffmpeg builds -----------------------------------------------
+
+def _built_filters():
+    """The filters Dev/build/build-ffmpeg.sh builds in (--enable-filter) or
+    checks the build has (check_has -filters)."""
+    import re
+
+    from conftest import DEV_DIR
+    with open(os.path.join(DEV_DIR, "build", "build-ffmpeg.sh"), encoding="utf-8") as script:
+        text = script.read()
+    names = set()
+    for listed in re.findall(r"--enable-filter=(\S+)", text):
+        names.update(listed.split(","))
+    for listed in re.findall(r"^check_has -filters (.+)$", text, re.MULTILINE):
+        names.update(listed.split())
+    return names
+
+
+def _filter_names(graph):
+    """Every filter a filtergraph uses: split into chains and filters at
+    the ; and , outside quotes, brackets and parentheses."""
+    names, part, depth, quoted, escaped = [], "", 0, False, False
+    for char in graph + ";":
+        if escaped:
+            escaped = False
+        elif char == "\\":
+            escaped = True
+        elif char == "'":
+            quoted = not quoted
+        elif not quoted and char in "([":
+            depth += 1
+        elif not quoted and char in ")]":
+            depth -= 1
+        elif not quoted and not depth and char in ",;":
+            name = part.lstrip("[]").split("=", 1)[0]
+            name = name.split("]")[-1] if "]" in name else name
+            if name.strip():
+                names.append(name.strip())
+            part = ""
+            continue
+        part += char
+    return names
+
+
+def _graphs(cmd):
+    return [cmd[i + 1] for i, arg in enumerate(cmd[:-1]) if arg in ("-filter_complex", "-vf", "-af")]
+
+
+def test_exports_only_use_filters_clipems_ffmpeg_has():
+    # A Discord export of a 60 fps clip once failed on ClipEm's ffmpeg
+    # ("No option name near '30'"): it asked for the fps filter.
+    built = _built_filters()
+    assert {"scale", "amix", "overlay"} <= built and "fps" not in built
+    info = _info()
+    sixty = dict(info, fps=60.0)
+    project = clip_edit.default_project(sixty)
+    project.update(keep=[[0.0, 3.0], [4.0, 10.0]], crop={"x": 0, "y": 0, "w": 1280, "h": 720},
+                   fade_in=1.0, fade_out=1.0, master_db=3.0)
+    project["tracks"][1].update(level=True, gate_db=-48, volume_db=-3)
+    project["tracks"][2]["regions"] = [{"start": 1.0, "end": 2.0, "db": -6.0}]
+    project = clip_edit.normalize_project(project, sixty)
+    busy = layered(layer("video", item("pic", fade_in=0.5), item("movie", start=3)),
+                   layer("audio", item("song", last=5)), clip_start=1.0, fade_in=1.0)
+    custom = clip_edit.custom_settings(clip_edit.cropped_info(sixty, project), 720, 30, 8000)
+    commands = []
+    for export in (X264, dict(X264, encoder="nvenc"), dict(X264, encoder="amf")):
+        for clip, clip_info in ((project, sixty), (busy, WIDE)):
+            commands += clip_edit.discord_commands("ffmpeg", "c.mkv", clip, clip_info, "o.mp4", "log", export)
+            commands += clip_edit.full_quality_commands("ffmpeg", "c.mkv", clip, clip_info, "o.mkv", "o.mp4", export)
+        commands += clip_edit.two_pass_commands("ffmpeg", "c.mkv", project, sixty, custom, "o.mp4", "log", export)
+    commands = [cmd for cmd, _label, _weight in commands]
+    commands += [clip_edit.track_audio_command("ffmpeg", "c.mkv", 1, "aac", "o.m4a", level=True, gate_db=-48,
+                                               volume_db=-3),
+                 clip_edit.peaks_command("ffmpeg", "c.mkv", 1, level=True, gate_db=-48, volume_db=-3),
+                 clip_edit.asset_preview_command("ffmpeg", "a.webm", "o.mp4")]
+    used = {name for cmd in commands for graph in _graphs(cmd) for name in _filter_names(graph)}
+    assert {"scale", "crop", "fade", "overlay", "amix", "agate", "loudnorm"} <= used  # it saw them all
+    assert used <= built, f"not in ClipEm's ffmpeg builds: {sorted(used - built)}"
+    for export in (X264, dict(X264, encoder="nvenc")):  # 60 fps halved with -r: both passes, or the one
+        steps = clip_edit.discord_commands("ffmpeg", "c.mkv", project, sixty, "o.mp4", "log", export)
+        assert all(cmd[cmd.index("-r") + 1] == "30" for cmd, _label, _weight in steps)
+    thirty = clip_edit.discord_commands("ffmpeg", "c.mkv", busy, WIDE, "o.mp4", "log")
+    assert not any("-r" in cmd for cmd, _label, _weight in thirty)  # already 30 fps: left as it is

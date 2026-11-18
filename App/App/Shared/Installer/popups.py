@@ -9,7 +9,9 @@ Tk's own message boxes size themselves to their text (tall and narrow for a
 long message), so this module also has drop-in replacements for the
 tkinter.messagebox and simpledialog.askstring functions ClipEm uses, built
 from the dark_theme widgets: `import popups as messagebox` and the call
-sites stay the same, with the same results."""
+sites stay the same, with the same results. Error popups (showerror) also
+have Copy, for the error's text, and Send Bug Report... (bug_report_dialog.py),
+which starts a report with it."""
 
 import tkinter as tk
 
@@ -68,10 +70,11 @@ def place(window, parent=None):
     window.geometry(_centred(parent, window.winfo_reqwidth(), window.winfo_reqheight()))
 
 
-def _dialog(title, message, buttons, parent, default, cancel, entry_value=None):
+def _dialog(title, message, buttons, parent, default, cancel, entry_value=None, actions=()):
     """A modal popup with message and buttons [(label, result)]; returns the
     pressed button's result (cancel for Escape or the close button), or the
-    entry's text in its place when entry_value is given."""
+    entry's text in its place when entry_value is given. actions: buttons
+    [(label, on_press(dialog, button))] before those, which leave it open."""
     owner = _root(parent)
     px = _px(parent)
     dialog = tk.Toplevel(owner)
@@ -102,9 +105,14 @@ def _dialog(title, message, buttons, parent, default, cancel, entry_value=None):
         state["result"] = result
         dialog.destroy()
 
+    for label, on_press in actions:
+        button = tk.Button(row, text=label, width=max(10, len(label)))
+        button.config(command=lambda b=button, f=on_press: f(dialog, b))
+        button.pack(side="left", padx=(px(8), 0))
+
     focus = entry
     for label, result in buttons:
-        button = tk.Button(row, text=label, width=10, command=lambda r=result: finish(r))
+        button = tk.Button(row, text=label, width=max(10, len(label)), command=lambda r=result: finish(r))
         button.pack(side="left", padx=(px(8), 0))
         if result == default and focus is None:
             focus = button
@@ -123,7 +131,42 @@ def showinfo(title, message, parent=None, **_options):
     return _dialog(title, message, [("OK", "ok")], parent, "ok", "ok")
 
 
-showwarning = showerror = showinfo
+showwarning = showinfo
+
+
+def error_text(title, message):
+    """An error popup as Copy and a bug report have it."""
+    return f"{title}: {message}" if title else message
+
+
+def _copy(text):
+    def on_press(dialog, button):
+        dialog.clipboard_clear()
+        dialog.clipboard_append(text)
+        dialog.update()  # X11 hands the clipboard over only from the event loop
+        button.config(text="Copied")
+    return on_press
+
+
+def _can_report():
+    try:
+        import bug_report_dialog  # noqa: F401 - imports bug_report, file_dialogs... - not everywhere popups is
+    except Exception:
+        return False
+    return True
+
+
+def showerror(title, message, parent=None, report=True, **_options):
+    """An error: OK, Copy (the title and message) and, unless report is
+    False (the bug report window's own errors), Send Bug Report... - which
+    opens that window for it once this closes, and returns once it has."""
+    error = error_text(title, message)
+    buttons = [("Send Bug Report...", "report")] if report and _can_report() else []
+    result = _dialog(title, message, buttons + [("OK", "ok")], parent, "ok", "ok", actions=[("Copy", _copy(error))])
+    if result == "report":
+        import bug_report_dialog
+        bug_report_dialog.open_bug_report(_root(parent), error, wait=True)
+    return "ok"
 
 
 def askchoice(title, message, buttons, default, parent=None):

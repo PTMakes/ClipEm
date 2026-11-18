@@ -179,14 +179,18 @@ def read_log(path, max_bytes=VIEW_MAX_BYTES):
     return _redact(text, _secrets())
 
 
-def create_bug_report(dest_path):
+def create_bug_report(dest_path, error=None):
     """Writes the report zip to dest_path. Returns how many log files it
-    holds. A partly written zip is removed if anything fails."""
+    holds. A partly written zip is removed if anything fails. error: the
+    error popup the report was sent from, kept as error.txt - exactly, as
+    the description it starts is the user's to edit."""
     secrets = _secrets()
     files = collected_files()
     try:
         with zipfile.ZipFile(dest_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
             zf.writestr("system-info.txt", _redact(system_info(), secrets))
+            if error:
+                zf.writestr("error.txt", _redact(error.rstrip() + "\n", secrets))
             for arcname, path in files:
                 try:
                     zf.writestr(arcname, _redact(_read_text(path), secrets))
@@ -250,16 +254,17 @@ def _http_error_message(exc):
     return f"The report server answered {exc.code}: {detail.get('error') or exc.reason}"
 
 
-def send_bug_report(description, url=None):
+def send_bug_report(description, url=None, error=None):
     """Makes the report zip and uploads it with the user's description.
-    Returns (report id, GitHub issue URL). Raises BugReportError."""
+    Returns (report id, GitHub issue URL). Raises BugReportError. error: as
+    create_bug_report()'s."""
     description = description.strip()
     if not description:
         raise BugReportError("Describe what happened first.")
     fd, zip_path = tempfile.mkstemp(prefix="ClipEm-bug-report-", suffix=".zip")
     os.close(fd)
     try:
-        create_bug_report(zip_path)
+        create_bug_report(zip_path, error)
         size = os.path.getsize(zip_path)
         if size > MAX_UPLOAD_BYTES:
             raise BugReportError(f"The logs are too large to send ({size / 1e6:.0f} MB). "

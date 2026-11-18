@@ -5,8 +5,9 @@
     "sections": {
       "New Features": [
         "Missing-audio detection now watches desktop audio too: if OBS hears nothing while an app is playing sound, ClipEm reopens it and tells you if that doesn't help.",
-        "The audio peak guard now turns a volume it lowered back up, 1 dB at a time, once the source stops clipping. One that keeps clipping stays down, and a volume you change by hand is left alone.",
-        "Full Clip Editor Filters - open the sidebar and filter down to any detected games, days, or clip types."
+        "The audio peak guard now turns a volume it lowered back up, 1 dB at a time, once the source stops clipping. A volume you change by hand is left alone.",
+        "Full Clip Editor Filters - open the sidebar and filter down to any detected games, days, or clip types.",
+        "Error popups and clip editor errors have Copy and Send Bug Report buttons."
       ],
       "Improvements": [
         "A silent mic is noticed after 1 minute instead of 2. ClipEm tries up to three fixes, including switching to your default device, then reminds you every 5 minutes until it's working, and tells you when it is.",
@@ -14,9 +15,11 @@
         "The bundled Python on Windows goes back from 3.12.16 to 3.12.10, the last version signed by python.org, because 3.12.16 set off Windows security errors. Updating moves Windows installs back to it."
       ],
       "Fixes": [
+        "Export for Discord works again on clips above 30 fps.",
         "Clips saved while the tray was closed/restarting/not connected to OBS are now still named and get their copies, without app tracks.",
         "A post-clip save that OBS never finishes is no longer mixed up with a later clip, and you're told it failed.",
-        "The clip sound now plays or stays quiet correctly when a post-clip save and another save happen close together."
+        "The clip sound now plays or stays quiet correctly when a post-clip save and another save happen close together.",
+        "Windows: a clip opened in the editor just after saving is still finished"
       ]
     }
   },

@@ -75,6 +75,7 @@ import ui_colors  # noqa: E402
 from autostart import applications_dir, window_desktop_entry, write_window_desktop_entry  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
+    LOG_DIR,
     SETTINGS_REQUEST_PATH,
     TRAY_LOCK_PATH,
     acquire_instance_lock,
@@ -756,6 +757,21 @@ def open_settings():
     return True
 
 
+BUG_REPORT_DIALOG_SCRIPT = os.path.join(INSTALLER_DIR, "bug_report_dialog.py")
+BUG_REPORT_MAX_CHARS = 4000  # of an error the page sends: far more than any it shows
+
+
+def open_bug_report(title, message):
+    """The page's "Send Bug Report" for an error it showed: ClipEm's Send Bug
+    Report window (bug_report_dialog.py), on its own - the page has no Tk."""
+    title = str(title or "")[:200]
+    message = str(message or "")[:BUG_REPORT_MAX_CHARS]
+    os.makedirs(LOG_DIR, exist_ok=True)
+    with open(os.path.join(LOG_DIR, "bug_report_dialog.stderr.log"), "wb") as stderr_file:
+        subprocess.Popen([sys.executable, BUG_REPORT_DIALOG_SCRIPT, "--title", title, "--message", message],
+                         stdin=subprocess.DEVNULL, stdout=stderr_file, stderr=stderr_file, **_no_window_kwargs())
+
+
 def public_asset(asset):
     """An asset as the page sees it: not where it's kept."""
     return {key: value for key, value in asset.items() if key != "path"}
@@ -1016,7 +1032,8 @@ class Handler(BaseHTTPRequestHandler):
         return source, int(number)
 
     def _send_file(self, path, cache=False):
-        size = os.path.getsize(path)
+        stat = os.stat(path)
+        size = stat.st_size
         content_type = CONTENT_TYPES.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
         try:
             byte_range = parse_range(self.headers.get("Range"), size)
@@ -1035,18 +1052,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command == "HEAD":
             return
+        # Opened for each chunk, and closed before it's sent: the player can
+        # hold a response open for minutes, and on Windows an open file can't
+        # be replaced - as a clip is when it's finished (stripped to its mix
+        # track) just after it's saved, maybe already open in the editor.
+        # Stopped short if it's replaced meanwhile, rather than send a mix of
+        # the two files: the player asks again, and gets the new one.
+        version = (stat.st_size, stat.st_mtime_ns)
+        position, remaining = start, length
         try:
-            with open(path, "rb") as f:
-                f.seek(start)
-                remaining = length
-                while remaining > 0:
-                    chunk = f.read(min(CHUNK_BYTES, remaining))
-                    if not chunk:
-                        break
-                    self.wfile.write(chunk)
-                    remaining -= len(chunk)
+            while remaining > 0:
+                try:
+                    with open(path, "rb") as f:
+                        now = os.fstat(f.fileno())
+                        if (now.st_size, now.st_mtime_ns) != version:
+                            break
+                        f.seek(position)
+                        chunk = f.read(min(CHUNK_BYTES, remaining))
+                except OSError:
+                    break  # gone or being replaced: the player asks again
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+                position += len(chunk)
+                remaining -= len(chunk)
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             pass  # the player seeked elsewhere and dropped this request
+        if remaining > 0:
+            self.close_connection = True  # short of its Content-Length: nothing more can follow on it
 
     # -- routes ---------------------------------------------------------------
 
@@ -1206,6 +1239,14 @@ class Handler(BaseHTTPRequestHandler):
                     self._json({"ok": True})
                 else:
                     self._json({"error": "Settings opens from ClipEm's tray icon, which isn't running."}, 409)
+            elif route == "api/bug-report":
+                try:
+                    open_bug_report(body.get("title"), body.get("message"))
+                except OSError as exc:
+                    log.warning(f"Couldn't open Send Bug Report: {exc}")
+                    self._json({"error": f"Couldn't open Send Bug Report: {exc}"}, 500)
+                    return
+                self._json({"ok": True})
             elif route == "api/asset-delete":
                 try:
                     self.server.editor.remove_asset(body.get("id"))

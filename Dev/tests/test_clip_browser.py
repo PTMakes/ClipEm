@@ -705,3 +705,38 @@ def test_a_video_the_window_cant_play_gets_a_preview_copy(tmp_path, name, copied
         assert info["video_codec"] == "h264" and info["height"] % 2 == 0 and abs(info["duration"] - 1) < 0.3
         editor.remove_asset(asset["id"])
         assert not os.path.exists(played)
+
+
+def test_send_bug_report_from_the_page_opens_the_report_window(server, monkeypatch, tmp_path):
+    started = []
+    monkeypatch.setattr(clip_browser, "LOG_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(clip_browser.subprocess, "Popen", lambda cmd, **kwargs: started.append(cmd))
+    status, _h, _body = _post(server, "api/bug-report", {"title": "ClipEm Editor", "message": "Export failed: x" * 1000})
+    assert status == 200 and len(started) == 1
+    cmd = started[0]
+    assert cmd[1] == clip_browser.BUG_REPORT_DIALOG_SCRIPT and os.path.isfile(cmd[1])
+    assert cmd[cmd.index("--title") + 1] == "ClipEm Editor"
+    assert len(cmd[cmd.index("--message") + 1]) == clip_browser.BUG_REPORT_MAX_CHARS
+
+
+def test_a_clip_being_played_can_be_replaced(server, monkeypatch, tmp_path):
+    # The player can hold a response open for minutes; on Windows, a clip open
+    # that long couldn't be finished (replaced) once it was saved.
+    import socket
+
+    size = 64 * 1024 * 1024  # far more than the sockets' buffers hold
+    monkeypatch.setattr(clip_browser, "CHUNK_BYTES", 64 * 1024)
+    clip = tmp_path / "clips" / "big.mp4"
+    clip.write_bytes(b"o" * size)
+    with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=5) as sock:
+        sock.sendall(b"GET /tok/media/big.mp4 HTTP/1.1\r\nHost: x\r\n\r\n")
+        received = sock.recv(4096)  # and no more for now: the server is left stuck sending the rest
+        assert b" 200 " in received.split(b"\r\n")[0]
+        time.sleep(0.5)
+        partial = tmp_path / "clips" / "big.mp4.partial"
+        partial.write_bytes(b"n" * 1000)
+        os.replace(partial, clip)  # what finishing a clip does
+        while data := sock.recv(1024 * 1024):
+            received += data
+    body = received.split(b"\r\n\r\n", 1)[1]
+    assert 0 < len(body) < size and set(body) == {ord("o")}  # stopped short, never the new file's bytes

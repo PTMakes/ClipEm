@@ -15,12 +15,10 @@ before it next starts OBS.
 
 import os
 import queue
-import subprocess
 import sys
 import threading
 import time
 import tkinter as tk
-import webbrowser
 from tkinter import ttk
 
 NO_HOTKEY = "None"  # the key choice for a hotkey that isn't set (obs_config.NO_HOTKEY)
@@ -48,7 +46,7 @@ INSTALLER_DIR = os.path.join(SHARED_DIR, "Installer")
 # because the bundled Windows Python's ._pth file keeps it off sys.path.
 sys.path.insert(0, SCRIPT_DIR)
 sys.path.insert(1, INSTALLER_DIR)
-import bug_report  # noqa: E402
+import bug_report_dialog  # noqa: E402
 import clip_move  # noqa: E402
 import color_picker  # noqa: E402
 import dark_theme  # noqa: E402
@@ -85,6 +83,7 @@ from autostart import (  # noqa: E402
     window_desktop_entry,
     write_window_desktop_entry,
 )
+from bug_report_dialog import reveal_file  # noqa: E402
 from clipem_common import (  # noqa: E402
     APP_DIR,
     OBS_RESTART_FLAG,
@@ -196,16 +195,6 @@ def restart_clipem_in_background(root, on_done, pending_message=UPDATE_PENDING_M
     dialog died with the tray before it could start run.py."""
     outlive_parent()
     run_in_background(root, lambda: restart_clipem(pending_message), on_done)
-
-
-def reveal_file(path):
-    """Shows path in the system's file manager (its folder, on Linux)."""
-    if sys.platform == "win32":
-        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", "-R", path])
-    else:
-        subprocess.Popen(["xdg-open", os.path.dirname(path)])
 
 
 def run_in_background(root, work, on_done):
@@ -1793,122 +1782,6 @@ def open_dialog(start_tab=None, highlight=()):
     # --- Troubleshooting: a bug report (sent, or saved as a zip), and a clean reinstall.
     section("Troubleshooting", TAB_SCRIPTS)
 
-    def on_bug_report():
-        dialog = tk.Toplevel(root)
-        dialog.title("Send Bug Report")
-        dialog.resizable(False, False)
-        dialog.transient(root)
-        body = tk.Frame(dialog, padx=px(16), pady=px(12))
-        body.pack(fill="both", expand=True)
-        tk.Label(
-            body, justify="left", wraplength=px(380),
-            text="What happened? What were you doing when it went wrong?",
-        ).pack(anchor="w")
-        description_text = tk.Text(body, width=52, height=8, wrap="word")
-        description_text.pack(anchor="w", fill="x", pady=(px(6), 0))
-        tk.Label(
-            body, fg=dark_theme.MUTED, justify="left", wraplength=px(380),
-            text=(
-                "Your description is posted publicly as a GitHub issue. ClipEm's and OBS's logs and "
-                "a summary of this install (versions, settings and folder paths) are uploaded "
-                "privately."
-            ),
-        ).pack(anchor="w", pady=(px(6), 0))
-
-        def set_sending(sending):
-            state = "disabled" if sending else "normal"
-            for child in dialog_buttons.winfo_children():
-                child.config(state=state)
-            description_text.config(state=state)
-            send_button.config(text="Sending..." if sending else "Send")
-
-        def on_save_instead():
-            dialog.destroy()
-            save_bug_report_to_file()
-
-        def on_send():
-            description = description_text.get("1.0", "end").strip()
-            if not description:
-                popups.showwarning("Send Bug Report", "Describe what happened first.", parent=dialog)
-                return
-            set_sending(True)
-            run_in_background(root, lambda: bug_report.send_bug_report(description), on_sent)
-
-        def on_sent(result, error):
-            if error is not None:
-                log.warning(f"Sending the bug report failed: {error}")
-                if not dialog.winfo_exists():
-                    popups.showerror("Send Bug Report", f"Couldn't send the bug report:\n{error}", parent=root)
-                    return
-                set_sending(False)
-                if popups.askyesno(
-                    "Send Bug Report",
-                    f"Couldn't send the bug report:\n{error}\n\nSave it to a file instead, to attach it "
-                    "to an issue or a message yourself?",
-                    parent=dialog,
-                ):
-                    on_save_instead()
-                return
-            report_id, issue_url = result
-            log.info(f"Bug report sent: {report_id} ({issue_url})")
-            if dialog.winfo_exists():
-                dialog.destroy()
-            if issue_url and popups.askyesno(
-                "Send Bug Report",
-                f"Thanks - the bug report was sent (report ID {report_id}).\n\nOpen the GitHub issue in your browser?",
-                parent=root,
-            ):
-                webbrowser.open(issue_url)
-            elif not issue_url:
-                popups.showinfo("Send Bug Report", f"Thanks - the bug report was sent (report ID {report_id}).",
-                                    parent=root)
-
-        dialog_buttons = tk.Frame(body)
-        dialog_buttons.pack(side="bottom", anchor="e", pady=(px(12), 0))
-        tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
-        tk.Button(dialog_buttons, text="Save to File Instead...", command=on_save_instead).pack(
-            side="left", padx=px(4))
-        send_button = tk.Button(dialog_buttons, text="Send", command=on_send, width=10)
-        send_button.pack(side="left", padx=px(4))
-        dialog.bind("<Escape>", lambda _event: dialog.destroy())
-        popups.place(dialog, root)
-        description_text.focus_set()
-        dialog.grab_set()
-
-    def save_bug_report_to_file():
-        path = file_dialogs.asksaveasfilename(
-            parent=root, title="Save Bug Report", initialdir=bug_report.default_save_dir(),
-            initialfile=bug_report.default_file_name(), defaultextension=".zip",
-            filetypes=[("Zip files", "*.zip")],
-        )
-        if not path:
-            return
-        bug_button.config(state="disabled")
-        run_in_background(
-            root, lambda: bug_report.create_bug_report(path),
-            lambda count, error: on_bug_report_done(path, count, error),
-        )
-
-    def on_bug_report_done(path, count, error):
-        bug_button.config(state="normal")
-        if error is not None:
-            log.warning(f"Bug report failed: {error}")
-            popups.showerror("Bug Report", f"Couldn't create the bug report:\n{error}", parent=root)
-            return
-        log.info(f"Bug report saved: {path} ({count} log files)")
-        if popups.askyesno(
-            "Bug Report",
-            f"Saved the bug report ({count} log files) to:\n{path}\n\n"
-            "It holds ClipEm's and OBS's logs and a summary of this install (versions, settings and "
-            "folder paths) - the websocket password is left out. Attach it to your bug report.\n\n"
-            "Show it in its folder?",
-            parent=root,
-        ):
-            try:
-                reveal_file(path)
-            except OSError as exc:
-                popups.showerror("Bug Report", f"Couldn't open the folder: {exc}", parent=root)
-
     def on_reinstall():
         dialog = tk.Toplevel(root)
         dialog.title("Reinstall ClipEm")
@@ -1972,7 +1845,8 @@ def open_dialog(start_tab=None, highlight=()):
 
     troubleshooting_row = tk.Frame(frame)
     troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
-    bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...", command=on_bug_report)
+    bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...",
+                           command=lambda: bug_report_dialog.open_bug_report(root, log=log.info))
     bug_button.pack(side="left")
     view_logs_button = tk.Button(troubleshooting_row, text="View Logs...",
                                  command=lambda: log_viewer.open_log_viewer(root, px, reveal_file))
