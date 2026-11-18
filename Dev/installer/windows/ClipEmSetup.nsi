@@ -237,12 +237,16 @@ Function ShowBootstrapStatus
 FunctionEnd
 
 Section "Uninstall"
-    ; ClipEm is otherwise fully portable (see setup.py) - this removes the
-    ; boot/login autostart entry setup.py may have created outside $INSTDIR,
-    ; via the same uninstall_autostart.py UninstallAutostartWindows.bat
-    ; wraps (not the .bat itself - it ends in `pause`, which would hang an
-    ; unattended ExecWait here).
-    ${If} ${FileExists} "$INSTDIR\App\Windows\Python\python.exe"
+    ; ClipEm is otherwise fully portable (see setup.py) - this removes what
+    ; setup.py may have made outside $INSTDIR: the boot/login autostart entry,
+    ; the Start Menu entry and the desktop shortcut (uninstall.py --entries;
+    ; ClipEm versions before it only have uninstall_autostart.py, which
+    ; UninstallAutostartWindows.bat wraps - not the .bat itself: it ends in
+    ; `pause`, which would hang an unattended ExecWait here).
+    ${If} ${FileExists} "$INSTDIR\App\Shared\Installer\uninstall.py"
+    ${AndIf} ${FileExists} "$INSTDIR\App\Windows\Python\python.exe"
+        ExecWait '"$INSTDIR\App\Windows\Python\python.exe" "$INSTDIR\App\Shared\Installer\uninstall.py" --entries'
+    ${ElseIf} ${FileExists} "$INSTDIR\App\Windows\Python\python.exe"
         ExecWait '"$INSTDIR\App\Windows\Python\python.exe" "$INSTDIR\App\Shared\Installer\uninstall_autostart.py"'
     ${EndIf}
 

@@ -15,6 +15,7 @@ before it next starts OBS.
 
 import os
 import queue
+import subprocess
 import sys
 import threading
 import time
@@ -65,6 +66,7 @@ import reinstall  # noqa: E402
 import release_notes  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
 import ui_colors  # noqa: E402
+import uninstall  # noqa: E402
 from app_window import ICON_DIR, SETTINGS_ICON, style_app_window, use_windows_app_id  # noqa: E402
 from autostart import (  # noqa: E402
     SHORTCUT_BROKEN,
@@ -88,6 +90,7 @@ from clipem_common import (  # noqa: E402
     APP_DIR,
     OBS_RESTART_FLAG,
     REOPEN_EDITOR_FLAG,
+    ROOT_DIR,
     acquire_instance_lock,
     exit_with_parent,
     load_run_config,
@@ -195,6 +198,45 @@ def restart_clipem_in_background(root, on_done, pending_message=UPDATE_PENDING_M
     dialog died with the tray before it could start run.py."""
     outlive_parent()
     run_in_background(root, lambda: restart_clipem(pending_message), on_done)
+
+
+def open_folder(path):
+    """Opens a folder in the system's file manager."""
+    if sys.platform == "win32":
+        os.startfile(path)  # noqa: S606 - a folder of ours
+    elif sys.platform == "darwin":
+        subprocess.Popen(["open", path])
+    else:
+        subprocess.Popen(["xdg-open", path])
+
+
+UNINSTALL_FOLDER_MESSAGE = (
+    "ClipEm is closed, and its autostart, shortcuts and menu entries are removed. This copy of ClipEm "
+    "has no uninstaller, so delete its folder to finish:\n{root}\n\nYour clips aren't in it unless you "
+    "saved them there.")
+
+
+def uninstall_clipem(log=print, pid=None):
+    """Settings' Uninstall: closes OBS, the clip editor and the tray, removes
+    the entries outside the ClipEm folder, and hands the files over to the
+    uninstaller (Installer/uninstall.py) once this process has exited.
+    Returns "uninstaller" (Uninstall.exe, Windows), "files" (Linux),
+    "folder" (a Windows copy with no Uninstall.exe: the user deletes it),
+    or an error message if OBS wouldn't close."""
+    pid = pid or os.getpid()
+    if not obs_process.close_obs_stopping_outputs(log):
+        return "OBS didn't close (it may be showing a dialog) - close it, then try again."
+    stop_clip_editor(log)
+    stop_tray_widget(log)
+    uninstall.remove_entries(log)
+    if sys.platform == "win32":
+        exe = uninstall.windows_uninstaller()
+        if not exe:
+            return "folder"
+        uninstall.start_windows_uninstaller(exe, pid)
+        return "uninstaller"
+    uninstall.start_file_removal(after_pid=pid)
+    return "files"
 
 
 def run_in_background(root, work, on_done):
@@ -1843,6 +1885,68 @@ def open_dialog(start_tab=None, highlight=()):
             popups.showwarning("Reinstall ClipEm", error_message)
         root.destroy()
 
+    def on_uninstall():
+        try:
+            clip_folder = obs_config.load_clip_folder()
+        except Exception:
+            clip_folder = None
+        reason = uninstall.refusal(ROOT_DIR, clip_folder)
+        if reason:
+            popups.showerror("Uninstall ClipEm", reason, parent=root)
+            return
+        dialog = tk.Toplevel(root)
+        dialog.title("Uninstall ClipEm")
+        dialog.resizable(False, False)
+        dialog.transient(root)
+        body = tk.Frame(dialog, padx=px(16), pady=px(12))
+        body.pack(fill="both", expand=True)
+        clips = f"Your clips aren't touched{f' ({clip_folder})' if clip_folder else ''}."
+        tk.Label(
+            body, justify="left", wraplength=px(380),
+            text=(f"Removes ClipEm from {ROOT_DIR}: ClipEm itself, its OBS and all their settings, and "
+                  f"its autostart, shortcuts and menu entries. {clips}\n\nThis closes OBS and the tray "
+                  "icon - the current replay buffer is not saved."),
+        ).pack(anchor="w")
+
+        def on_confirm():
+            dialog.destroy()
+            for child in button_frame.winfo_children():
+                child.config(state="disabled")
+            for button in (reinstall_button, uninstall_clipem_button):
+                button.config(state="disabled")
+            status_var.set("Closing ClipEm to uninstall it...")
+            log.info(f"Uninstall requested for {ROOT_DIR}")
+            outlive_parent()  # it stops the tray, which this window closes with otherwise
+            run_in_background(root, lambda: uninstall_clipem(log.info), on_uninstall_started)
+
+        dialog_buttons = tk.Frame(body)
+        dialog_buttons.pack(side="bottom", anchor="e", pady=(px(12), 0))
+        tk.Button(dialog_buttons, text="Cancel", command=dialog.destroy, width=10).pack(side="left", padx=px(4))
+        tk.Button(dialog_buttons, text="Uninstall", command=on_confirm, width=10).pack(side="left", padx=px(4))
+        dialog.bind("<Escape>", lambda _event: dialog.destroy())
+        popups.place(dialog, root)
+        dialog.grab_set()
+
+    def on_uninstall_started(result, exc):
+        if exc is not None or result not in ("uninstaller", "files", "folder"):
+            log.warning(f"Uninstall didn't start: {exc or result}")
+            popups.showerror("Uninstall ClipEm", f"Couldn't uninstall ClipEm: {exc or result}", parent=root)
+            root.destroy()  # the tray may be closed already: Start ClipEm again to use it
+            return
+        if result == "folder":
+            popups.showinfo("Uninstall ClipEm", UNINSTALL_FOLDER_MESSAGE.format(root=ROOT_DIR), parent=root)
+            try:
+                open_folder(os.path.dirname(ROOT_DIR))
+            except OSError as exc:
+                log.warning(f"Couldn't open {os.path.dirname(ROOT_DIR)}: {exc}")
+        root.destroy()  # the uninstaller starts once this has exited
+
+    def on_open_install_folder():
+        try:
+            open_folder(ROOT_DIR)
+        except OSError as exc:
+            popups.showerror("Open Install Folder", f"Couldn't open {ROOT_DIR}: {exc}", parent=root)
+
     troubleshooting_row = tk.Frame(frame)
     troubleshooting_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
     bug_button = tk.Button(troubleshooting_row, text="Send Bug Report...",
@@ -1854,6 +1958,13 @@ def open_dialog(start_tab=None, highlight=()):
     highlightable("view_logs", view_logs_button, TAB_SCRIPTS)
     reinstall_button = tk.Button(troubleshooting_row, text="Reinstall ClipEm...", command=on_reinstall)
     reinstall_button.pack(side="left", padx=(px(4), 0))
+    next_row += 1
+    install_row = tk.Frame(frame)
+    install_row.grid(row=next_row, column=0, columnspan=2, sticky="w", pady=(px(4), 0))
+    install_folder_button = tk.Button(install_row, text="Open Install Folder", command=on_open_install_folder)
+    install_folder_button.pack(side="left")
+    uninstall_clipem_button = tk.Button(install_row, text="Uninstall ClipEm...", command=on_uninstall)
+    uninstall_clipem_button.pack(side="left", padx=(px(4), 0))
     next_row += 1
 
     def on_save():

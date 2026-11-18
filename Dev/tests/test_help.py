@@ -7,7 +7,7 @@ import sys
 import pytest
 from conftest import APP_SHARED_DIR
 
-PYTHON_SCRIPTS = ["Installer/run.py", "Installer/setup.py", "Installer/uninstall_autostart.py",
+PYTHON_SCRIPTS = ["Installer/run.py", "Installer/setup.py", "Installer/uninstall_autostart.py", "Installer/uninstall.py",
                   "tray-widget/tray_widget.py", "tray-widget/clip_browser.py", "tray-widget/settings_dialog.py"]
 SHELL_SCRIPTS = ["Installer/Scripts/ClipEmSetupLinux.sh", "Installer/Scripts/UninstallAutostartLinux.sh"]
 BATCH_SCRIPTS = ["Installer/Scripts/Setup_Windows.bat", "Installer/Scripts/UninstallAutostartWindows.bat"]

@@ -706,3 +706,37 @@ def test_deleting_a_theme(fake_obs_config, monkeypatch):
     assert seen["opened_on"] == ("Paper", "normal") and seen["delete_on_dark"] == "disabled"
     assert seen["after"] == ("Light Mode", ["Dark Mode", "Light Mode", "Halloween", "Christmas"])
     assert config["saved_themes"] == {} and config["theme"] == "light" and "custom_colors" not in config
+
+
+def test_troubleshooting_opens_the_install_folder_and_uninstalls(fake_obs_config, monkeypatch):
+    import tkinter as tk
+
+    opened, errors, seen = [], [], {}
+    monkeypatch.setattr(settings_dialog, "open_folder", opened.append)
+    monkeypatch.setattr(settings_dialog.popups, "showerror", lambda title, message, **_k: errors.append(message))
+    monkeypatch.setattr(settings_dialog.uninstall, "refusal", lambda *_args: "not this one")
+
+    monkeypatch.setattr(settings_dialog, "find_autostart_entries", lambda: [])  # none: its buttons are hidden
+
+    def look(root):
+        import time
+
+        root.layout["show_tab"]("Scripts/Troubleshooting")
+        labels = [w for w in _widgets(root) if isinstance(w, tk.Label)]
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:  # the autostart check runs in the background
+            root.update()
+            if not any("checking" in str(label.cget("text")) for label in labels):
+                break
+            time.sleep(0.05)
+        root.update()
+        buttons = {w.cget("text"): w for w in _widgets(root) if isinstance(w, tk.Button)}
+        # Shown - the Autostart section's own "Uninstall Autostart" button once hid this one.
+        seen.update(shown={name: bool(buttons[name].winfo_viewable())
+                           for name in ("Open Install Folder", "Uninstall ClipEm...")})
+        buttons["Open Install Folder"].invoke()
+        buttons["Uninstall ClipEm..."].invoke()
+
+    _in_settings(monkeypatch, look)
+    assert seen["shown"] == {"Open Install Folder": True, "Uninstall ClipEm...": True}
+    assert opened == [settings_dialog.ROOT_DIR] and errors == ["not this one"]
