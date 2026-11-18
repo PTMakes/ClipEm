@@ -16,11 +16,13 @@ import threading
 import time
 
 import pytest
-from conftest import TRAY_WIDGET_DIR
+from conftest import SCRIPTS_DIR, TRAY_WIDGET_DIR
 
 sys.path.insert(0, TRAY_WIDGET_DIR)
+sys.path.insert(1, SCRIPTS_DIR)
 
 import clip_browser  # noqa: E402
+import replace_file  # noqa: E402
 
 import devtools  # noqa: E402 - Dev/devtools.py
 
@@ -114,8 +116,9 @@ def test_a_clip_opened_before_its_copy_is_finished_is_opened_again_from_it(tmp_p
     assert tools.wait_for("state.selected === 'Replay-x.mp4' && player.readyState >= 1"), "it didn't open"
     assert tools.js("player.currentSrc").endswith("/media/Replay-x.mp4")
     if copy == "extra":
-        os.replace(staging / "Replay-x-extra.mkv", folder / "Replay-x-extra.mkv")
-        os.replace(staging / "Replay-x.mp4", folder / "Replay-x.mp4")  # cut at the press
+        # As ClipEm finishes it (Scripts/replace_file.py): the editor may be reading the clip.
+        replace_file.replace(staging / "Replay-x-extra.mkv", folder / "Replay-x-extra.mkv")
+        replace_file.replace(staging / "Replay-x.mp4", folder / "Replay-x.mp4")  # cut at the press
         wanted, mark = "/media/Replay-x-extra.mkv", 5
     else:
         subprocess.run([FFMPEG, "-v", "error", "-y", "-i", str(staging / "Replay-x-extra.mkv"), "-map", "0", "-c", "copy",
@@ -220,3 +223,15 @@ def test_an_error_on_the_status_line_can_be_copied_and_reported(tmp_path, page, 
     assert started == [("ClipEm Editor", "Export failed: ffmpeg failed (analysing)")]
     tools.js("setStatus('Exported.')")
     assert tools.js("$('status-actions').hidden")  # not for news that isn't an error
+
+
+def test_an_mpeg_ts_clip_plays_from_its_preview_copy(tmp_path, page):
+    """The window can't open MPEG-TS (or FLV) itself: it's sent a copy it can."""
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=3", "-f", "lavfi",
+                    "-i", "sine=d=3", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+                    str(tmp_path / "Replay-t.ts")], check=True)
+    tools = page(tmp_path)
+    tools.js("select('Replay-t.ts')")
+    assert tools.wait_for("player.readyState >= 1 && isFinite(player.duration) || !!player.error", seconds=30)
+    assert tools.js("player.error && player.error.message") is None
+    assert tools.js("player.duration") == pytest.approx(3, abs=0.2) and tools.js("player.videoWidth") == 160

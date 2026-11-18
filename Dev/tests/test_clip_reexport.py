@@ -118,10 +118,21 @@ def test_split_command_keeps_all_six_tracks_in_order_with_titles():
     assert cmd[-1] == "out.mkv"
 
 
-def test_parse_max_volume():
-    assert clip_reexport.parse_max_volume("[Parsed_volumedetect_0 @ 0x1] max_volume: -12.3 dB\n") == -12.3
-    assert clip_reexport.parse_max_volume("max_volume: -inf dB") == float("-inf")
-    assert clip_reexport.parse_max_volume("no audio") is None
+def test_a_tracks_peak():
+    import struct
+    assert clip_reexport.peak_db(struct.pack("<4h", 0, 8192, -16384, 100)) == pytest.approx(-6.02, abs=0.01)
+    assert clip_reexport.peak_db(bytes(8)) == float("-inf") and clip_reexport.peak_db(b"") == float("-inf")
+    cmd = clip_reexport.track_pcm_command("ffmpeg", "c.mkv", 3)
+    assert cmd[cmd.index("-map") + 1] == "0:a:3" and cmd[-3:] == ["-f", "s16le", "pipe:1"]
+
+
+def test_silent_app_tracks_are_found(monkeypatch):
+    import struct
+    loud, quiet = struct.pack("<2h", 3000, -3000), bytes(64)
+    pcm = {f"0:a:{clip_reexport.FIRST_APP_TRACK - 1}": loud, f"0:a:{clip_reexport.FIRST_APP_TRACK}": quiet}
+    monkeypatch.setattr(clip_reexport.subprocess, "run", lambda cmd, **k: subprocess.CompletedProcess(
+        cmd, 0, pcm[cmd[cmd.index("-map") + 1]], b""))
+    assert clip_reexport.silent_app_tracks("ffmpeg", "c.mkv", ["Game", "Spotify"], print) == {1}
 
 
 def test_an_unmeasurable_track_keeps_its_label(monkeypatch):

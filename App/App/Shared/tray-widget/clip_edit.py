@@ -67,6 +67,7 @@ import re
 import subprocess
 import sys
 import threading
+import time
 
 from obs_config import DISCORD_TARGET_MB
 
@@ -1224,10 +1225,16 @@ def discord_commands(ffmpeg, source, project, info, out_mp4, passlog, export=Non
 # Preview audio and waveforms
 # ---------------------------------------------------------------------------
 
+def plays_in_window(path, video_codec):
+    """Whether the editor's window (Chromium) can play a video as it is: its
+    container (not FLV or MPEG-TS) and codec (not HEVC, which it only
+    decodes through some systems' hardware)."""
+    return os.path.splitext(path)[1].lower() in PREVIEW_EXTENSIONS and video_codec in PREVIEW_CODECS
+
+
 def needs_preview_copy(asset):
     """Whether the editor's window can't play an imported video as it is."""
-    return asset["kind"] == "video" and (os.path.splitext(asset["path"])[1].lower() not in PREVIEW_EXTENSIONS
-                                         or asset.get("video_codec") not in PREVIEW_CODECS)
+    return asset["kind"] == "video" and not plays_in_window(asset["path"], asset.get("video_codec"))
 
 
 def asset_preview_command(ffmpeg, source, out_path):
@@ -1294,9 +1301,13 @@ def _peaks(samples, sample_rate, per_second, full_scale=255):
 
 
 def _cached(path, make):
-    """path once make(partial) has written it; made at most once at a time."""
-    if os.path.isfile(path):
+    """path once make(partial) has written it; made at most once at a time.
+    Each use moves its modified time to now: prune_cache() goes by it."""
+    try:
+        os.utime(path)
         return path
+    except OSError:
+        pass  # not made yet (or just pruned)
     with _cache_lock(path):
         if os.path.isfile(path):
             return path
@@ -1313,6 +1324,68 @@ def _cached(path, make):
 
 _locks = {}
 _locks_guard = threading.Lock()
+
+# The editor's caches (track audio, waveforms, preview copies) are all made
+# again when they're needed, so what hasn't been used for a while goes:
+CACHE_KEEP_DAYS = 14
+CACHE_MAX_BYTES = 2 * 1024 ** 3  # and the least recently used, past this
+CACHE_RECENT_SECONDS = 600  # never what was used this recently (it may be playing)
+PARTIAL_KEEP_SECONDS = 86400  # a ".partial" this old was left by a crash
+
+
+def prune_cache(directory, keep_days=CACHE_KEEP_DAYS, max_bytes=CACHE_MAX_BYTES, now=None,
+                recent_seconds=CACHE_RECENT_SECONDS, keep=frozenset()):
+    """Deletes the files in directory (one of _cached()'s) that haven't been
+    used for keep_days, then the least recently used until the rest fit in
+    max_bytes (None: no limit) - never one used in the last recent_seconds,
+    and each only after checking again under its lock that it's still
+    unused (one being served right now isn't touched). keep: paths never
+    deleted. Returns (files, bytes) deleted."""
+    now = time.time() if now is None else now
+    try:
+        entries = [entry for entry in os.scandir(directory) if entry.is_file(follow_symlinks=False)]
+    except OSError:
+        return 0, 0
+    files = []
+    keep = {os.path.normcase(os.path.abspath(path)) for path in keep}
+    for entry in entries:
+        if os.path.normcase(os.path.abspath(entry.path)) in keep:
+            continue
+        try:
+            stat = entry.stat(follow_symlinks=False)
+        except OSError:
+            continue
+        files.append((stat.st_mtime, stat.st_size, entry.path))
+    files.sort()  # least recently used first
+    total = sum(size for _used, size, _path in files)
+    removed = [0, 0]
+
+    def remove(path, older_than):
+        with _cache_lock(path[: -len(".partial")] if path.endswith(".partial") else path):
+            try:
+                stat = os.stat(path)
+                if now - stat.st_mtime < older_than:
+                    return False  # used since it was listed
+                os.remove(path)
+            except OSError:  # gone, or open (Windows): next time
+                return False
+        removed[0] += 1
+        removed[1] += stat.st_size
+        return True
+
+    for used, size, path in files:
+        if path.endswith(".partial"):
+            if now - used >= PARTIAL_KEEP_SECONDS and remove(path, PARTIAL_KEEP_SECONDS):
+                total -= size
+        elif now - used >= keep_days * 86400 and remove(path, keep_days * 86400):
+            total -= size
+    if max_bytes is not None:
+        for used, size, path in files:
+            if total <= max_bytes:
+                break
+            if os.path.exists(path) and now - used >= recent_seconds and remove(path, recent_seconds):
+                total -= size
+    return tuple(removed)
 
 
 def _cache_lock(key):

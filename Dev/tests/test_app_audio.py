@@ -416,6 +416,25 @@ def test_the_monitor_publishes_the_active_app_without_split_tracks():
     assert not recorder.targets
 
 
+def test_an_active_app_that_couldnt_be_written_is_written_next_time():
+    # Windows: the active app file can't be replaced while a clip is being named from it.
+    published, clock = [], [0.0]
+
+    def publish(app):
+        if not published:
+            published.append("refused")
+            raise PermissionError("in use")
+        published.append(app)
+
+    monitor = app_audio.AppTrackMonitor(FakeRecorder(), list_streams=lambda: [_stream("deadlock", "Deadlock")],
+                                        monotonic=lambda: clock[0], enabled=lambda: False, names_clips=lambda: True,
+                                        publish=publish)
+    monitor.tick()
+    clock[0] += 3
+    monitor.tick()
+    assert published == ["refused", "Deadlock"]
+
+
 def test_the_monitor_leaves_streams_alone_when_clips_arent_named_after_apps():
     published = []
 

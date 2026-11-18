@@ -90,13 +90,32 @@ def write_text_atomic(path, text):
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp_path, path)
+        _replace_when_free(tmp_path, path)
     except BaseException:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
         raise
+
+
+# Windows can't replace a file another process has open, even just to read
+# it - and every ClipEm process reads these (run_config.json, the hand-over
+# files...). A read is over in moments: so a refused replace is tried again
+# for a while (Scripts/replace_file.py does the same for clips, which OBS's
+# scripts can't import this for).
+REPLACE_WAIT_SECONDS = 5.0
+
+
+def _replace_when_free(src, dst):
+    deadline = time.monotonic() + REPLACE_WAIT_SECONDS
+    while True:
+        try:
+            return os.replace(src, dst)
+        except PermissionError:
+            if sys.platform != "win32" or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.05)
 
 
 def write_json_atomic(path, data, **dump_kwargs):

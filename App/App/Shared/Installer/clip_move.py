@@ -13,7 +13,7 @@ import json
 import os
 import shutil
 
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv", ".ts")
 CHUNK_BYTES = 1024 * 1024
 
 
@@ -141,7 +141,14 @@ def transfer(old, new, move, edits_dir=None, exports_path=None, progress=lambda 
                     copied(size)
                 except OSError:
                     _copy(path, target, copied)
-                    os.remove(path)
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        # Still open (Windows: in the clip editor, say): not
+                        # moved, then - or it'd be in both folders, and moving
+                        # again would skip it as already there.
+                        os.remove(target)
+                        raise
                 moved[os.path.realpath(path)] = os.path.realpath(target)
             else:
                 _copy(path, target, copied)

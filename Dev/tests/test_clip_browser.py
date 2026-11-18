@@ -740,3 +740,88 @@ def test_a_clip_being_played_can_be_replaced(server, monkeypatch, tmp_path):
             received += data
     body = received.split(b"\r\n\r\n", 1)[1]
     assert 0 < len(body) < size and set(body) == {ord("o")}  # stopped short, never the new file's bytes
+
+
+def test_which_videos_the_window_plays_as_they_are():
+    assert clip_edit.plays_in_window("a.mp4", "h264") and clip_edit.plays_in_window("a.MKV", "av1")
+    assert not clip_edit.plays_in_window("a.ts", "h264") and not clip_edit.plays_in_window("a.flv", "h264")
+    assert not clip_edit.plays_in_window("a.mkv", "hevc")  # Chromium decodes it only through some hardware
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+@pytest.mark.parametrize("name, codec, copied", [
+    ("a.ts", "libx264", True), ("a.flv", "libx264", True), ("a.mkv", "libx265", True), ("a.mp4", "libx264", False),
+])
+def test_a_clip_the_window_cant_play_is_played_from_a_preview_copy(tmp_path, name, codec, copied):
+    folder = tmp_path / "clips"
+    folder.mkdir()
+    clip = folder / name
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=320x180:r=30:d=2",
+                    "-f", "lavfi", "-i", "sine=d=2", "-c:v", codec, "-pix_fmt", "yuv420p", "-c:a", "aac",
+                    "-shortest", str(clip)], check=True)
+    assert [c["name"] for c in clip_browser.list_clips(str(folder))] == [name]  # listed, .ts too
+    editor = clip_browser.Editor(ffmpeg=shutil.which("ffmpeg"), track_dir=str(tmp_path / "tracks"))
+    played = editor.playable(str(clip))
+    assert (played != str(clip)) == copied
+    if copied:
+        info = clip_edit.probe("ffmpeg", played)
+        assert played.endswith(".mp4") and info["video_codec"] == "h264"
+        assert info["duration"] == pytest.approx(clip_edit.probe("ffmpeg", str(clip))["duration"], abs=0.1)
+        assert editor.playable(str(clip)) == played  # made once
+        os.utime(clip, (1, 1))
+        assert editor.playable(str(clip)) != played  # a new copy once the clip changes
+
+
+def test_the_editor_prunes_its_caches(tmp_path):
+    editor = clip_browser.Editor(track_dir=str(tmp_path / "tracks"), peaks_dir=str(tmp_path / "peaks"))
+    for folder, name in (("tracks", "a-1.m4a"), ("peaks", "a-1-v3.json")):
+        (tmp_path / folder).mkdir()
+        path = tmp_path / folder / name
+        path.write_bytes(b"x" * 5)
+        os.utime(path, (1, 1))
+    assert editor.prune_caches() == (2, 10)
+    assert clip_browser.Editor(track_dir=str(tmp_path / "none"), peaks_dir=str(tmp_path / "none")).prune_caches() == (0, 0)
+
+
+def test_thumbnails_unused_for_a_while_go_but_not_the_clip_lists(tmp_path):
+    folder, cache = tmp_path / "clips", tmp_path / "thumbs"
+    folder.mkdir()
+    cache.mkdir()
+    shown = _touch(folder, "shown.mp4", b"v", mtime=100)
+    thumbs = clip_browser.Thumbnailer(ffmpeg="", cache_dir=str(cache))
+    gone = tmp_path / "gone.mp4"  # a clip deleted since, or from another folder
+    gone.write_bytes(b"v")
+    for clip in (shown, gone):
+        for path in thumbs.paths(str(clip)):
+            with open(path, "w") as f:
+                f.write("{}")
+            os.utime(path, (1, 1))  # not used for decades
+    old_gone = thumbs.paths(str(gone))
+    assert thumbs.prune(str(folder)) == (2, 4)
+    assert all(os.path.exists(path) for path in thumbs.paths(str(shown)))
+    assert not any(os.path.exists(path) for path in old_gone)
+
+
+def test_a_thumbnail_served_counts_as_used_and_a_half_pruned_one_is_made_again(tmp_path):
+    cache = tmp_path / "thumbs"
+    cache.mkdir()
+    clip = tmp_path / "a.mp4"
+    clip.write_bytes(b"v")
+    made = []
+
+    def run(cmd, **_kwargs):
+        made.append(cmd)
+        with open(cmd[-1], "wb") as f:
+            f.write(b"jpg")
+        return subprocess.CompletedProcess(cmd, 0, "", "Duration: 00:00:05.00,")
+
+    thumbs = clip_browser.Thumbnailer(ffmpeg="ffmpeg", cache_dir=str(cache), run=run)
+    jpg, meta = thumbs.paths(str(clip))
+    assert thumbs.thumbnail(str(clip)) == jpg and len(made) == 1
+    for path in (jpg, meta):
+        os.utime(path, (1, 1))
+    assert thumbs.thumbnail(str(clip)) == jpg and len(made) == 1  # served: used now
+    assert thumbs.prune() == (0, 0)
+    os.remove(meta)  # e.g. Windows refused to delete the .jpg alongside it
+    assert thumbs.thumbnail(str(clip)) == jpg and len(made) == 2  # made again, its length with it
+    assert thumbs.info(str(clip)) == {"duration": 5.0}

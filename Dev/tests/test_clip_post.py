@@ -317,10 +317,13 @@ def test_probing_when_ffmpeg_says_nothing():
 
 
 @pytest.mark.parametrize("name, container", [
-    ("a.mkv", "matroska"), ("a.MOV", "mov"), ("a.flv", "flv"), ("a.mp4", "mp4"), ("a.other", "mp4"),
+    ("a.mkv", "matroska"), ("a.MOV", "mov"), ("a.flv", "flv"), ("a.ts", "mpegts"), ("a.mp4", "mp4"),
+    ("a.other", "mp4"),
 ])
 def test_the_container_follows_the_extension(name, container):
-    assert clip_post._container(name) == container
+    assert clip_post.clip_tracks.container_for(name) == container
+    cut = clip_post.build_cut_command("ffmpeg", "save" + name[1:], "c.partial", 1, 31, name)
+    assert cut[cut.index("-f") + 1] == container
 
 
 def test_only_mp4_and_mov_get_faststart():

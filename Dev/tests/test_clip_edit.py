@@ -1041,56 +1041,12 @@ def test_a_failed_hardware_export_falls_back(tmp_path):
 
 # --- ClipEm's own ffmpeg builds -----------------------------------------------
 
-def _built_filters():
-    """The filters Dev/build/build-ffmpeg.sh builds in (--enable-filter) or
-    checks the build has (check_has -filters)."""
-    import re
-
-    from conftest import DEV_DIR
-    with open(os.path.join(DEV_DIR, "build", "build-ffmpeg.sh"), encoding="utf-8") as script:
-        text = script.read()
-    names = set()
-    for listed in re.findall(r"--enable-filter=(\S+)", text):
-        names.update(listed.split(","))
-    for listed in re.findall(r"^check_has -filters (.+)$", text, re.MULTILINE):
-        names.update(listed.split())
-    return names
-
-
-def _filter_names(graph):
-    """Every filter a filtergraph uses: split into chains and filters at
-    the ; and , outside quotes, brackets and parentheses."""
-    names, part, depth, quoted, escaped = [], "", 0, False, False
-    for char in graph + ";":
-        if escaped:
-            escaped = False
-        elif char == "\\":
-            escaped = True
-        elif char == "'":
-            quoted = not quoted
-        elif not quoted and char in "([":
-            depth += 1
-        elif not quoted and char in ")]":
-            depth -= 1
-        elif not quoted and not depth and char in ",;":
-            name = part.lstrip("[]").split("=", 1)[0]
-            name = name.split("]")[-1] if "]" in name else name
-            if name.strip():
-                names.append(name.strip())
-            part = ""
-            continue
-        part += char
-    return names
-
-
-def _graphs(cmd):
-    return [cmd[i + 1] for i, arg in enumerate(cmd[:-1]) if arg in ("-filter_complex", "-vf", "-af")]
-
-
 def test_exports_only_use_filters_clipems_ffmpeg_has():
     # A Discord export of a 60 fps clip once failed on ClipEm's ffmpeg
     # ("No option name near '30'"): it asked for the fps filter.
-    built = _built_filters()
+    import ffmpeg_build  # Dev/ffmpeg_build.py
+
+    built = ffmpeg_build.built()["filter"]
     assert {"scale", "amix", "overlay"} <= built and "fps" not in built
     info = _info()
     sixty = dict(info, fps=60.0)
@@ -1114,7 +1070,7 @@ def test_exports_only_use_filters_clipems_ffmpeg_has():
                                                volume_db=-3),
                  clip_edit.peaks_command("ffmpeg", "c.mkv", 1, level=True, gate_db=-48, volume_db=-3),
                  clip_edit.asset_preview_command("ffmpeg", "a.webm", "o.mp4")]
-    used = {name for cmd in commands for graph in _graphs(cmd) for name in _filter_names(graph)}
+    used = {name for cmd in commands for graph in ffmpeg_build.graphs(cmd) for name in ffmpeg_build.filter_names(graph)}
     assert {"scale", "crop", "fade", "overlay", "amix", "agate", "loudnorm"} <= used  # it saw them all
     assert used <= built, f"not in ClipEm's ffmpeg builds: {sorted(used - built)}"
     for export in (X264, dict(X264, encoder="nvenc")):  # 60 fps halved with -r: both passes, or the one
@@ -1122,3 +1078,62 @@ def test_exports_only_use_filters_clipems_ffmpeg_has():
         assert all(cmd[cmd.index("-r") + 1] == "30" for cmd, _label, _weight in steps)
     thirty = clip_edit.discord_commands("ffmpeg", "c.mkv", busy, WIDE, "o.mp4", "log")
     assert not any("-r" in cmd for cmd, _label, _weight in thirty)  # already 30 fps: left as it is
+
+
+# --- The editor's caches --------------------------------------------------------
+
+DAY = 86400
+
+
+def _cache_file(folder, name, size, used):
+    path = folder / name
+    path.write_bytes(b"x" * size)
+    os.utime(path, (used, used))
+    return path
+
+
+def test_cache_files_unused_for_a_while_go(tmp_path):
+    now = 100 * DAY
+    old = _cache_file(tmp_path, "a-1.m4a", 10, now - 15 * DAY)
+    recent = _cache_file(tmp_path, "b-1.m4a", 10, now - 13 * DAY)
+    crashed = _cache_file(tmp_path, "c-preview.mp4.partial", 10, now - 2 * DAY)
+    writing = _cache_file(tmp_path, "d-preview.mp4.partial", 10, now - 60)
+    assert clip_edit.prune_cache(str(tmp_path), now=now) == (2, 20)
+    assert not old.exists() and not crashed.exists() and recent.exists() and writing.exists()
+
+
+def test_past_its_size_the_least_recently_used_go_first(tmp_path):
+    now = 100 * DAY
+    oldest = _cache_file(tmp_path, "a-preview.mp4", 400, now - 3 * DAY)
+    older = _cache_file(tmp_path, "b-preview.mp4", 400, now - 2 * DAY)
+    newer = _cache_file(tmp_path, "c-preview.mp4", 400, now - DAY)
+    playing = _cache_file(tmp_path, "d-preview.mp4", 400, now - 60)  # used in the last few minutes
+    assert clip_edit.prune_cache(str(tmp_path), max_bytes=900, now=now) == (2, 800)
+    assert not oldest.exists() and not older.exists() and newer.exists() and playing.exists()
+    # Even when only what's playing is left over the limit, it stays.
+    assert clip_edit.prune_cache(str(tmp_path), max_bytes=100, now=now) == (1, 400)
+    assert playing.exists()
+
+
+def test_using_a_cache_file_keeps_it(tmp_path):
+    path = _cache_file(tmp_path, "a-1.m4a", 10, time.time() - 30 * DAY)
+    made = []
+    assert clip_edit._cached(str(path), made.append) == str(path) and made == []  # used, not made again
+    assert clip_edit.prune_cache(str(tmp_path)) == (0, 0)
+    os.remove(path)
+    clip_edit._cached(str(path), lambda partial: open(partial, "wb").close())  # pruned: made again
+    assert path.exists()
+
+
+def test_a_file_used_while_the_cache_is_pruned_stays(tmp_path, monkeypatch):
+    now = 100 * DAY
+    path = _cache_file(tmp_path, "a-1.m4a", 10, now - 30 * DAY)
+    listed = os.scandir
+
+    def scandir(directory):
+        entries = list(listed(directory))
+        os.utime(path, (now, now))  # served just after the listing
+        return iter(entries)
+
+    monkeypatch.setattr(clip_edit.os, "scandir", scandir)
+    assert clip_edit.prune_cache(str(tmp_path), now=now) == (0, 0) and path.exists()

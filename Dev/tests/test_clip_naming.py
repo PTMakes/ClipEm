@@ -201,6 +201,7 @@ def test_a_clip_that_cant_be_renamed_keeps_its_name(tmp_path, monkeypatch):
 
     path = saved_clip(tmp_path)
     monkeypatch.setattr(clip_naming.os, "rename", refuse)
+    monkeypatch.setattr(clip_naming.replace_file, "WAIT_SECONDS", 0)  # Windows: no waiting for it to be let go
     logs = []
     assert clip_naming.rename_clip(path, naming(), now=WHEN, log=logs.append) == path
     assert "keeping OBS's name" in logs[0]

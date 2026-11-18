@@ -27,6 +27,8 @@ import os
 import re
 import uuid
 
+import replace_file
+
 SHARED_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
 ACTIVE_APP_PATH = os.path.join(os.path.dirname(SHARED_DIR), "cache", "active_app.json")
@@ -61,7 +63,7 @@ _SAME_DATE_PART = {"yy": "yyyy", "HH": "hh", "%Y": "yyyy", "%y": "yyyy", "%m": "
                    "%I": "hh", "%M": "mm", "%S": "ss"}
 _ANY_DATE_CODE = re.compile("|".join(("%[YymdHIMS]", *_DATE_CODES)))
 MAX_APP_LENGTH = 48
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv", ".ts")
 # Not allowed in file names on Windows (and "/" anywhere).
 _UNSAFE = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -182,7 +184,7 @@ def publish_active_app(app, path=None):
     partial = f"{path}.partial"
     with open(partial, "w", encoding="utf-8") as f:
         json.dump({"app": app}, f)
-    os.replace(partial, path)
+    replace_file.replace(partial, path)  # Windows: another process may be reading it
 
 
 def stem(settings, when, number=None, guid=None, app=None):
@@ -320,7 +322,7 @@ def rename_clip(clip_path, settings=None, now=None, log=print):
         target = os.path.join(folder, f"{target_stem}{settings['separator']}{copy}{ext}")
         copy += 1
     try:
-        os.rename(clip_path, target)
+        replace_file.rename(clip_path, target)  # the editor may be reading it
     except OSError as exc:
         log(f"couldn't rename {clip_path} to {os.path.basename(target)} ({exc}) - keeping OBS's name")
         return clip_path

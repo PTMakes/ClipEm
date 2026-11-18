@@ -97,7 +97,7 @@ UI_FILES = {"": "index.html", "index.html": "index.html", "browser.js": "browser
             "layers.js": "layers.js", "view.js": "view.js", "app.css": "app.css"}
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8",
-    ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".flv": "video/x-flv",
+    ".mp4": "video/mp4", ".mkv": "video/x-matroska", ".mov": "video/quicktime", ".flv": "video/x-flv", ".ts": "video/mp2t",
     ".jpg": "image/jpeg", ".m4a": "audio/mp4", ".png": "image/png", ".ico": "image/x-icon",
     ".jpeg": "image/jpeg", ".webp": "image/webp", ".bmp": "image/bmp", ".gif": "image/gif", ".webm": "video/webm",
     ".aac": "audio/aac", ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".ogg": "audio/ogg",
@@ -141,7 +141,7 @@ LAUNCH_PAGE = b"""<!doctype html>
 # The running instance's URL, for a second "Open Clip Editor" to reopen.
 URL_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.url")
 
-VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv")
+VIDEO_EXTENSIONS = (".mp4", ".mkv", ".mov", ".flv", ".ts")  # every format OBS records in
 # Copies clip_reexport.py saves next to a clip - listed with it, not as
 # clips: clip_naming.copy_suffixes(), read each time (Settings changes them).
 THUMB_WIDTH = 320
@@ -273,15 +273,27 @@ class Thumbnailer:
         except (OSError, ValueError):
             return {}
 
+    def _used(self, jpg, meta):
+        """Whether the thumbnail (both its files) is there, marking it used
+        now (prune() goes by that) - under prune()'s lock, so it can't be
+        deleted between the two."""
+        with clip_edit._cache_lock(jpg):
+            try:
+                os.utime(jpg)
+                os.utime(meta)
+            except OSError:  # not made yet, or half pruned: made (again)
+                return False
+        return True
+
     def thumbnail(self, clip_path):
         """The thumbnail's path, making it if needed; None if ffmpeg can't."""
         jpg, meta = self.paths(clip_path)
-        if os.path.isfile(jpg):
+        if self._used(jpg, meta):
             return jpg
         if not self._ffmpeg:
             return None
         with self._slots:
-            if os.path.isfile(jpg):
+            if self._used(jpg, meta):
                 return jpg
             os.makedirs(self._cache_dir, exist_ok=True)
             partial = jpg + ".partial.jpg"
@@ -301,6 +313,24 @@ class Thumbnailer:
                 os.remove(partial)
             log.info(f"No thumbnail for {clip_path}: {result.stderr.strip()[-300:]}")
             return None
+
+
+    def prune(self, folder=None, now=None):
+        """Deletes the thumbnails not used lately (clip_edit.prune_cache) -
+        never those of the clips in folder (the clip list's), which the page
+        may not have asked for again only because it keeps them. Returns
+        (files, bytes) deleted."""
+        keep = set()
+        if folder:
+            for clip in list_clips(folder):
+                try:
+                    keep.update(self.paths(os.path.join(folder, clip["name"])))
+                except OSError:
+                    pass
+        removed = clip_edit.prune_cache(self._cache_dir, max_bytes=None, now=now, keep=keep)
+        if removed[0]:
+            log.info(f"Cleaned up the clip thumbnails: {removed[0]} files, {removed[1] / 1e6:.1f} MB")
+        return removed
 
 
 def _no_window_kwargs():
@@ -484,6 +514,17 @@ class Editor:
                 except OSError:
                     pass
 
+    def prune_caches(self, now=None):
+        """The track audio, preview copies and waveforms not used lately
+        (clip_edit.prune_cache) - all made again when they're needed."""
+        files = size = 0
+        for directory in (self.track_dir, self.peaks_dir):
+            removed = clip_edit.prune_cache(directory, now=now)
+            files, size = files + removed[0], size + removed[1]
+        if files:
+            log.info(f"Cleaned up the editor's cache: {files} files, {size / 1e6:.0f} MB")
+        return files, size
+
     def prune_assets(self, older_than_days=0, now=None):
         """Deletes every import no saved edit uses, that's been here this
         long. Returns how many."""
@@ -529,6 +570,24 @@ class Editor:
                 os.remove(partial)
         write_text_atomic(path + ".json", json.dumps(meta))
         return {**meta, "id": asset_id, "path": path, "size": os.path.getsize(path)}
+
+    def playable(self, path):
+        """The file for the page to play for a clip (or its -extra/-tracks
+        copy): itself, or - for one the window can't play (FLV, MPEG-TS,
+        HEVC) - a preview copy, made the first time (a few seconds) and kept
+        until the clip changes. Exports, waveforms and thumbnails still read
+        the clip itself."""
+        if not self.ffmpeg:
+            return path
+        info = self.info(path)
+        if not info.get("width") or clip_edit.plays_in_window(path, info.get("video_codec")):
+            return path
+        preview = os.path.join(self.track_dir, f"{self._key(path)}-preview.mp4")
+        made = not os.path.isfile(preview)
+        preview = clip_edit.asset_preview(self.ffmpeg, path, preview)
+        if made:  # the biggest thing in the cache: keep it under its limit
+            threading.Thread(target=self.prune_caches, daemon=True).start()
+        return preview
 
     def asset_preview_path(self, asset):
         return os.path.join(self.track_dir, f"{asset['id']}-preview.mp4")
@@ -1194,10 +1253,14 @@ class Handler(BaseHTTPRequestHandler):
                 self._json({"error": str(exc)}, 500)
         elif route.startswith("media/"):
             path = resolve_clip(folder, route[len("media/"):])
-            if path:
-                self._send_file(path)
-            else:
+            if not path:
                 self._send(404, b"Not found", "text/plain")
+                return
+            try:
+                path = self.server.editor.playable(path)
+            except Exception as exc:  # the clip itself, then: the page says it can't play it
+                log.warning(f"No preview copy of {os.path.basename(path)}: {exc}")
+            self._send_file(path)
         elif route.startswith("thumb/"):
             path = resolve_clip(folder, route[len("thumb/"):])
             thumb = self.server.thumbnailer.thumbnail(path) if path else None
@@ -1580,6 +1643,8 @@ def main():
                 target=quit_editor, args=(server,), daemon=True).start())
     threading.Thread(target=server.serve_forever, daemon=True).start()
     threading.Thread(target=server.editor.prune_assets, args=(asset_keep_days(),), daemon=True).start()
+    threading.Thread(target=server.editor.prune_caches, daemon=True).start()
+    threading.Thread(target=lambda: server.thumbnailer.prune(server.current_folder()), daemon=True).start()
     write_text_atomic(URL_PATH, server.launch_url)
     log.info(f"Clip editor serving {obs_config.load_clip_folder()}")
     try:

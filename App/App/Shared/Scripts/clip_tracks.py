@@ -9,11 +9,15 @@ the tray can't import obspython.
   Mix, Mic, Desktop, then the apps - and the clip stripped back to the mix.
 """
 
+import array
+import math
 import os
 import platform
-import re
 import struct
 import subprocess
+import sys
+
+import replace_file
 
 # Must match setup.py's AUDIO_BITRATE_KBPS / compute_video_bitrate_for_filesize.
 AUDIO_BITRATE_KBPS = 160
@@ -88,17 +92,28 @@ def track_titles(app_labels, silent=()):
     return titles
 
 
-def max_volume_command(ffmpeg, clip_path, track_index):
-    return [ffmpeg, "-hide_banner", "-nostdin", "-i", clip_path, "-map", f"0:a:{track_index}",
-            "-af", "volumedetect", "-f", "null", "-"]
+# A track's samples for measuring its loudest moment: stereo (a mono mix can
+# cancel out), at a rate that still catches any sound worth naming.
+PEAK_RATE = 16000
 
 
-def parse_max_volume(stderr):
-    """volumedetect's max_volume in dB (-inf for digital silence), or None."""
-    match = re.search(r"max_volume:\s*(-?inf|-?[\d.]+) dB", stderr or "")
-    if not match:
-        return None
-    return float("-inf") if "inf" in match.group(1) else float(match.group(1))
+def track_pcm_command(ffmpeg, clip_path, track_index):
+    """A track as 16-bit stereo PCM on stdout, to measure (peak_db()). Not
+    ffmpeg's volumedetect: ClipEm's own ffmpeg builds don't have that filter
+    (Dev/build/build-ffmpeg.sh)."""
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-i", clip_path, "-map", f"0:a:{track_index}",
+            "-ac", "2", "-ar", str(PEAK_RATE), "-c:a", "pcm_s16le", "-f", "s16le", "pipe:1"]
+
+
+def peak_db(pcm):
+    """The loudest sample of 16-bit PCM in dB of full scale (-inf for digital
+    silence or none at all)."""
+    samples = array.array("h")
+    samples.frombytes(pcm[: len(pcm) // 2 * 2])
+    if sys.byteorder == "big":
+        samples.byteswap()
+    peak = max((max(samples), -min(samples))) if samples else 0
+    return 20 * math.log10(peak / 32768) if peak else float("-inf")
 
 
 def silent_app_tracks(ffmpeg, clip_path, app_labels, log):
@@ -109,13 +124,12 @@ def silent_app_tracks(ffmpeg, clip_path, app_labels, log):
         if not label:
             continue
         try:
-            result = subprocess.run(max_volume_command(ffmpeg, clip_path, FIRST_APP_TRACK - 1 + index),
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
-                                    errors="replace", **low_priority_kwargs())
+            result = subprocess.run(track_pcm_command(ffmpeg, clip_path, FIRST_APP_TRACK - 1 + index),
+                                    capture_output=True, **low_priority_kwargs())
         except Exception as exc:
             log(f"couldn't measure {label}'s track: {exc}")
             continue
-        level = parse_max_volume(result.stderr) if result.returncode == 0 else None
+        level = peak_db(result.stdout) if result.returncode == 0 else None
         if level is not None and level < SILENCE_MAX_DB:
             silent.add(index)
     return silent
@@ -132,10 +146,20 @@ def build_split_command(ffmpeg, clip_path, out_path, titles):
     return cmd
 
 
+# ffmpeg's muxer for each container OBS can record clips in (anything else -
+# .mp4, and OBS's hybrid MP4 - is mp4); all of them in ClipEm's ffmpeg builds.
+CONTAINERS = {".mkv": "matroska", ".mov": "mov", ".flv": "flv", ".ts": "mpegts"}
+
+
+def container_for(path):
+    """The muxer that writes a clip as path's own format - which the
+    ".partial" it's written to first hides."""
+    return CONTAINERS.get(os.path.splitext(path)[1].lower(), "mp4")
+
+
 def build_strip_command(ffmpeg, clip_path, out_path):
     """The clip with only its first audio track (the full mix), losslessly."""
-    _stem, ext = os.path.splitext(clip_path)
-    container = {".mkv": "matroska", ".mov": "mov", ".flv": "flv"}.get(ext.lower(), "mp4")
+    container = container_for(clip_path)
     cmd = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", clip_path,
         "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
@@ -250,7 +274,7 @@ def run_to(cmd_for, out_path, what, log):
         if result.returncode != 0:
             log(f"{what} failed: {result.stderr.strip()[-500:]}")
             return False
-        os.replace(partial, out_path)
+        replace_file.replace(partial, out_path)  # the editor may be reading the clip
         return True
     except Exception as exc:
         log(f"{what} failed: {exc}")

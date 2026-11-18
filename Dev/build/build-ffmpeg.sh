@@ -6,6 +6,8 @@
 #   - FFmpeg  https://github.com/FFmpeg/FFmpeg          (pinned tag + commit)
 #   - x264    https://code.videolan.org/videolan/x264   (pinned commit)
 #   - zlib    https://github.com/madler/zlib            (pinned commit, for PNG)
+#   - dav1d   https://code.videolan.org/videolan/dav1d  (pinned release commit:
+#     AV1 decoding - FFmpeg's own AV1 decoder only drives hardware decoders)
 #   - nv-codec-headers, AMF  (pinned commits; headers only, Windows' NVENC and
 #     AMF exports: the drivers' own DLLs are loaded when they're used)
 #
@@ -15,9 +17,12 @@
 #
 # The build is deliberately minimal: the ffmpeg CLI only, H.264 via x264,
 # FFmpeg's native AAC encoder, the demuxers/decoders OBS recordings can
-# contain, the video, picture and sound files people import into the clip
-# editor, MP4/MKV output, JPEG thumbnails, raw PCM (waveforms) and the
-# filters the clip editor's exports use. No network, no hardware
+# contain (AV1 through dav1d), the video, picture and sound files people
+# import into the clip editor, MP4/MKV output - and MOV/FLV/TS, so a clip OBS
+# recorded in those can be cut and stripped in its own format - JPEG
+# thumbnails, raw PCM (waveforms) and the filters the clip editor's exports
+# use. ClipEm's code must only ask for what's listed here:
+# Dev/tests/test_ffmpeg_build_coverage.py and test_clip_edit.py check it. No network, no hardware
 # acceleration, no autodetected system libraries - so the result is
 # reproducible and small.
 #
@@ -25,11 +30,11 @@
 #   ffmpeg-<ver>-<rev>-linux-x86_64.tar.gz   bin/ffmpeg + LICENSE/SOURCES
 #   ffmpeg-<ver>-<rev>-windows-x86_64.zip    bin/ffmpeg.exe + LICENSE/SOURCES
 #   ffmpeg-<ver>-<rev>-source.tar.gz         the exact FFmpeg + x264 sources built
-#                                        (zlib's too; published alongside the binaries -
+#                                        (zlib's and dav1d's too; published alongside the binaries -
 #                                        the GPL requires offering them)
 #
 # Requirements (Arch/CachyOS):
-#   sudo pacman -S --needed base-devel git nasm mingw-w64-gcc
+#   sudo pacman -S --needed base-devel git nasm mingw-w64-gcc meson ninja
 #
 # Usage: ./build/build-ffmpeg.sh [--force]
 #   --force     rebuild even if the archives for these pins already exist
@@ -47,11 +52,13 @@ FFMPEG_TAG="n9.0.2"
 FFMPEG_COMMIT="946fcce07b6dcd0331c8cc609192aeff5e1924f8"
 X264_COMMIT="b35605ace3ddf7c1a5d67a2eb553f034aef41d55"  # x264 "stable" branch
 ZLIB_COMMIT="51b7f2abdade71cd9bb0e7a373ef2610ec6f9daf"  # zlib v1.3.1
+DAV1D_TAG="1.5.5"
+DAV1D_COMMIT="6c7bee685677fd997a431302be4fea8ea4017606"
 NV_HEADERS_COMMIT="f2053071ea93137255b6dcf42e9b4c9e0965a44e"
 AMF_COMMIT="57ee0cfb0e1a08d9041f77435653794c1b012be0"  # AMF v1.5.3
 # ClipEm's own build revision: bump it whenever FFMPEG_COMMON_FLAGS change, so
 # the archives get new names (and hashes) and installs pick the new build up.
-BUILD_REV="r5"
+BUILD_REV="r6"
 
 DEV_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$DEV_DIR/dist/ffmpeg"
@@ -67,7 +74,7 @@ if [[ "${1:-}" != "--force" && -f "$LINUX_ARCHIVE" && -f "$WINDOWS_ARCHIVE" && -
   exit 0
 fi
 
-for tool in git make nasm pkg-config gcc x86_64-w64-mingw32-gcc zip tar; do
+for tool in git make nasm pkg-config gcc x86_64-w64-mingw32-gcc meson ninja zip tar; do
   command -v "$tool" >/dev/null 2>&1 || {
     echo "$tool is required - see the Requirements comment at the top of this script." >&2
     exit 1
@@ -91,10 +98,11 @@ fetch() {  # <url> <commit> <dir>
 }
 
 mkdir -p "$WORK_DIR" "$OUT_DIR"
-echo "=== Fetching FFmpeg $FFMPEG_TAG, x264 and zlib ==="
+echo "=== Fetching FFmpeg $FFMPEG_TAG, x264, zlib and dav1d $DAV1D_TAG ==="
 fetch https://github.com/FFmpeg/FFmpeg.git "$FFMPEG_COMMIT" "$WORK_DIR/src/ffmpeg"
 fetch https://code.videolan.org/videolan/x264.git "$X264_COMMIT" "$WORK_DIR/src/x264"
 fetch https://github.com/madler/zlib.git "$ZLIB_COMMIT" "$WORK_DIR/src/zlib"
+fetch https://code.videolan.org/videolan/dav1d.git "$DAV1D_COMMIT" "$WORK_DIR/src/dav1d"
 fetch https://github.com/FFmpeg/nv-codec-headers.git "$NV_HEADERS_COMMIT" "$WORK_DIR/src/nv-codec-headers"
 fetch https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git "$AMF_COMMIT" "$WORK_DIR/src/amf"
 
@@ -104,15 +112,21 @@ tag_commit="$(git ls-remote https://github.com/FFmpeg/FFmpeg.git "refs/tags/$FFM
   echo "FFmpeg tag $FFMPEG_TAG now points at $tag_commit, not the pinned $FFMPEG_COMMIT - investigate." >&2
   exit 1
 }
+tag_commit="$(git ls-remote https://code.videolan.org/videolan/dav1d.git "refs/tags/$DAV1D_TAG^{}" | awk '{print $1}')"
+[[ "$tag_commit" == "$DAV1D_COMMIT" ]] || {
+  echo "dav1d tag $DAV1D_TAG now points at $tag_commit, not the pinned $DAV1D_COMMIT - investigate." >&2
+  exit 1
+}
 
 # --- Build -----------------------------------------------------------------
 # Everything OBS can write to a recording (H.264/HEVC/AV1 video, AAC/Opus
-# audio, in MP4/MOV/MKV/FLV/TS) must be readable; output is H.264+AAC in
+# audio, in MP4/MOV/MKV/FLV/TS) must be readable, and writable as it is (a
+# clip is cut and stripped in its own container); output is H.264+AAC in
 # MP4/MKV, JPEG thumbnails, and raw PCM for the editor's waveforms. The other
 # formats are what can be imported into the editor (clip_edit.ASSET_EXTENSIONS).
 # shellcheck disable=SC2054  # commas are part of the configure values
 FFMPEG_COMMON_FLAGS=(
-  --enable-gpl --enable-libx264 --enable-zlib
+  --enable-gpl --enable-libx264 --enable-zlib --enable-libdav1d
   --disable-autodetect --disable-network --disable-doc --disable-debug
   --disable-ffplay --disable-ffprobe
   --enable-static --disable-shared
@@ -122,9 +136,10 @@ FFMPEG_COMMON_FLAGS=(
   --enable-demuxer=mp3,wav,flac,ogg,gif,image2,png_pipe,jpeg_pipe,webp_pipe,bmp_pipe
   --enable-decoder=h264,hevc,av1,aac,aac_latm,opus,mp3,pcm_s16le,pcm_f32le
   --enable-decoder=pcm_s24le,pcm_s32le,pcm_u8,flac,vorbis,vp8,vp9,gif,png,mjpeg,webp,bmp
+  --enable-decoder=libdav1d
   --enable-parser=h264,hevc,av1,aac,aac_latm,opus,mpegaudio,flac,vorbis,vp8,vp9,png,mjpeg,webp,bmp,gif
   --enable-encoder=libx264,aac,mjpeg,pcm_s16le
-  --enable-muxer=mp4,matroska,null,pcm_s16le,image2
+  --enable-muxer=mp4,matroska,null,pcm_s16le,image2,flv,mpegts
   --enable-bsf=aac_adtstoasc,h264_mp4toannexb,extract_extradata
   --enable-filter=scale,format,aresample,aformat,null,anull,trim,atrim,setpts,asetpts
   --enable-filter=concat,volume,amix,adelay,apad,afade,asplit,split
@@ -171,6 +186,30 @@ build_target() {  # <name> <host-triplet-or-empty>
     cp -a "$WORK_DIR/src/amf/amf/public/include/." "$prefix/include/AMF/"
   fi
 
+  echo -e "\n=== Building dav1d $DAV1D_TAG ($name) ==="
+  local meson_flags=(--prefix="$prefix" --libdir=lib --buildtype=release --default-library=static
+    -Denable_tools=false -Denable_tests=false -Denable_examples=false -Denable_docs=false)
+  if [[ -n "$host" ]]; then
+    cat > "$WORK_DIR/$name/meson-cross.ini" <<CROSS
+[binaries]
+c = '$host-gcc'
+ar = '$host-ar'
+strip = '$host-strip'
+windres = '$host-windres'
+nasm = 'nasm'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'windows'
+cpu_family = 'x86_64'
+cpu = 'x86_64'
+endian = 'little'
+CROSS
+    meson_flags+=(--cross-file="$WORK_DIR/$name/meson-cross.ini")
+  fi
+  meson setup "${meson_flags[@]}" "$WORK_DIR/$name/dav1d-build" "$WORK_DIR/src/dav1d"
+  ninja -C "$WORK_DIR/$name/dav1d-build" -j"$JOBS" install
+
   echo -e "\n=== Building FFmpeg $FFMPEG_TAG ($name) ==="
   (cd "$WORK_DIR/$name/ffmpeg" \
     && PKG_CONFIG_PATH="$prefix/lib/pkgconfig" PKG_CONFIG_LIBDIR="$prefix/lib/pkgconfig" \
@@ -185,6 +224,7 @@ This ffmpeg was built for ClipEm from unmodified official sources:
   FFmpeg $FFMPEG_TAG  https://github.com/FFmpeg/FFmpeg  commit $FFMPEG_COMMIT
   x264             https://code.videolan.org/videolan/x264  commit $X264_COMMIT
   zlib             https://github.com/madler/zlib  commit $ZLIB_COMMIT
+  dav1d $DAV1D_TAG      https://code.videolan.org/videolan/dav1d  commit $DAV1D_COMMIT (BSD 2-clause)
   nv-codec-headers https://github.com/FFmpeg/nv-codec-headers  commit $NV_HEADERS_COMMIT
   AMF              https://github.com/GPUOpen-LibrariesAndSDKs/AMF  commit $AMF_COMMIT
 Licensed under the GNU GPL (see LICENSE.txt). The exact source code is
@@ -220,10 +260,10 @@ check_has() {  # <-encoders|-decoders|-muxers|-filters> <name>...
   done
 }
 check_has -encoders libx264 aac mjpeg pcm_s16le
-check_has -muxers mp4 matroska null s16le image2
+check_has -muxers mp4 matroska null s16le image2 mov flv mpegts
 check_has -filters concat volume amix adelay apad afade asplit split scale loudnorm alimiter pan channelsplit join agate crop
 check_has -filters overlay fade tpad colorchannelmixer
-check_has -decoders png mjpeg vp9 flac vorbis mp3 gif
+check_has -decoders png mjpeg vp9 flac vorbis mp3 gif libdav1d
 if ldd "$WORK_DIR/linux-x86_64/ffmpeg/ffmpeg" >/dev/null 2>&1; then
   echo "Linux build is dynamically linked - expected a static binary" >&2
   exit 1
@@ -237,7 +277,7 @@ package windows-x86_64 ffmpeg.exe "$WINDOWS_ARCHIVE"
 echo -e "\n=== Source archive (GPL) ==="
 rm -f "$SOURCE_ARCHIVE"
 tar --sort=name --owner=0 --group=0 --numeric-owner --exclude=.git \
-  --exclude=amf/Thirdparty --exclude=amf/amf/doc -C "$WORK_DIR/src" -cf - ffmpeg x264 zlib nv-codec-headers amf \
+  --exclude=amf/Thirdparty --exclude=amf/amf/doc -C "$WORK_DIR/src" -cf - ffmpeg x264 zlib dav1d nv-codec-headers amf \
   | gzip -n > "$SOURCE_ARCHIVE"
 echo "Wrote $SOURCE_ARCHIVE"
 

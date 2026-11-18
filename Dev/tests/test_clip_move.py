@@ -104,6 +104,27 @@ def test_a_move_across_drives_copies_then_removes(tmp_path, monkeypatch):
     assert not (old / "a.mp4").exists() and (new / "a.mp4").read_bytes() == b"video"
 
 
+def test_a_clip_still_open_isnt_left_in_both_folders(tmp_path, monkeypatch):
+    # Windows: a clip open in the editor can be neither renamed nor removed.
+    old, new = folders(tmp_path)
+    clip(old)
+    real_remove = os.remove
+
+    def rename(path, target):
+        raise PermissionError("in use")
+
+    def remove(path):
+        if os.path.dirname(str(path)) == str(old):
+            raise PermissionError("in use")
+        real_remove(path)
+
+    monkeypatch.setattr(clip_move.os, "rename", rename)
+    monkeypatch.setattr(clip_move.os, "remove", remove)
+    result = clip_move.transfer(old, new, move=True)
+    assert result["done"] == 0 and result["failed"][0][0] == "a.mp4"
+    assert (old / "a.mp4").exists() and not (new / "a.mp4").exists()  # so moving again moves it
+
+
 def test_the_key_is_the_editors(tmp_path):
     old, _new = folders(tmp_path)
     path = clip(old)

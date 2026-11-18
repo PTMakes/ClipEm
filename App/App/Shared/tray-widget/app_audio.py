@@ -586,8 +586,8 @@ class AppTrackMonitor:
 
     def _publish_active(self, app):
         if app != self._published:
-            self._published = app
             self._publish(app)
+            self._published = app  # only once it's out: a failed write is tried again next time
 
     def _tick(self):
         recording_here = self._thread is None  # else the recording thread has it

@@ -38,6 +38,7 @@ from operator import mul
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import clip_naming  # noqa: E402
 import clip_tracks  # noqa: E402
+import replace_file  # noqa: E402
 
 SHARED_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RUN_CONFIG_PATH = os.path.join(SHARED_DIR, "run_config.json")
@@ -107,7 +108,7 @@ def write_state(state, path=None):
     partial = path + ".partial"
     with open(partial, "w", encoding="utf-8") as f:
         json.dump(state, f)
-    os.replace(partial, path)
+    replace_file.replace(partial, path)  # Windows: the tray or the OBS script may be reading it
 
 
 def clear_state(path=None):
@@ -173,14 +174,10 @@ def probe(ffmpeg, path, run=subprocess.run):
             "audio_tracks": len(_AUDIO_RE.findall(result.stderr))}
 
 
-def _container(path):
-    return {".mkv": "matroska", ".mov": "mov", ".flv": "flv"}.get(os.path.splitext(path)[1].lower(), "mp4")
-
-
 def build_cut_command(ffmpeg, src, out_path, start, end, container_of=None):
     """The clip: start to end of the save, video and the mix, losslessly - so
     it starts on the keyframe at or before `start`."""
-    container = _container(container_of or out_path)
+    container = clip_tracks.container_for(container_of or out_path)
     cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y"]
     if start > 0:
         cmd += ["-ss", f"{start:.3f}"]
