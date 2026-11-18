@@ -5,7 +5,7 @@
     "sections": {
       "New Features": [
         "Missing-audio detection now watches desktop audio too: if OBS hears nothing while an app is playing sound, ClipEm reopens it and tells you if that doesn't help.",
-        "The audio peak guard now turns a volume it lowered back up, 1 dB at a time, once the source stops clipping. A volume you change by hand is left alone.",
+        "The audio peak guard now turns a volume it lowered back up. A volume you change by hand is left alone.",
         "Full Clip Editor Filters - open the sidebar and filter down to any detected games, days, or clip types.",
         "Error popups and clip editor errors have Copy and Send Bug Report buttons."
       ],
