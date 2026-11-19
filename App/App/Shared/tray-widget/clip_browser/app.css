@@ -92,13 +92,31 @@ body {
 .muted { color: var(--muted); }
 
 #sidebar {
-  width: 340px;
-  min-width: 260px;
+  position: relative; /* for #sidebar-resizer */
+  flex: none;
+  width: 390px; /* dragged wider or narrower: browser.js sets it */
+  min-width: 360px; /* a clip's date fits on its line beside the thumbnail */
+  max-width: 60vw;
   display: flex;
   flex-direction: column;
   background: var(--panel);
   border-right: 1px solid var(--line);
 }
+
+/* The sidebar's right edge: drag to resize, double-click for the default width. */
+#sidebar-resizer {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -4px;
+  width: 8px;
+  z-index: 5;
+  cursor: ew-resize;
+  touch-action: none;
+}
+#sidebar-resizer:hover, body.resizing-sidebar #sidebar-resizer { background: linear-gradient(var(--accent), var(--accent)) center / 2px 100% no-repeat; }
+body.resizing-sidebar { cursor: ew-resize; user-select: none; }
+body.resizing-sidebar * { pointer-events: none; }
 
 .sidebar-head {
   display: flex;
@@ -259,11 +277,18 @@ body {
   pointer-events: none;
 }
 
-.thumb .length {
+/* The size and length, bottom-right on the thumbnail. */
+.thumb-tags {
   position: absolute;
   right: 4px;
   bottom: 6px;
+  display: flex;
+  gap: 3px;
+  pointer-events: none;
+}
+.thumb .length, .thumb .size {
   padding: 0 4px;
+  white-space: nowrap;
   border-radius: 3px;
   background: rgba(0, 0, 0, 0.7);
   color: #fff;
@@ -281,21 +306,19 @@ body {
 }
 
 .clip-text .when { font-weight: 600; }
-.clip-text .size { font-size: 12px; }
 
-/* Size and +tracks/+small on one line, so with the title's two lines the
-   text stays clear of the folder and delete buttons below-right and every
-   clip is the thumbnail's height. */
-.clip-meta { display: flex; align-items: center; gap: 4px; min-width: 0; }
-/* The size always shows whole ("128 MB"); on a narrow sidebar the badges
-   are cut short instead. */
-.clip-meta .size { flex: none; white-space: nowrap; }
-.badges { flex: 0 1 auto; min-width: 0; display: flex; gap: 3px; }
+/* The badges (status, +tracks, +small) wrap onto a second line if they need
+   it - no more, so they stay clear of the folder and delete buttons
+   below-right and every clip is the thumbnail's height. */
+.clip-meta { min-width: 0; }
+.badges { display: flex; flex-wrap: wrap; gap: 3px; max-height: 35px; overflow: hidden; }
 
 .clip-export-row { flex-basis: 100%; min-width: 0; display: flex; flex-wrap: wrap; gap: 2px 6px; }
+/* A clip's date: always one line. */
+.clip-text .when:not(.named) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* Up to two lines - an export's name ("Replay 2026-10-17 / 22-06-05-discord")
    needs them to show what it is - then cut short with "...". */
-.clip-text .when {
+.clip-text .when.named {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -1162,7 +1185,9 @@ button.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(
 
 @media (max-width: 720px) {
   body { flex-direction: column; overflow: auto; }
-  #sidebar { width: 100%; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--line); }
+  #sidebar { width: 100% !important; min-width: 0; max-width: none; max-height: 45vh; border-right: 0;
+    border-bottom: 1px solid var(--line); }
+  #sidebar-resizer { display: none; }
   .thumb { width: 128px; }
   /* The shorter thumbnail leaves no room beside it for the buttons. */
   .clip:not(:has(.clip-export-row:not([hidden]))) .clip-text { padding-bottom: 30px; }

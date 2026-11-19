@@ -62,6 +62,21 @@ def page(tmp_path):
             srv.server_close()
 
 
+def reload(tools):
+    """Loads the page again and waits for its clips (its old self gone)."""
+    tools.js("window.oldPage = true")
+    tools.call("Page.reload")
+    deadline = time.monotonic() + 15
+    while True:
+        try:
+            if tools.js("typeof oldPage === 'undefined' && typeof state !== 'undefined' && state.clips.length > 0"):
+                return
+        except RuntimeError:  # mid-navigation
+            pass
+        assert time.monotonic() < deadline, "the page didn't load again"
+        time.sleep(0.1)
+
+
 def post_clip_save(folder, seconds=8, press=5):
     """A post-clip save as clip_post leaves it: the clip, cut at the press,
     and the "-extra.mkv" running on past it, with every track."""
@@ -260,8 +275,7 @@ def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
     assert tools.js(shown) == ["Replay-2026-10-25-21-00-00-Deadlock.mp4"]
     assert tools.js("$('clip-count').textContent") == "1 of 4"
     # The status (not the search) is there again next time.
-    tools.js("location.reload()")
-    assert tools.wait_for("typeof state !== 'undefined' && state.clips.length > 0")
+    reload(tools)
     assert tools.js("$('filter-status').value") == "todo"
     assert tools.js("$('filter-search').value") == ""
     assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4", "Replay-2026-10-25-21-00-00-Deadlock.mp4"]
@@ -290,6 +304,46 @@ def test_a_clip_is_no_longer_edited_after_reset_or_undoing_every_change(tmp_path
     assert tools.js(saved) is False and tools.js(mark) is None
     # And the server says so (the next poll, or the editor opened again).
     assert tools.js("api('api/clips').then((data) => data.clips[0].edited)") is False
+
+
+def test_the_sidebar_resizes_and_its_clips_fit(tmp_path, page, monkeypatch):
+    clip = tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4"
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)], check=True)
+    for suffix in ("-tracks.mkv", "-small.mp4", "-discord.mp4"):
+        shutil.copy(clip, tmp_path / clip.name.replace(".mp4", suffix))
+    for path in tmp_path.iterdir():
+        os.utime(path, (time.time() - 3600, time.time() - 3600))
+    monkeypatch.setattr(clip_browser.Editor, "has_project", lambda self, path, mtime: True)
+    tools = page(tmp_path)
+    # Headless, the window has no size of its own.
+    tools.call("Emulation.setDeviceMetricsOverride", width=1600, height=900, deviceScaleFactor=1, mobile=False)
+    width = "$('sidebar').getBoundingClientRect().width"
+    assert tools.js(width) == 390
+
+    def drag(by):
+        box = tools.js("(() => { const r = $('sidebar-resizer').getBoundingClientRect();"
+                       " return [r.left + r.width / 2, r.top + r.height / 2]; })()")
+        x, y = box
+        tools.call("Input.dispatchMouseEvent", type="mousePressed", x=x, y=y, button="left", buttons=1, clickCount=1)
+        tools.call("Input.dispatchMouseEvent", type="mouseMoved", x=x + by, y=y, button="left", buttons=1)
+        tools.call("Input.dispatchMouseEvent", type="mouseReleased", x=x + by, y=y, button="left", clickCount=1)
+
+    drag(100)
+    assert tools.js(width) == 490
+    reload(tools)
+    assert tools.js(width) == 490  # remembered
+    drag(-400)
+    assert tools.js(width) == 360  # no narrower than a date fits
+    clip_row = f"document.querySelector('[data-name=\"{clip.name}\"]')"
+    when = tools.js(f"(() => {{ const w = {clip_row}.querySelector('.when');"
+                    " return [w.scrollWidth <= w.clientWidth, w.getClientRects().length && w.offsetHeight]; })()")
+    assert when[0], "the date doesn't fit on its line"
+    badges = tools.js(f"[...{clip_row}.querySelectorAll('.badge')].map((b) => b.offsetTop)")
+    assert len(badges) == 3 and len(set(badges)) <= 2  # Exported +tracks +small, on two lines at most
+    assert tools.js(f"{clip_row}.querySelector('.thumb .size').textContent").endswith("MB")
+    tools.js("$('sidebar-resizer').dispatchEvent(new MouseEvent('dblclick'))")
+    assert tools.js(width) == 390
 
 
 def test_typing_a_new_name_renames_the_clip_and_its_copies(tmp_path, page):

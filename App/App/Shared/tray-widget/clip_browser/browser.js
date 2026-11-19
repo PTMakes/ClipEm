@@ -7,6 +7,7 @@
 const POLL_MS = 3000;
 const SIDEBAR_KEY = "clipem.sidebarHidden";
 const FILTERS_KEY = "clipem.clipFilters";
+const SIDEBAR_WIDTH_KEY = "clipem.sidebarWidth";
 
 const state = {
   clips: [],
@@ -127,14 +128,17 @@ function clipItem(clip) {
   scrub.className = "scrub";
   const length = document.createElement("span");
   length.className = "length";
-  thumb.append(img, scrub, length);
+  const size = document.createElement("span");
+  size.className = "size";
+  const tags = document.createElement("div");
+  tags.className = "thumb-tags";
+  tags.append(size, length);
+  thumb.append(img, scrub, tags);
 
   const text = document.createElement("div");
   text.className = "clip-text";
   const when = document.createElement("span");
   when.className = "when";
-  const size = document.createElement("span");
-  size.className = "size muted";
   const badges = document.createElement("span");
   badges.className = "badges";
   // Links on their own row under the thumbnail (the text beside it is too
@@ -149,7 +153,7 @@ function clipItem(clip) {
   const origin = linkButton("clip-origin", () => highlightClip(origin.dataset.clip));
   const meta = document.createElement("div");
   meta.className = "clip-meta";
-  meta.append(size, badges);
+  meta.append(badges);
   text.append(when, meta);
 
   const reveal = document.createElement("button");
@@ -230,10 +234,9 @@ function updateItem(li, clip) {
   const from = clip.exported_from;
   const stem = clip.name.replace(/\.[^.]+$/, "");
   li.querySelector(".when").textContent = from ? stem : formatWhen(clip.mtime);
-  li.querySelector(".when").title = from ? clip.name : "";
+  li.querySelector(".when").title = from ? clip.name : formatWhen(clip.mtime); // when cut short
   li.querySelector(".when").classList.toggle("named", !!from);
   li.querySelector(".size").textContent = formatSize(clip.size);
-  li.querySelector(".size").title = li.querySelector(".size").textContent; // when cut short
   li.querySelector(".length").textContent = formatDuration(clip.duration);
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
@@ -655,6 +658,49 @@ function setSidebarHidden(hidden) {
   } catch (err) { /* storage unavailable - just not remembered */ }
   window.dispatchEvent(new Event("resize"));
 }
+
+// Dragging its right edge; the width's remembered. Double-click: the default.
+function setSidebarWidth(width) {
+  const sidebar = $("sidebar");
+  if (width) sidebar.style.width = `${Math.round(width)}px`; // CSS min/max-width keep it sane
+  else sidebar.style.removeProperty("width");
+  window.dispatchEvent(new Event("resize"));
+}
+
+$("sidebar-resizer").addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const handle = e.currentTarget;
+  const startX = e.clientX;
+  const startWidth = $("sidebar").getBoundingClientRect().width;
+  handle.setPointerCapture(e.pointerId);
+  document.body.classList.add("resizing-sidebar");
+  const move = (ev) => setSidebarWidth(startWidth + ev.clientX - startX);
+  const up = () => {
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", up);
+    handle.removeEventListener("pointercancel", up);
+    document.body.classList.remove("resizing-sidebar");
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round($("sidebar").getBoundingClientRect().width)));
+    } catch (err) { /* storage unavailable - just not remembered */ }
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", up);
+  handle.addEventListener("pointercancel", up);
+});
+
+$("sidebar-resizer").addEventListener("dblclick", () => {
+  setSidebarWidth(null);
+  try {
+    localStorage.removeItem(SIDEBAR_WIDTH_KEY);
+  } catch (err) { /* storage unavailable */ }
+});
+
+try {
+  const saved = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+  if (saved > 0) setSidebarWidth(saved);
+} catch (err) { /* storage unavailable */ }
 
 $("toggle-sidebar").addEventListener("click", () => {
   setSidebarHidden(!document.body.classList.contains("sidebar-hidden"));
