@@ -72,19 +72,53 @@ print(f"Bundling Python pin: {url} ({sha256})")
 PYEOF
 
 # Downloads <url> to <out> and checks it against its sha256 in
-# upstream-pins.json - fails if it isn't pinned or doesn't match.
+# upstream-pins.json - fails if it isn't pinned or doesn't match. A dropped
+# connection is retried; a good download is kept in cache/ (by its sha256),
+# so the next build doesn't fetch it again.
 fetch_pinned() {
-  python3 - "$1" "$DEV_DIR/release/upstream-pins.json" "$2" <<'PYEOF'
-import hashlib, json, sys, urllib.request
-url, pins_path, out_path = sys.argv[1:4]
+  python3 - "$1" "$DEV_DIR/release/upstream-pins.json" "$2" "$SCRIPT_DIR/cache" <<'PYEOF'
+import hashlib, json, os, shutil, sys, time, urllib.request
+url, pins_path, out_path, cache_dir = sys.argv[1:5]
 sha256 = json.load(open(pins_path)).get(url)
 if not sha256:
     sys.exit(f"{url} isn't pinned in {pins_path}.")
-data = urllib.request.urlopen(url, timeout=300).read()
-actual = hashlib.sha256(data).hexdigest()
-if actual != sha256:
-    sys.exit(f"Checksum mismatch for {url}: expected {sha256}, got {actual}")
-open(out_path, "wb").write(data)
+
+def digest(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+cached = os.path.join(cache_dir, sha256)
+if os.path.isfile(cached) and digest(cached) == sha256:
+    shutil.copyfile(cached, out_path)
+    print(f"Using cached {url} (sha256 OK)")
+    sys.exit(0)
+os.makedirs(cache_dir, exist_ok=True)
+partial = cached + ".part"
+attempts = 5
+for attempt in range(1, attempts + 1):
+    try:
+        with urllib.request.urlopen(url, timeout=300) as response, open(partial, "wb") as f:
+            shutil.copyfileobj(response, f, 1 << 20)
+            expected = response.headers.get("Content-Length")
+        # A dropped connection can end the read early without an error.
+        if expected and os.path.getsize(partial) != int(expected):
+            raise OSError(f"got {os.path.getsize(partial)} of {expected} bytes")
+        actual = digest(partial)
+        if actual != sha256:
+            raise OSError(f"checksum mismatch: expected {sha256}, got {actual}")
+        break
+    except Exception as exc:  # IncompleteRead, timeouts, resets, a cut-short file...
+        if os.path.exists(partial):
+            os.remove(partial)
+        if attempt == attempts:
+            sys.exit(f"Couldn't download {url} after {attempts} tries: {exc}")
+        print(f"Download of {url} failed ({exc}) - retrying ({attempt}/{attempts - 1})...", file=sys.stderr)
+        time.sleep(5 * attempt)
+os.replace(partial, cached)
+shutil.copyfile(cached, out_path)
 print(f"Downloaded {url} (sha256 OK)")
 PYEOF
 }

@@ -92,6 +92,7 @@ __pycache__/
 /Dev/.pipewire-audio-work/
 /Dev/installer/windows/dist/
 /Dev/installer/windows/build/
+/Dev/installer/windows/cache/
 /Dev/.ffmpeg-build/
 /Dev/.obs-plugin-work/
 /Dev/.obs-plugin-work.log
