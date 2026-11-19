@@ -402,6 +402,57 @@ def test_exports_point_back_to_their_clip(tmp_path):
     }  # not "-best" or "-edition" (not export names), nor an export whose clip is gone
 
 
+def test_clips_are_listed_as_edited_or_exported_even_after_the_export_is_deleted(tmp_path, monkeypatch):
+    clips = tmp_path / "clips"
+    clips.mkdir()
+    for name in ("new.mp4", "edited.mp4", "done.mp4", "old.mp4", "old-discord.mp4"):
+        _touch(clips, name, b"x", mtime=100)
+    _touch(clips, "done-edit.mp4", b"e", mtime=200)
+    editor = clip_browser.Editor(ffmpeg="ffmpeg", edits_dir=str(tmp_path / "edits"),
+                                 exports_path=str(tmp_path / "exports.json"))
+    project = editor.project_path(str(clips / "edited.mp4"))
+    os.makedirs(os.path.dirname(project))
+    open(project, "w").close()
+    editor.record_export(str(clips / "done.mp4"), [str(clips / "done-edit.mp4")], now=123)
+    srv = clip_browser.ClipBrowserServer(lambda: str(clips), token="tok", thumbnailer=FakeThumbnailer(), editor=editor)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+
+    def listed():
+        return {c["name"]: (c["edited"], c["exported"]) for c in json.loads(_get(srv, "api/clips")[2])["clips"]}
+
+    try:
+        assert listed() == {"new.mp4": (False, None), "edited.mp4": (True, None), "done.mp4": (False, 123),
+                            "done-edit.mp4": (False, None),
+                            "old.mp4": (False, 100),  # no record - its export's named after it
+                            "old-discord.mp4": (False, None)}
+        (clips / "done-edit.mp4").unlink()  # uploaded and deleted: still exported
+        editor.record_export(str(clips / "new.mp4"), [str(clips / "new-edit.mp4")], now=200)  # doesn't forget it
+        assert listed()["done.mp4"] == (False, 123)
+        monkeypatch.setattr(clip_browser, "move_to_trash", lambda path, system=None: os.remove(path))
+        clip_browser.delete_clip(str(clips), "done.mp4", editor)
+        _touch(clips, "done.mp4", b"x", mtime=100)  # a new clip by that name hasn't been exported
+        assert listed()["done.mp4"] == (False, None)
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_a_saved_edit_with_nothing_changed_is_not_edited(server, editor):
+    clips = server.folder_fn()
+    path = os.path.join(clips, "a.mp4")
+    mtime = os.path.getmtime(path)
+    assert not editor.has_project(path, mtime)
+    edited = {"name": "a.mp4", "project": {"fade_in": 1.0}}
+    assert _post(server, "api/project", edited)[0] == 200
+    assert editor.has_project(path, mtime)
+    assert _post(server, "api/project", {**edited, "edited": False})[0] == 200  # Reset
+    assert not editor.has_project(path, mtime)
+    with open(editor.project_path(path), "w") as f:
+        json.dump({"keep": [[0, 1]]}, f)  # saved before edits said
+    os.utime(editor.project_path(path), (1, 1))
+    assert editor.has_project(path, mtime)
+
+
 def test_export_as_goes_where_picked_and_can_be_shown(server, editor, tmp_path, monkeypatch):
     started = []
     monkeypatch.setattr(editor.export_job, "start", lambda steps, outputs, total, cleanup=(), on_done=None, fallback=None:

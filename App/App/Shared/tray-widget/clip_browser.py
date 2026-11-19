@@ -122,7 +122,9 @@ PASSLOG_PATH = os.path.join(CACHE_DIR, "x264-pass")
 # from a clip when there's no record of it (exports.json keeps the newest).
 EXPORT_SUFFIX_RE = re.compile(r"-(?:edit|discord|\d{3,4}p\d*)(?:-\d+)?$")
 # Each clip's newest export, for the clip list's "Last exported" link:
-# {clip path: {"file": export path, "time": epoch seconds}}.
+# {clip path: {"file": export path, "time": epoch seconds}}. Kept while the
+# clip is there, even after its export is deleted - the clip's still been
+# exported (the list's "Exported" filter).
 EXPORTS_PATH = os.path.join(CACHE_DIR, "exports.json")
 LOCK_PATH = os.path.join(SCRIPT_DIR, ".clip_browser.lock")
 LAUNCH_PATH = "clipem-editor"
@@ -375,6 +377,7 @@ class Editor:
         self._can_channels = None
         self._can_gate = None
         self._lock = threading.Lock()
+        self._edited = {}  # {project path: (its mtime, whether it's edited)} - has_project
 
     def _features(self):
         if self._found is None:
@@ -603,10 +606,14 @@ class Editor:
         path = os.path.join(self.peaks_dir, f"{asset['id']}-v3.json")
         return clip_edit.track_peaks(self.ffmpeg, asset["path"], 0, path)
 
-    def save_project(self, clip_path, info, project):
+    def save_project(self, clip_path, info, project, edited=True):
+        """edited: whether the page has anything changed from the clip as it
+        came (false after Reset, or undoing every change) - the clip list's
+        "Edited" (has_project)."""
         project = clip_edit.normalize_project(project, info, self.assets())
         os.makedirs(self.edits_dir, exist_ok=True)
-        write_text_atomic(self.project_path(clip_path), json.dumps({**project, "clip": os.path.realpath(clip_path)}))
+        write_text_atomic(self.project_path(clip_path),
+                          json.dumps({**project, "clip": os.path.realpath(clip_path), "edited": bool(edited)}))
         return project
 
     def move_project(self, old_project, clip_path):
@@ -645,14 +652,14 @@ class Editor:
 
     def record_export(self, clip_path, files, now=None):
         """Remembers files[0] (the .mp4) as clip_path's newest export, and
-        forgets entries whose clip or export is gone."""
+        forgets entries whose clip is gone (not ones whose export is: the
+        clip was still exported - export_times)."""
         with self._lock:
             exports = load_json(self.exports_path, {})
             if not isinstance(exports, dict):
                 exports = {}
             exports = {clip: entry for clip, entry in exports.items()
-                       if isinstance(entry, dict) and os.path.isfile(clip)
-                       and os.path.isfile(str(entry.get("file")))}
+                       if isinstance(entry, dict) and os.path.isfile(clip)}
             exports[os.path.realpath(clip_path)] = {"file": os.path.realpath(files[0]),
                                                     "time": time.time() if now is None else now}
             os.makedirs(os.path.dirname(self.exports_path), exist_ok=True)
@@ -677,6 +684,42 @@ class Editor:
                                                  "time": entry.get("time"),
                                                  "in_folder": os.path.dirname(os.path.realpath(path)) == root}
         return found
+
+    def forget_export(self, clip_path):
+        """Drops a deleted clip's export record (a clip given its name later
+        hasn't been exported)."""
+        clip_path = os.path.realpath(clip_path)
+        with self._lock:
+            exports = load_json(self.exports_path, {})
+            if isinstance(exports, dict) and clip_path in exports:
+                del exports[clip_path]
+                write_json_atomic(self.exports_path, exports)
+
+    def export_times(self, folder):
+        """{clip name: when it was last exported} for the clips in folder
+        with an export record - whether or not that export's still there."""
+        exports = load_json(self.exports_path, {})
+        if not isinstance(exports, dict):
+            return {}
+        root = os.path.realpath(folder)
+        return {os.path.basename(clip): entry.get("time") or 0 for clip, entry in exports.items()
+                if isinstance(entry, dict) and os.path.dirname(clip) == root}
+
+    def has_project(self, clip_path, mtime):
+        """Whether the clip has a saved edit with something changed in it
+        (one saved before edits said so counts). Read once per save."""
+        path = os.path.join(self.edits_dir, thumb_key(clip_path, mtime) + ".json")
+        try:
+            saved_at = os.path.getmtime(path)
+        except OSError:
+            return False
+        cached = self._edited.get(path)
+        if cached and cached[0] == saved_at:
+            return cached[1]
+        saved = load_json(path, None)
+        edited = not isinstance(saved, dict) or saved.get("edited") is not False
+        self._edited[path] = (saved_at, edited)
+        return edited
 
     def export_origins(self, folder, names):
         """{export's file name: its original clip's name} for the clips in
@@ -1002,6 +1045,7 @@ def delete_clip(folder, name, editor, trash=None, attempts=10):
                     raise
                 time.sleep(0.2)
         moved.append(os.path.basename(path))
+    editor.forget_export(paths[0])
     return moved
 
 
@@ -1301,12 +1345,20 @@ class Handler(BaseHTTPRequestHandler):
             mtimes = {clip["name"]: clip["mtime"] for clip in clips}
             naming = clip_naming.load()
             games = {clip["name"]: clip_naming.app_of(clip["name"], naming) for clip in clips}
+            exported = self.server.editor.export_times(folder)
+            # A clip with an export beside it named after it, but no record
+            # (exported before records were kept): exported then.
+            for name, origin in origins.items():
+                exported.setdefault(origin, mtimes[name])
             for clip in clips:
                 path = os.path.join(folder, clip["name"])
                 clip["duration"] = self.server.thumbnailer.info(path).get("duration")
                 clip["last_export"] = exports.get(clip["name"])
                 origin = origins.get(clip["name"])
                 clip["exported_from"] = {"name": origin, "time": mtimes[origin]} if origin else None
+                # For the list's status filter and marks.
+                clip["exported"] = exported.get(clip["name"])
+                clip["edited"] = self.server.editor.has_project(path, clip["mtime"])
                 # An export goes under its clip's game (its own name has its suffix too).
                 clip["game"] = games[origin] if origin else games[clip["name"]]
             self._json({"folder": folder, "clips": clips})
@@ -1411,7 +1463,7 @@ class Handler(BaseHTTPRequestHandler):
                 if clip:
                     editor = self.server.editor
                     info = editor.info(source)
-                    project = editor.save_project(clip, info, body.get("project"))
+                    project = editor.save_project(clip, info, body.get("project"), body.get("edited") is not False)
                     # The export options follow the crop (a cropped clip is smaller).
                     sized = clip_edit.cropped_info(info, project)
                     self._json({"project": project,

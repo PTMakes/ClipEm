@@ -6,6 +6,7 @@
 // request here is relative to it.
 const POLL_MS = 3000;
 const SIDEBAR_KEY = "clipem.sidebarHidden";
+const FILTERS_KEY = "clipem.clipFilters";
 
 const state = {
   clips: [],
@@ -237,6 +238,17 @@ function updateItem(li, clip) {
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
   badges.replaceChildren();
+  // Its status (not for an export - that's the finished video).
+  const status = from ? null : clip.exported != null ? "exported" : clip.edited ? "edited" : null;
+  if (status) {
+    const badge = document.createElement("span");
+    badge.className = `badge status-${status}`;
+    badge.textContent = status === "exported" ? "Exported" : "Edited";
+    badge.title = status === "exported"
+      ? (clip.exported ? `Exported ${shortWhen(clip.exported)}` : "Exported")
+      : "Edited, not exported yet";
+    badges.append(badge);
+  }
   for (const [key, label] of [["tracks_file", "+tracks"], ["small_file", "+small"]]) {
     if (clip[key]) {
       const badge = document.createElement("span");
@@ -326,13 +338,53 @@ async function renameClip(name, typed) {
 }
 
 // ---------------------------------------------------------------------------
-// Filters (the row under the title): game, day or hour, and which copies
+// Filters (the rows under the title): words in the name or game, game, day
+// or hour, status, and whether exports are listed
 // ---------------------------------------------------------------------------
 
 const DAY_MS = 24 * 3600 * 1000;
-const filters = { game: "", date: "", exports: true };
+const filters = { search: "", game: "", date: "", status: "", exports: true };
 const NO_GAME = "none:"; // the Game filter's "Not Detected" - no game name has the colon
-const filterControls = { game: $("filter-game"), date: $("filter-date"), exports: $("filter-exports") };
+const filterControls = {
+  game: $("filter-game"), date: $("filter-date"), status: $("filter-status"), exports: $("filter-exports"),
+};
+const STATUSES = [["todo", "Not Exported"], ["edited", "Edited, Not Exported"], ["exported", "Exported"]];
+// Remembered for next time: not the search or date (an hour or day that's
+// gone by would hide everything new).
+const SAVED_FILTERS = ["game", "status", "exports"];
+
+function loadSavedFilters() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(FILTERS_KEY) || "{}");
+    for (const key of SAVED_FILTERS) {
+      if (typeof saved[key] === typeof filters[key]) filters[key] = saved[key];
+    }
+  } catch (err) { /* storage unavailable or garbled - the defaults */ }
+  if (!STATUSES.some(([value]) => value === filters.status)) filters.status = "";
+  filterControls.exports.checked = filters.exports;
+}
+
+function saveFilters() {
+  try {
+    localStorage.setItem(FILTERS_KEY, JSON.stringify(Object.fromEntries(SAVED_FILTERS.map((k) => [k, filters[k]]))));
+  } catch (err) { /* storage unavailable - just not remembered */ }
+}
+
+// "exported" for an export (the finished video) or a clip exported (even if
+// that export's since deleted), "edited" for a clip with a saved edit, else "todo".
+function clipStatus(clip) {
+  if (clip.exported_from || clip.exported != null) return "exported";
+  return clip.edited ? "edited" : "todo";
+}
+
+function inStatus(clip, value) {
+  const status = clipStatus(clip);
+  return value === "todo" ? status !== "exported" : status === value;
+}
+
+function searchTerms() {
+  return filters.search.toLowerCase().split(/\s+/).filter(Boolean);
+}
 
 function dayKey(when) {
   const d = new Date(when);
@@ -369,7 +421,12 @@ function inDate(clip, value) {
   return dayKey(when) === value;
 }
 
-function matchesFilters(clip) {
+function matchesFilters(clip, terms = searchTerms()) {
+  if (terms.length) {
+    const text = `${clip.name} ${clip.game || ""}`.toLowerCase();
+    if (!terms.every((term) => text.includes(term))) return false;
+  }
+  if (filters.status && !inStatus(clip, filters.status)) return false;
   if (filters.game && (clip.game || NO_GAME) !== filters.game) return false;
   if (filters.date && !inDate(clip, filters.date)) return false;
   // Exports ticked (the default) lists the editor's exports with the clips.
@@ -377,11 +434,12 @@ function matchesFilters(clip) {
 }
 
 function filtering() {
-  return !!(filters.game || filters.date || !filters.exports);
+  return !!(searchTerms().length || filters.game || filters.date || filters.status || !filters.exports);
 }
 
 function visibleClips() {
-  return filtering() ? state.clips.filter(matchesFilters) : state.clips;
+  const terms = searchTerms();
+  return filtering() ? state.clips.filter((clip) => matchesFilters(clip, terms)) : state.clips;
 }
 
 function countUp(map, key, label) {
@@ -446,20 +504,41 @@ function renderFilterOptions() {
   const dateItems = [];
   if (hourOptions.length) dateItems.push({ group: "Last 24 hours", options: hourOptions });
   if (days.size) dateItems.push({ group: "Days", options: options(days).sort(newest) });
+  // Of the clips Show Exports lists ("Not Exported" is never an export).
+  const listed = filters.exports ? state.clips : state.clips.filter((clip) => !clip.exported_from);
+  const statusOptions = STATUSES.map(([value, label]) =>
+    ({ value, label: `${label} (${listed.filter((clip) => inStatus(clip, value)).length})` }));
   setOptions(filterControls.game, gameOptions);
   setOptions(filterControls.date, dateItems);
-  filterControls.game.value = filters.game;
-  filterControls.date.value = filters.date;
-  filterControls.game.classList.toggle("active", !!filters.game);
-  filterControls.date.classList.toggle("active", !!filters.date);
+  setOptions(filterControls.status, statusOptions);
+  for (const key of ["game", "date", "status"]) {
+    filterControls[key].value = filters[key];
+    filterControls[key].classList.toggle("active", !!filters[key]);
+  }
 }
 
 for (const [key, control] of Object.entries(filterControls)) {
   control.addEventListener("change", () => {
     filters[key] = control.type === "checkbox" ? control.checked : control.value;
+    saveFilters();
     renderList();
   });
 }
+
+function searchChanged(e) {
+  if (filters.search === e.target.value) return;
+  filters.search = e.target.value;
+  e.target.classList.toggle("active", !!searchTerms().length);
+  renderList();
+}
+$("filter-search").addEventListener("input", searchChanged);
+$("filter-search").addEventListener("search", searchChanged); // its clear button, and Escape
+$("filter-search").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !e.target.value) e.target.blur(); // Escape with text clears it (a search box's own)
+  if (e.key === "Enter") e.target.blur();
+});
+
+loadSavedFilters();
 
 function renderList() {
   renderFilterOptions();

@@ -16,13 +16,19 @@
       <button id="change-folder" class="icon-btn" title="Choose another folder to view clips from" aria-label="Change folder" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25v8a1 1 0 0 0 1 1h10.5a1 1 0 0 0 1-1v-6.5a1 1 0 0 0-1-1H8L6.5 3.25H2.75a1 1 0 0 0-1 1z"/></svg></button>
     </header>
     <div id="clip-filters" role="group" aria-label="Filter clips">
+      <input id="filter-search" type="search" placeholder="Search names and games" spellcheck="false" autocomplete="off"
+             aria-label="Search clips" title="Only clips whose name or game has every word typed">
       <label title="Only clips from this game or app">Game
         <select id="filter-game"><option value="">All</option></select></label>
       <label title="Only clips from this day, or this hour of the last 24 hours">Date
         <select id="filter-date"><option value="">All</option></select></label>
-      <span class="filter-checks">
-        <label title="Show videos exported from the editor in the list"><input type="checkbox" id="filter-exports" checked>Show Exports</label>
-      </span>
+      <div class="filter-row">
+        <label title="Only clips not exported yet, edited but not exported yet, or exported (exports count as exported)">Status
+          <select id="filter-status"><option value="">All</option></select></label>
+        <span class="filter-checks">
+          <label title="Show videos exported from the editor in the list"><input type="checkbox" id="filter-exports" checked>Show Exports</label>
+        </span>
+      </div>
     </div>
     <div id="sound-banner" class="banner" hidden>Click anywhere to turn on hover sound</div>
     <ul id="clip-list" aria-label="Clips, newest first"></ul>

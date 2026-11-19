@@ -287,10 +287,16 @@ function flushSave() {
   ed.saveTimer = null;
   const name = ed.name;
   if (!name) return ed.saving;
-  const body = { name, project: project() };
+  const body = { name, project: project(), edited: !isUnedited() };
   ed.saving = ed.saving.then(async () => {
     try {
       const result = await api("api/project", body);
+      // The list's "Edited" mark and Status filter, now rather than at the next poll.
+      const clip = state.clips.find((c) => c.name === name);
+      if (clip && clip.edited !== body.edited) {
+        clip.edited = body.edited;
+        renderList();
+      }
       if (ed.name === name) {
         ed.discord = result.discord;
         if (result.custom) ed.custom = result.custom; // follows the crop
@@ -2310,7 +2316,8 @@ document.addEventListener("keydown", (e) => {
 
 window.addEventListener("beforeunload", () => {
   if (ed.saveTimer && ed.name) {
-    navigator.sendBeacon("api/project", new Blob([JSON.stringify({ name: ed.name, project: project() })],
+    navigator.sendBeacon("api/project", new Blob([JSON.stringify({ name: ed.name, project: project(),
+      edited: !isUnedited() })],
       { type: "application/json" }));
   }
 });

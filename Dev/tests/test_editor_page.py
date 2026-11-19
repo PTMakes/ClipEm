@@ -219,6 +219,79 @@ def test_the_game_filter_lists_clips_without_a_game_as_not_detected(tmp_path, pa
         "Replay-2026-10-25-22-00-00.mp4"]
 
 
+def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp_path / "source.mp4")], check=True)
+    now = time.time()
+    files = {"Replay-2026-10-25-21-00-00-Deadlock.mp4": 4, "Replay-2026-10-25-22-00-00-Sober.mp4": 3,
+             "Replay-2026-10-25-23-00-00-Deadlock.mp4": 2, "Replay-2026-10-25-23-00-00-Deadlock-discord.mp4": 1}
+    for name, hours in files.items():
+        shutil.copy(tmp_path / "source.mp4", tmp_path / name)
+        os.utime(tmp_path / name, (now - hours * 3600, now - hours * 3600))
+    (tmp_path / "source.mp4").unlink()
+    # The Sober clip has a saved edit; the 23:00 one's exported (its -discord is beside it).
+    monkeypatch.setattr(clip_browser.Editor, "has_project", lambda self, path, mtime: "Sober" in path)
+    tools = page(tmp_path)
+    shown = "[...document.querySelectorAll('#clip-list .clip')].map((li) => li.dataset.name)"
+    marks = ("Object.fromEntries([...document.querySelectorAll('#clip-list .clip')].map((li) =>"
+             " [li.dataset.name, li.querySelector('[class*=status-]')?.textContent || null]))")
+    assert tools.js(marks) == {"Replay-2026-10-25-23-00-00-Deadlock-discord.mp4": None,
+                               "Replay-2026-10-25-23-00-00-Deadlock.mp4": "Exported",
+                               "Replay-2026-10-25-22-00-00-Sober.mp4": "Edited",
+                               "Replay-2026-10-25-21-00-00-Deadlock.mp4": None}
+    assert tools.js("[...$('filter-status').options].map((o) => o.text)") == [
+        "All", "Not Exported (2)", "Edited, Not Exported (1)", "Exported (2)"]
+
+    def pick(value):
+        tools.js(f"(() => {{ const c = $('filter-status'); c.value = {json.dumps(value)};"
+                 " c.dispatchEvent(new Event('change')); })()")
+
+    pick("todo")
+    assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4", "Replay-2026-10-25-21-00-00-Deadlock.mp4"]
+    pick("edited")
+    assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4"]
+    pick("exported")
+    assert tools.js(shown) == ["Replay-2026-10-25-23-00-00-Deadlock-discord.mp4",
+                               "Replay-2026-10-25-23-00-00-Deadlock.mp4"]
+    pick("todo")
+    search = ("(() => { const box = $('filter-search'); box.value = %s;"
+              " box.dispatchEvent(new Event('input')); })()")
+    tools.js(search % json.dumps("  deadLOCK 21-00 "))  # every word, any case
+    assert tools.js(shown) == ["Replay-2026-10-25-21-00-00-Deadlock.mp4"]
+    assert tools.js("$('clip-count').textContent") == "1 of 4"
+    # The status (not the search) is there again next time.
+    tools.js("location.reload()")
+    assert tools.wait_for("typeof state !== 'undefined' && state.clips.length > 0")
+    assert tools.js("$('filter-status').value") == "todo"
+    assert tools.js("$('filter-search').value") == ""
+    assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4", "Replay-2026-10-25-21-00-00-Deadlock.mp4"]
+
+
+def test_a_clip_is_no_longer_edited_after_reset_or_undoing_every_change(tmp_path, page, monkeypatch):
+    clip = tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4"
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=2",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)], check=True)
+    os.utime(clip, (time.time() - 3600, time.time() - 3600))
+    editor_class = clip_browser.Editor
+    monkeypatch.setattr(clip_browser, "Editor", lambda: editor_class(edits_dir=str(tmp_path / "edits"),
+                                                                     exports_path=str(tmp_path / "exports.json")))
+    tools = page(tmp_path)
+    assert tools.wait_for("ed.info")
+    mark = "document.querySelector('#clip-list .clip [class*=status-]')?.textContent || null"
+    saved = "(async () => { await flushSave(); return state.clips[0].edited; })()"
+    assert tools.js(mark) is None
+    tools.js("change(() => { ed.fade_in = 0.5; })")
+    assert tools.js(saved) is True and tools.js(mark) == "Edited"
+    tools.js("resetEdits()")
+    assert tools.js(saved) is False and tools.js(mark) is None
+    tools.js("change(() => { ed.fade_out = 0.5; })")
+    assert tools.js(saved) is True
+    tools.js("undo()")
+    assert tools.js(saved) is False and tools.js(mark) is None
+    # And the server says so (the next poll, or the editor opened again).
+    assert tools.js("api('api/clips').then((data) => data.clips[0].edited)") is False
+
+
 def test_typing_a_new_name_renames_the_clip_and_its_copies(tmp_path, page):
     clip = tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4"
     subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
