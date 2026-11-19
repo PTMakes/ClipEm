@@ -14,8 +14,11 @@
 // matching the clipem-editor.desktop entry clip_browser.py writes, so the
 // taskbar shows ClipEm's icon.
 
+const fs = require("fs");
 const path = require("path");
-const { app, BrowserWindow, Menu, dialog, ipcMain } = require("electron");
+const { execFile } = require("child_process");
+const { pathToFileURL } = require("url");
+const { app, BrowserWindow, ClipboardItem, Menu, clipboard, dialog, ipcMain } = require("electron");
 
 function arg(name) {
   const prefix = `--clipem-${name}=`;
@@ -116,7 +119,48 @@ function start() {
     return result.canceled || !result.filePaths.length ? null : result.filePaths[0];
   });
 
+  // An export's "Copy": the video onto the clipboard as a file, to paste
+  // into Discord (or a folder). Only a file that's there, from ClipEm's page.
+  ipcMain.handle("clipem:copy-file", async (event, filePath) => {
+    if (!win || new URL(event.senderFrame.url).origin !== origin) return { error: "Not allowed." };
+    const stat = typeof filePath === "string" && path.isAbsolute(filePath)
+      ? fs.statSync(filePath, { throwIfNoEntry: false }) : null;
+    if (!stat || !stat.isFile()) return { error: "That export isn't there any more." };
+    try {
+      await copyFileToClipboard(filePath);
+      return { ok: true };
+    } catch (err) {
+      console.error(`ClipEm editor window: couldn't copy ${filePath}: ${err.message}`);
+      return { error: "Couldn't copy the video to the clipboard." };
+    }
+  });
+
   app.on("window-all-closed", () => app.quit());
+}
+
+// A file on the clipboard the way the system's file manager puts it there,
+// which is what Discord's paste takes: Windows' file list (CF_HDROP) and
+// macOS' file URL have no Electron API, so PowerShell and osascript set them
+// (the path goes in an environment variable, never into the script). Linux
+// has the text/uri-list type - Electron's own clipboard, which on Wayland
+// only takes a write that follows a click in the window, as this one does.
+function copyFileToClipboard(filePath) {
+  if (process.platform === "win32") {
+    return run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command",
+      "Set-Clipboard -LiteralPath $env:CLIPEM_COPY"], filePath);
+  }
+  if (process.platform === "darwin") {
+    return run("osascript", ["-e", 'set the clipboard to (POSIX file (system attribute "CLIPEM_COPY"))'], filePath);
+  }
+  const uris = `${pathToFileURL(filePath).href}\r\n`;
+  return clipboard.write([new ClipboardItem({ "text/uri-list": new Blob([uris], { type: "text/uri-list" }) })]);
+}
+
+function run(command, args, filePath) {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { env: { ...process.env, CLIPEM_COPY: filePath }, windowsHide: true, timeout: 15000 },
+      (err, _stdout, stderr) => (err ? reject(new Error(String(stderr || err.message).trim())) : resolve()));
+  });
 }
 
 // Wayland compositors (KWin, Mutter) ignore focus() from an app that has no

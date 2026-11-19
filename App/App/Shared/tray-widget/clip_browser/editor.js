@@ -2053,6 +2053,22 @@ async function exportFileAction(route) {
 }
 
 $("export-play").addEventListener("click", () => exportFileAction("api/play"));
+// Copy: only in ClipEm's own window (preload.js), which can put a file on the clipboard.
+$("export-copy").hidden = !(window.clipem && window.clipem.copyFile);
+$("export-copy").addEventListener("click", async () => {
+  if (!lastExportPath) return;
+  let result;
+  try {
+    result = await window.clipem.copyFile(lastExportPath);
+  } catch (err) {
+    result = { error: err.message };
+  }
+  if (result && result.error) {
+    setStatus(result.error, true);
+  } else {
+    setStatus(`Copied ${lastExportFile} - paste it into Discord.`);
+  }
+});
 $("export-reveal").addEventListener("click", () => exportFileAction("api/reveal"));
 
 // ---------------------------------------------------------------------------
