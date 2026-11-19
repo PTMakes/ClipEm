@@ -609,6 +609,40 @@ class Editor:
         write_text_atomic(self.project_path(clip_path), json.dumps({**project, "clip": os.path.realpath(clip_path)}))
         return project
 
+    def move_project(self, old_project, clip_path):
+        """A renamed clip's saved edit (old_project, its project_path before
+        the rename) under its new path - a rename keeps the clip's mtime."""
+        try:
+            with open(old_project, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+        except (OSError, ValueError):
+            return
+        if isinstance(saved, dict):
+            saved["clip"] = os.path.realpath(clip_path)
+        os.makedirs(self.edits_dir, exist_ok=True)
+        write_text_atomic(self.project_path(clip_path), json.dumps(saved))
+        try:
+            os.remove(old_project)
+        except OSError:
+            pass
+
+    def move_export_records(self, moved):
+        """Renamed clips and exports ({old path: new path}) in the export
+        records, so a clip's newest export stays its own (last_exports,
+        export_origins)."""
+        moved = {os.path.realpath(old): os.path.realpath(new) for old, new in moved.items()}
+        with self._lock:
+            exports = load_json(self.exports_path, {})
+            if not isinstance(exports, dict):
+                return
+            updated = {}
+            for clip, entry in exports.items():
+                if isinstance(entry, dict) and entry.get("file") in moved:
+                    entry = {**entry, "file": moved[entry["file"]]}
+                updated[moved.get(clip, clip)] = entry
+            if updated != exports:
+                write_json_atomic(self.exports_path, updated)
+
     def record_export(self, clip_path, files, now=None):
         """Remembers files[0] (the .mp4) as clip_path's newest export, and
         forgets entries whose clip or export is gone."""
@@ -969,6 +1003,93 @@ def delete_clip(folder, name, editor, trash=None, attempts=10):
                 time.sleep(0.2)
         moved.append(os.path.basename(path))
     return moved
+
+
+RENAME_SETTLE_SECONDS = 30  # a clip this new may still be getting its name and copies (tray_tracks, clip_post)
+
+
+def export_rest_alnum(export, stem):
+    """Whether export only starts with stem by chance ("a2.mp4" for "a")."""
+    return export[len(stem):len(stem) + 1].isalnum()
+
+
+class RenameError(Exception):
+    """A rename the user can fix - the message says how."""
+
+
+def rename_clip(folder, name, new_stem, editor, attempts=10, now=None):
+    """Renames the clip `name`, its copies (-tracks, -small, -extra) and its
+    exports beside it (-edit, -discord, -1080p60...) to new_stem - each
+    keeping its extension and what follows the clip's name - and moves their
+    saved edits and export records with them. An export whose name doesn't
+    start with the clip's keeps it. Retries for a moment like delete_clip.
+    Returns the clip's new file name."""
+    clips = list_clips(folder)
+    clip = next((c for c in clips if c["name"] == name), None)
+    old_path = clip and resolve_clip(folder, name)
+    if not old_path:
+        raise FileNotFoundError("That clip isn't there any more.")
+    old_stem, ext = os.path.splitext(name)
+    stem = clip_edit.clean_name(new_stem)
+    if stem.lower().endswith(ext.lower()):
+        stem = stem[: -len(ext)].rstrip(" .")
+    if not stem:
+        raise RenameError("Type a name for the clip.")
+    if stem == old_stem:
+        return name
+    copy_suffixes = clip_naming.copy_suffixes()
+    renames = [(name, stem + ext)]
+    for key in ("tracks_file", "small_file", "extra_file"):
+        if clip[key]:
+            copy_stem, copy_ext = os.path.splitext(clip[key])
+            renames.append((clip[key], stem + copy_stem[len(old_stem):] + copy_ext))
+    origins = editor.export_origins(folder, [c["name"] for c in clips])
+    for export in sorted(e for e, origin in origins.items() if origin == name and e.startswith(old_stem)
+                         and not export_rest_alnum(e, old_stem)):
+        renames.append((export, stem + export[len(old_stem):]))
+
+    try:
+        others = [n for n in os.listdir(folder) if n not in {old for old, _new in renames}]
+    except OSError:
+        others = []
+    if any(n.endswith(".partial") and n.lstrip(".").startswith(old_stem) for n in others) \
+            or (now or time.time()) - clip["mtime"] < RENAME_SETTLE_SECONDS:
+        raise RenameError("This clip is still being saved - try again in a moment.")
+    # Another clip with that name, or a file that would be listed as its copy (or it as theirs).
+    taken = {os.path.splitext(n)[0].lower() for n in others}
+    suffixes = [s.lower() for s in copy_suffixes]
+    if stem.lower() in taken or any(stem.lower() + s in taken for s in suffixes) \
+            or any(stem.lower().endswith(s) and stem.lower()[: -len(s)] in taken for s in suffixes):
+        raise RenameError(f"There's already a clip called {stem}.")
+    clash = next((new for _old, new in renames if os.path.splitext(new)[0].lower() in taken), None)
+    if clash:
+        raise RenameError(f"There's already a file called {clash}.")
+
+    # Saved edits are keyed by path and mtime - read before the rename (which keeps the mtime).
+    projects = {old: editor.project_path(os.path.join(folder, old)) for old, _new in renames}
+    done = []
+    try:
+        for old, new in renames:
+            for attempt in range(attempts):
+                try:
+                    os.rename(os.path.join(folder, old), os.path.join(folder, new))
+                    break
+                except PermissionError:
+                    if attempt == attempts - 1:
+                        raise
+                    time.sleep(0.2)
+            done.append((old, new))
+    except OSError:
+        for old, new in reversed(done):  # all or nothing
+            try:
+                os.rename(os.path.join(folder, new), os.path.join(folder, old))
+            except OSError:
+                log.exception(f"Couldn't put {new} back as {old}")
+        raise
+    for old, new in renames:
+        editor.move_project(projects[old], os.path.join(folder, new))
+    editor.move_export_records({os.path.join(folder, old): os.path.join(folder, new) for old, new in renames})
+    return stem + ext
 
 
 def reveal_in_file_manager(path):
@@ -1340,6 +1461,22 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 log.info(f"Moved to the trash: {', '.join(moved)}")
                 self._json({"files": moved})
+            elif route == "api/rename":
+                if self.server.editor.export_job.running():
+                    self._json({"error": "An export is running - wait for it to finish first."}, 409)
+                    return
+                name = body.get("name")
+                try:
+                    renamed = rename_clip(folder, name, body.get("to"), self.server.editor)
+                except FileNotFoundError as exc:
+                    self._json({"error": str(exc)}, 404)
+                    return
+                except RenameError as exc:
+                    self._json({"error": str(exc)}, 409)
+                    return
+                if renamed != name:
+                    log.info(f"Renamed {name} to {renamed}")
+                self._json({"name": renamed})
             elif route in ("api/reveal", "api/play"):
                 path = body.get("path")
                 if not (self.server.editor.is_recorded_export(path) and os.path.isfile(path)):

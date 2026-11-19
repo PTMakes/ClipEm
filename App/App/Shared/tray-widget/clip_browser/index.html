@@ -21,9 +21,7 @@
       <label title="Only clips from this day, or this hour of the last 24 hours">Date
         <select id="filter-date"><option value="">All</option></select></label>
       <span class="filter-checks">
-        <label title="Only clips with a -tracks copy (one file per audio track)"><input type="checkbox" id="filter-tracks">Tracks</label>
-        <label title="Only clips with a -small copy"><input type="checkbox" id="filter-small">Small</label>
-        <label title="Only videos exported from the editor"><input type="checkbox" id="filter-exports">Exports</label>
+        <label title="Show videos exported from the editor in the list"><input type="checkbox" id="filter-exports" checked>Show Exports</label>
       </span>
     </div>
     <div id="sound-banner" class="banner" hidden>Click anywhere to turn on hover sound</div>
@@ -34,9 +32,9 @@
     <header id="toolbar">
       <button id="toggle-sidebar" title="Show or hide the clip list (Tab)" aria-pressed="true"><svg class="arrow" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 2.5 5 8l5.5 5.5"/></svg>Clips</button>
       <div class="title-row">
-        <label id="out-name-wrap" title="Name for the exported file - leave it as the clip's name to add -edit, -discord etc.">
-          <input id="out-name" type="text" spellcheck="false" autocomplete="off" aria-label="Export name">
-          <span class="muted small">.mp4</span>
+        <label id="out-name-wrap" title="The clip's name - type a new one and press Enter to rename it and its copies">
+          <input id="out-name" type="text" spellcheck="false" autocomplete="off" aria-label="Clip name">
+          <span id="out-name-ext" class="muted small"></span>
         </label>
         <span id="clip-meta" class="muted"></span>
       </div>

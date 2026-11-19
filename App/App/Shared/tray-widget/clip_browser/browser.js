@@ -295,16 +295,44 @@ async function deleteClip(name) {
   }
 }
 
+// Renames the clip and its copies (clip_browser.rename_clip), then opens it
+// again under its new name. Its file is let go of first, as for a delete.
+async function renameClip(name, typed) {
+  const stem = name.replace(/\.[^.]+$/, "");
+  const wanted = typed.trim();
+  if (!wanted || wanted === stem) {
+    if (state.selected === name) $("out-name").value = stem;
+    return;
+  }
+  if (state.hovering) stopHover(state.hovering.thumb);
+  hoverVideo.removeAttribute("src");
+  hoverVideo.load();
+  const wasOpen = state.selected === name;
+  if (wasOpen) {
+    closeClip();
+    player.removeAttribute("src");
+    player.load();
+  }
+  let renamed = null;
+  let error = null;
+  try {
+    renamed = (await api("api/rename", { name, to: wanted })).name;
+  } catch (err) {
+    error = err;
+  }
+  await loadClips(wasOpen ? renamed || name : null);
+  if (error) setStatus(`Couldn't rename ${name}: ${error.message}`, true);
+  else setStatus(`Renamed to ${renamed}`);
+}
+
 // ---------------------------------------------------------------------------
 // Filters (the row under the title): game, day or hour, and which copies
 // ---------------------------------------------------------------------------
 
 const DAY_MS = 24 * 3600 * 1000;
-const filters = { game: "", date: "", tracks: false, small: false, exports: false };
-const filterControls = {
-  game: $("filter-game"), date: $("filter-date"),
-  tracks: $("filter-tracks"), small: $("filter-small"), exports: $("filter-exports"),
-};
+const filters = { game: "", date: "", exports: true };
+const NO_GAME = "none:"; // the Game filter's "Not Detected" - no game name has the colon
+const filterControls = { game: $("filter-game"), date: $("filter-date"), exports: $("filter-exports") };
 
 function dayKey(when) {
   const d = new Date(when);
@@ -342,16 +370,14 @@ function inDate(clip, value) {
 }
 
 function matchesFilters(clip) {
-  if (filters.game && (clip.game || "") !== filters.game) return false;
+  if (filters.game && (clip.game || NO_GAME) !== filters.game) return false;
   if (filters.date && !inDate(clip, filters.date)) return false;
-  // Ticked boxes: the clips with any of them.
-  const kinds = [[filters.tracks, !!clip.tracks_file], [filters.small, !!clip.small_file],
-    [filters.exports, !!clip.exported_from]].filter(([on]) => on);
-  return kinds.length === 0 || kinds.some(([, has]) => has);
+  // Exports ticked (the default) lists the editor's exports with the clips.
+  return filters.exports || !clip.exported_from;
 }
 
 function filtering() {
-  return !!(filters.game || filters.date || filters.tracks || filters.small || filters.exports);
+  return !!(filters.game || filters.date || !filters.exports);
 }
 
 function visibleClips() {
@@ -384,19 +410,25 @@ function setOptions(select, items) {
 // picked stays listed (with 0) after its clips are gone or its hour is past.
 function renderFilterOptions() {
   const games = new Map();
+  const undetected = new Map();
   const days = new Map();
   const hours = new Map();
   const since = Date.now() - DAY_MS;
   for (const clip of state.clips) {
     const when = clip.mtime * 1000;
     if (clip.game) countUp(games, clip.game, clip.game);
+    else countUp(undetected, NO_GAME, "Not Detected");
     countUp(days, dayKey(when), dayName(when));
     if (when >= since) {
       const start = hourStart(when);
       countUp(hours, `hour:${start}`, hourName(start));
     }
   }
-  if (filters.game && !games.has(filters.game)) games.set(filters.game, { label: filters.game, count: 0 });
+  if (filters.game === NO_GAME) {
+    if (!undetected.size) undetected.set(NO_GAME, { label: "Not Detected", count: 0 });
+  } else if (filters.game && !games.has(filters.game)) {
+    games.set(filters.game, { label: filters.game, count: 0 });
+  }
   if (filters.date.startsWith("hour:") && !hours.has(filters.date)) {
     hours.set(filters.date, { label: hourName(Number(filters.date.slice(5))), count: 0 });
   } else if (filters.date.startsWith("day:") && !days.has(filters.date)) {
@@ -404,7 +436,9 @@ function renderFilterOptions() {
     days.set(filters.date, { label: dayName(new Date(y, m - 1, d).getTime()), count: 0 });
   }
   const options = (map) => [...map].map(([value, { label, count }]) => ({ value, label: `${label} (${count})` }));
-  const gameOptions = options(games).sort((a, b) => a.value.localeCompare(b.value, undefined, { sensitivity: "base" }));
+  // The games A-Z, then "Not Detected" for the clips without one.
+  const gameOptions = options(games).sort((a, b) => a.value.localeCompare(b.value, undefined, { sensitivity: "base" }))
+    .concat(options(undetected));
   // Newest first; keys of the same kind sort by time as text too.
   const newest = (a, b) => (a.value < b.value ? 1 : a.value > b.value ? -1 : 0);
   const hourOptions = [...hours].sort((a, b) => Number(b[0].slice(5)) - Number(a[0].slice(5)))
@@ -634,7 +668,8 @@ function editSource(clips, name) {
   return clip ? clip.extra_file || clip.tracks_file || clip.name : null;
 }
 
-async function loadClips() {
+// open: the clip to open if none is (one just renamed), else the newest.
+async function loadClips(open = null) {
   try {
     const data = await api("api/clips");
     const newest = data.clips[0] && data.clips[0].name;
@@ -650,7 +685,8 @@ async function loadClips() {
     if (!selectedClip()) {
       // First load (or the selected clip was deleted): open the latest one.
       state.selected = null;
-      if (newest) select(newest);
+      const pick = open && data.clips.some((c) => c.name === open) ? open : newest;
+      if (pick) select(pick);
       else renderDetails();
     } else if (loaded !== editSource(state.clips, state.selected)) {
       // Its "-extra.mkv"/"-tracks.mkv" was finished after it was opened

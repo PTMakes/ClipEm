@@ -188,21 +188,56 @@ def test_the_filters_narrow_the_clip_list(tmp_path, page):
     pick("filter-game", "Sober")
     assert tools.js(shown) == ["Replay-2026-10-20-10-00-00-Sober.mp4"]
     assert tools.js("$('clip-count').textContent") == "1 of 3"
-    pick("filter-tracks", True)
-    assert tools.js(shown) == [] and tools.js("$('empty').hidden") is False
     pick("filter-game", "")
+    assert tools.js("$('filter-exports').checked") is True  # exports are listed by default
+    pick("filter-exports", False)
+    assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock.mp4", "Replay-2026-10-20-10-00-00-Sober.mp4"]
+    assert tools.js("$('clip-count').textContent") == "2 of 3"
+    pick("filter-game", "Deadlock")
     assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock.mp4"]
-    pick("filter-exports", True)  # either box
+    pick("filter-exports", True)
     assert tools.js(shown) == ["Replay-2026-10-25-21-50-07-Deadlock-discord.mp4",
                                "Replay-2026-10-25-21-50-07-Deadlock.mp4"]
-    pick("filter-tracks", False)
-    pick("filter-exports", False)
+    pick("filter-game", "")
     hour = tools.js("$('filter-date').querySelector('optgroup').children[0].value")
     pick("filter-date", hour)
     assert "Replay-2026-10-20-10-00-00-Sober.mp4" not in tools.js(shown)
     old_day = tools.js("[...$('filter-date').querySelectorAll('optgroup')[1].children].at(-1).value")
     pick("filter-date", old_day)
     assert tools.js(shown) == ["Replay-2026-10-20-10-00-00-Sober.mp4"]
+
+
+def test_the_game_filter_lists_clips_without_a_game_as_not_detected(tmp_path, page):
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4")],
+                   check=True)
+    shutil.copy(tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4", tmp_path / "Replay-2026-10-25-22-00-00.mp4")
+    tools = page(tmp_path)
+    assert tools.js("[...$('filter-game').options].map((o) => o.text)") == ["All", "Deadlock (1)", "Not Detected (1)"]
+    tools.js("(() => { const c = $('filter-game'); c.value = 'none:'; c.dispatchEvent(new Event('change')); })()")
+    assert tools.js("[...document.querySelectorAll('#clip-list .clip')].map((li) => li.dataset.name)") == [
+        "Replay-2026-10-25-22-00-00.mp4"]
+
+
+def test_typing_a_new_name_renames_the_clip_and_its_copies(tmp_path, page):
+    clip = tmp_path / "Replay-2026-10-25-21-50-07-Deadlock.mp4"
+    subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc=s=160x90:r=30:d=1",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p", str(clip)], check=True)
+    shutil.copy(clip, tmp_path / "Replay-2026-10-25-21-50-07-Deadlock-small.mp4")
+    for path in tmp_path.iterdir():
+        os.utime(path, (time.time() - 3600, time.time() - 3600))
+    tools = page(tmp_path)
+    assert tools.wait_for("ed.info && $('out-name').value === 'Replay-2026-10-25-21-50-07-Deadlock'")
+    assert tools.js("$('out-name-ext').textContent") == ".mp4"
+    rename = ("(() => { const box = $('out-name'); box.focus(); box.value = %s;"
+              " box.dispatchEvent(new KeyboardEvent('keydown', { key: %s })); box.dispatchEvent(new Event('change')); })()")
+    tools.js(rename % (json.dumps("Replay-2026-10-25-21-50-07-Deadlock-Test"), json.dumps("Enter")))
+    assert tools.wait_for("state.selected === 'Replay-2026-10-25-21-50-07-Deadlock-Test.mp4' && ed.info"), \
+        tools.js("$('status').textContent")
+    assert tools.js("$('out-name').value") == "Replay-2026-10-25-21-50-07-Deadlock-Test"
+    assert tools.js("state.clips[0].game") == "Deadlock-Test"
+    assert sorted(p.name for p in tmp_path.iterdir() if p.suffix == ".mp4") == [
+        "Replay-2026-10-25-21-50-07-Deadlock-Test-small.mp4", "Replay-2026-10-25-21-50-07-Deadlock-Test.mp4"]
 
 
 def test_an_error_on_the_status_line_can_be_copied_and_reported(tmp_path, page, monkeypatch):

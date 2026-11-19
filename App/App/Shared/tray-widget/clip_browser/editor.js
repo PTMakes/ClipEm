@@ -343,6 +343,7 @@ function closeClip() {
 async function loadEditor(name) {
   const token = ++ed.loadToken;
   $("out-name").value = name.replace(/\.[^.]+$/, "");
+  $("out-name-ext").textContent = (name.match(/\.[^.]+$/) || [""])[0];
   $("export-done").hidden = true; // that was another clip's export
   ed.name = null;
   ed.info = null;
@@ -1943,16 +1944,13 @@ function customSettings() {
   };
 }
 
-// "Export As" default: the export name, in the clips folder (the folder
+// "Export As" default: the clip's name and size, in the clips folder (the folder
 // the clip is in - the dialog starts there).
 function exportAsDefault(custom) {
   const stem = ed.name.replace(/\.[^.]+$/, "");
-  let name = $("out-name").value.trim() || stem;
-  if (name === stem) {
-    const height = custom.height || (ed.info && outputHeight()) || "";
-    const fps = custom.fps || (ed.info && ed.info.fps ? Math.round(ed.info.fps) : "");
-    name = `${stem}-${height}p${fps}`;
-  }
+  const height = custom.height || (ed.info && outputHeight()) || "";
+  const fps = custom.fps || (ed.info && ed.info.fps ? Math.round(ed.info.fps) : "");
+  const name = `${stem}-${height}p${fps}`;
   if (!state.folder) return `${name}.mp4`;
   const sep = state.folder.includes("\\") ? "\\" : "/";
   return `${state.folder.replace(/[\\/]+$/, "")}${sep}${name}.mp4`;
@@ -1963,7 +1961,7 @@ async function startExport(preset) {
   setStatus("");
   try {
     await flushSave();
-    const body = { name: ed.name, preset, out_name: $("out-name").value };
+    const body = { name: ed.name, preset };
     if (preset === "custom") {
       body.custom = customSettings();
       // ClipEm's own window has a save dialog (editor-window/preload.js);
@@ -2030,7 +2028,12 @@ $("export-full").addEventListener("click", () => startExport("full"));
 $("export-discord").addEventListener("click", () => startExport("discord"));
 $("export-custom").addEventListener("click", () => startExport("custom"));
 $("out-name").addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && state.selected) e.target.value = state.selected.replace(/\.[^.]+$/, ""); // not renamed
   if (e.key === "Enter" || e.key === "Escape") e.target.blur();
+});
+// Enter, or leaving the box, renames the clip (browser.js).
+$("out-name").addEventListener("change", (e) => {
+  if (state.selected) renameClip(state.selected, e.target.value);
 });
 $("export-cancel").addEventListener("click", () => api("api/export-cancel", {}).catch(() => {}));
 

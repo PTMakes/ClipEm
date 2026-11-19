@@ -540,6 +540,73 @@ def test_delete_waits_for_an_export(server, editor, monkeypatch):
     assert os.path.exists(os.path.join(server.folder_fn(), "a.mp4"))
 
 
+def test_rename_moves_the_clip_its_copies_its_edit_and_its_export_record(server, editor, tmp_path):
+    clips = pathlib.Path(server.folder_fn())
+    _touch(clips, "a-small.mp4", b"small", mtime=102)
+    editor.exports_path = str(tmp_path / "exports.json")
+    _touch(clips, "a-discord.mp4", b"export", mtime=103)
+    editor.record_export(str(clips / "a.mp4"), [str(clips / "a-discord.mp4")])
+    _status, _h, body = _get(server, "api/project?name=a.mp4")
+    project = json.loads(body)["project"]
+    project["master_db"] = -3.0
+    assert _post(server, "api/project", {"name": "a.mp4", "project": project})[0] == 200
+    old_project = editor.project_path(str(clips / "a.mp4"))
+    _touch(clips, "a-1080p60.mp4", b"older export", mtime=99)  # found by its name
+    _touch(clips, "a2.mp4", b"another clip", mtime=98)
+
+    status, _h, body = _post(server, "api/rename", {"name": "a.mp4", "to": " Big Win.mp4 "})
+    assert status == 200 and json.loads(body) == {"name": "Big Win.mp4"}
+    assert sorted(os.listdir(clips)) == ["Big Win-1080p60.mp4", "Big Win-discord.mp4", "Big Win-small.mp4",
+                                         "Big Win-tracks.mkv", "Big Win.mp4", "a2.mp4"]
+    assert os.path.getmtime(clips / "Big Win.mp4") == 100
+    assert not os.path.exists(old_project)
+    _status, _h, body = _get(server, "api/project?name=Big%20Win.mp4")
+    assert json.loads(body)["project"]["master_db"] == -3.0
+    listed = {c["name"]: c for c in json.loads(_get(server, "api/clips")[2])["clips"]}
+    assert listed["Big Win.mp4"]["last_export"]["name"] == "Big Win-discord.mp4"
+    assert listed["Big Win-1080p60.mp4"]["exported_from"]["name"] == "Big Win.mp4"
+    assert listed["a2.mp4"]["exported_from"] is None
+    assert _post(server, "api/rename", {"name": "Big Win.mp4", "to": "Big Win"})[2] == b'{"name": "Big Win.mp4"}'
+
+
+def test_rename_refuses_names_that_are_taken_or_empty_and_clips_still_being_saved(server, editor):
+    clips = pathlib.Path(server.folder_fn())
+    _touch(clips, "b.mp4", mtime=50)
+    _touch(clips, "c-discord.mp4", mtime=50)  # what a-discord.mp4 would become
+    _touch(clips, "a-discord.mp4", mtime=60)
+    for to in ("b", "B", "b-tracks", "  ", "../", "c"):
+        status, _h, body = _post(server, "api/rename", {"name": "a.mp4", "to": to})
+        assert status == 409, to
+    assert _post(server, "api/rename", {"name": "nope.mp4", "to": "c"})[0] == 404
+    _touch(clips, "a-small.mp4.partial")
+    assert b"still being saved" in _post(server, "api/rename", {"name": "a.mp4", "to": "d"})[2]
+    os.remove(clips / "a-small.mp4.partial")
+    os.utime(clips / "a.mp4")  # just saved
+    assert b"still being saved" in _post(server, "api/rename", {"name": "a.mp4", "to": "d"})[2]
+    assert sorted(os.listdir(clips)) == ["a-discord.mp4", "a-tracks.mkv", "a.mp4", "b.mp4", "c-discord.mp4"]
+
+
+def test_rename_puts_back_what_it_renamed_when_a_copy_cant_be(server, editor, monkeypatch):
+    clips = pathlib.Path(server.folder_fn())
+    real = os.rename
+
+    def rename(old, new):
+        if old.endswith("-tracks.mkv"):
+            raise OSError("in use")
+        real(old, new)
+
+    monkeypatch.setattr(clip_browser.os, "rename", rename)
+    status, _h, body = _post(server, "api/rename", {"name": "a.mp4", "to": "c"})
+    assert status == 500 and b"in use" in body
+    assert sorted(os.listdir(clips)) == ["a-tracks.mkv", "a.mp4"]
+
+
+def test_rename_waits_for_an_export(server, editor, monkeypatch):
+    monkeypatch.setattr(editor.export_job, "running", lambda: True)
+    assert _post(server, "api/rename", {"name": "a.mp4", "to": "c"})[0] == 409
+    assert os.path.exists(os.path.join(server.folder_fn(), "a.mp4"))
+
+
 def test_linux_trash_follows_the_freedesktop_layout(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     for _ in range(2):
