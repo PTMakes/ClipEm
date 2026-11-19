@@ -250,15 +250,17 @@ function updateItem(li, clip) {
   li.querySelector(".length").hidden = clip.duration == null;
   const badges = li.querySelector(".badges");
   badges.replaceChildren();
-  // Its status (not for an export - that's the finished video).
-  const status = from ? null : clip.exported != null ? "exported" : clip.edited ? "edited" : null;
+  // Its status: an export is the finished video; a clip, edited and/or exported.
+  const status = from ? "video" : clip.exported != null ? "exported" : clip.edited ? "edited" : null;
   if (status) {
     const badge = document.createElement("span");
     badge.className = `badge status-${status}`;
-    badge.textContent = status === "exported" ? "Exported" : "Edited";
-    badge.title = status === "exported"
-      ? (clip.exported ? `Exported ${shortWhen(clip.exported)}` : "Exported")
-      : "Edited, not exported yet";
+    const when = clip.exported ? ` ${shortWhen(clip.exported)}` : "";
+    [badge.textContent, badge.title] = {
+      video: ["Exported Video", "A video exported from the editor"],
+      edited: ["Edited Not Exported", "Edited, not exported yet"],
+      exported: ["Edited And Exported", `Exported${when}`],
+    }[status];
     badges.append(badge);
   }
   for (const [key, label] of [["tracks_file", "+tracks"], ["small_file", "+small"]]) {

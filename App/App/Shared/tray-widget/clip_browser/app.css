@@ -392,9 +392,16 @@ body.resizing-sidebar * { pointer-events: none; }
   color: var(--muted);
 }
 
-/* A clip's status (updateItem): edited, or exported. */
-.badge.status-edited { border-color: var(--accent); color: var(--text); }
-.badge.status-exported { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
+/* A clip's status (updateItem): edited but not exported (still to do -
+   amber outline), edited and exported (done - green), or an exported video
+   itself (blue). */
+.badge.status-edited {
+  border-color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 15%, transparent);
+  color: var(--text);
+}
+.badge.status-exported { border-color: var(--boost); background: var(--boost); color: #ffffff; }
+.badge.status-video { border-color: var(--accent); background: var(--accent); color: var(--accent-text); }
 
 body.sidebar-hidden #sidebar { display: none; }
 body.dragging { cursor: ew-resize; user-select: none; }

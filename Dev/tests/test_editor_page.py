@@ -250,9 +250,9 @@ def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
     shown = "[...document.querySelectorAll('#clip-list .clip')].map((li) => li.dataset.name)"
     marks = ("Object.fromEntries([...document.querySelectorAll('#clip-list .clip')].map((li) =>"
              " [li.dataset.name, li.querySelector('[class*=status-]')?.textContent || null]))")
-    assert tools.js(marks) == {"Replay-2026-10-25-23-00-00-Deadlock-discord.mp4": None,
-                               "Replay-2026-10-25-23-00-00-Deadlock.mp4": "Exported",
-                               "Replay-2026-10-25-22-00-00-Sober.mp4": "Edited",
+    assert tools.js(marks) == {"Replay-2026-10-25-23-00-00-Deadlock-discord.mp4": "Exported Video",
+                               "Replay-2026-10-25-23-00-00-Deadlock.mp4": "Edited And Exported",
+                               "Replay-2026-10-25-22-00-00-Sober.mp4": "Edited Not Exported",
                                "Replay-2026-10-25-21-00-00-Deadlock.mp4": None}
     assert tools.js("[...$('filter-status').options].map((o) => o.text)") == [
         "All", "Not Exported (2)", "Edited, Not Exported (1)", "Exported (2)"]
@@ -304,7 +304,7 @@ def test_a_clip_is_no_longer_edited_after_reset_or_undoing_every_change(tmp_path
     saved = "(async () => { await flushSave(); return state.clips[0].edited; })()"
     assert tools.js(mark) is None
     tools.js("change(() => { ed.fade_in = 0.5; })")
-    assert tools.js(saved) is True and tools.js(mark) == "Edited"
+    assert tools.js(saved) is True and tools.js(mark) == "Edited Not Exported"
     tools.js("resetEdits()")
     assert tools.js(saved) is False and tools.js(mark) is None
     tools.js("change(() => { ed.fade_out = 0.5; })")
