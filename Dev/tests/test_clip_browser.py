@@ -502,6 +502,13 @@ def test_playing_and_revealing_an_export(server, monkeypatch):
     assert len(calls) == 2
 
 
+def test_copy_asks_for_a_clips_full_path(server):
+    status, _h, body = _post(server, "api/path", {"name": "a.mp4"})
+    assert status == 200 and os.path.basename(json.loads(body)["path"]) == "a.mp4"
+    assert _post(server, "api/path", {"name": "../a.mp4"})[0] == 404
+    assert _post(server, "api/path", {"name": "gone.mp4"})[0] == 404
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 def test_real_thumbnail_and_duration(tmp_path):
     clip = tmp_path / "clip.mp4"

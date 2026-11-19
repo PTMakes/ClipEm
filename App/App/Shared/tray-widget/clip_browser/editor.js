@@ -2054,19 +2054,34 @@ async function exportFileAction(route) {
 
 $("export-play").addEventListener("click", () => exportFileAction("api/play"));
 // Copy: only in ClipEm's own window (preload.js), which can put a file on the clipboard.
-$("export-copy").hidden = !(window.clipem && window.clipem.copyFile);
-$("export-copy").addEventListener("click", async () => {
-  if (!lastExportPath) return;
+async function copyToClipboard(name, path) {
   let result;
   try {
-    result = await window.clipem.copyFile(lastExportPath);
+    result = await window.clipem.copyFile(path);
   } catch (err) {
     result = { error: err.message };
   }
   if (result && result.error) {
     setStatus(result.error, true);
   } else {
-    setStatus(`Copied ${lastExportFile} - paste it into Discord.`);
+    setStatus(`Copied ${name} - paste it into Discord.`);
+  }
+}
+
+const canCopy = !!(window.clipem && window.clipem.copyFile);
+$("export-copy").hidden = !canCopy;
+$("copy-clip").hidden = !canCopy;
+$("export-copy").addEventListener("click", () => {
+  if (lastExportPath) copyToClipboard(lastExportFile, lastExportPath);
+});
+// The selected clip itself (its export has the Copy above).
+$("copy-clip").addEventListener("click", async () => {
+  const name = state.selected;
+  if (!name) return;
+  try {
+    copyToClipboard(name, (await api("api/path", { name })).path);
+  } catch (err) {
+    setStatus(err.message, true);
   }
 });
 $("export-reveal").addEventListener("click", () => exportFileAction("api/reveal"));

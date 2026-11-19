@@ -1532,12 +1532,15 @@ class Handler(BaseHTTPRequestHandler):
                 if renamed != name:
                     log.info(f"Renamed {name} to {renamed}")
                 self._json({"name": renamed})
-            elif route in ("api/reveal", "api/play"):
+            elif route in ("api/reveal", "api/play", "api/path"):
                 path = body.get("path")
                 if not (self.server.editor.is_recorded_export(path) and os.path.isfile(path)):
                     path = resolve_clip(folder, body.get("name"))
                 if not path:
                     self._json({"error": "That clip isn't there any more."}, 404)
+                    return
+                if route == "api/path":  # the page's Copy: the window puts the file on the clipboard
+                    self._json({"path": path})
                     return
                 # Explorer gives no error for a bad /select, so log what was asked for.
                 log.info(f"{route}: {path}")
