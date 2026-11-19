@@ -165,7 +165,7 @@ PREVIEW_EXTENSIONS = (".mp4", ".mkv", ".mov", ".webm")
 PREVIEW_CODECS = ("h264", "vp8", "vp9", "av1")
 PREVIEW_HEIGHT = 720
 PREVIEW_CRF = 28
-ASSET_EXTENSIONS = IMAGE_EXTENSIONS + (".gif", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".m4a", ".aac", ".mp3",
+ASSET_EXTENSIONS = IMAGE_EXTENSIONS + (".gif", ".mp4", ".mkv", ".mov", ".webm", ".flv", ".ts", ".m4a", ".aac", ".mp3",
                                        ".wav", ".flac", ".ogg", ".opus")
 
 PEAK_SAMPLE_RATE = 2000
@@ -405,7 +405,9 @@ def _normalize_item(item, asset, used):
 
 def normalize_layers(layers, assets):
     """The added tracks, with only items whose file is in assets ({id: what
-    probe_asset() said}), and only on a track of their kind."""
+    probe_asset() said}), and only on a track of their kind - or a video's
+    sound on an audio track (a clip dragged in: its picture on one track,
+    its sound on another)."""
     cleaned, layer_ids, item_ids = [], set(), set()
     for layer in (layers if isinstance(layers, list) else [])[:MAX_LAYERS]:
         if not isinstance(layer, dict) or layer.get("kind") not in ("video", "audio"):
@@ -413,7 +415,9 @@ def normalize_layers(layers, assets):
         items = []
         for item in (layer.get("items") if isinstance(layer.get("items"), list) else [])[:MAX_LAYER_ITEMS]:
             asset = assets.get(item.get("asset")) if isinstance(item, dict) else None
-            if asset and (asset["kind"] == "audio") == (layer["kind"] == "audio"):
+            fits = asset and ((asset["kind"] == "audio") == (layer["kind"] == "audio")
+                              or (layer["kind"] == "audio" and asset["has_audio"]))
+            if fits:
                 normalized = _normalize_item(item, asset, item_ids)
                 if normalized:
                     items.append(normalized)

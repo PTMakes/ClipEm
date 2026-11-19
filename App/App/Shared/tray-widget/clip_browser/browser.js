@@ -8,6 +8,8 @@ const POLL_MS = 3000;
 const SIDEBAR_KEY = "clipem.sidebarHidden";
 const FILTERS_KEY = "clipem.clipFilters";
 const SIDEBAR_WIDTH_KEY = "clipem.sidebarWidth";
+const FILTERS_HIDDEN_KEY = "clipem.filtersHidden";
+const CLIP_DRAG_TYPE = "application/x-clipem-clip"; // a clip dragged from the list (its name)
 
 const state = {
   clips: [],
@@ -124,6 +126,7 @@ function clipItem(clip) {
   img.alt = "";
   img.src = "thumb/" + encodeURIComponent(clip.name) + "?m=" + clip.mtime;
   img.onerror = () => { img.remove(); };
+  img.draggable = false; // the clip is what's dragged (into the Full Editor - layers.js)
   const scrub = document.createElement("div");
   scrub.className = "scrub";
   const length = document.createElement("span");
@@ -182,6 +185,12 @@ function clipItem(clip) {
   exportRow.className = "clip-export-row";
   exportRow.append(exported, origin);
   li.append(thumb, text, exportRow, reveal, remove);
+  li.draggable = true;
+  li.addEventListener("dragstart", (e) => {
+    if (state.hovering) stopHover(state.hovering.thumb);
+    e.dataTransfer.setData(CLIP_DRAG_TYPE, clip.name);
+    e.dataTransfer.effectAllowed = "copy";
+  });
   li.addEventListener("click", () => select(clip.name));
   li.addEventListener("keydown", (e) => {
     if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(clip.name); }
@@ -542,6 +551,21 @@ $("filter-search").addEventListener("keydown", (e) => {
 });
 
 loadSavedFilters();
+
+// The filter button: shows or tucks away the filters (which still apply -
+// the count says "x of y"). Remembered.
+function setFiltersShown(shown) {
+  $("clip-filters").hidden = !shown;
+  $("toggle-filters").setAttribute("aria-pressed", String(shown));
+  try {
+    localStorage.setItem(FILTERS_HIDDEN_KEY, shown ? "" : "1");
+  } catch (err) { /* storage unavailable - just not remembered */ }
+}
+
+$("toggle-filters").addEventListener("click", () => setFiltersShown($("clip-filters").hidden));
+try {
+  if (localStorage.getItem(FILTERS_HIDDEN_KEY)) setFiltersShown(false);
+} catch (err) { /* storage unavailable */ }
 
 function renderList() {
   renderFilterOptions();

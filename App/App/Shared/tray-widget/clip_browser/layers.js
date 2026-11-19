@@ -238,15 +238,83 @@ $("show-assets").addEventListener("click", () => {
   renderPanel();
 });
 
-// Files dropped on the tracks go where they're dropped.
-$("editor").addEventListener("dragover", (e) => {
-  if (ed.info && e.dataTransfer.types.includes("Files")) e.preventDefault();
+// Another clip dragged in from the list: its picture on a new video track
+// and its sound on a new audio track, both from `at`. The video track's own
+// sound starts muted - the audio track has it.
+function placeClip(asset, at) {
+  if (!ed.canLayer) {
+    setStatus("Video tracks need a newer ffmpeg - update ClipEm.", true);
+    return;
+  }
+  const sound = hasSound(asset);
+  if (ed.layers.length + (sound ? 2 : 1) > MAX_LAYERS) {
+    setStatus(`That's the most tracks a clip can have (${MAX_LAYERS}).`, true);
+    return;
+  }
+  const title = asset.name.replace(/\.[^.]+$/, "").slice(0, 60);
+  change(() => {
+    const before = duration();
+    const item = () => ({ id: newId("i"), asset: asset.id, start: round3(at), in: 0, out: round3(asset.duration),
+      fade_in: 0, fade_out: 0, transition: null, transition_s: 0, volume_db: 0, x: 0.5, y: 0.5, scale: 1,
+      opacity: 1 });
+    const video = newLayer("video");
+    Object.assign(video, { title, muted: sound });
+    const picture = item();
+    video.items.push(picture);
+    if (sound) Object.assign(newLayer("audio"), { title }).items.push(item());
+    ed.item = picture.id;
+    ed.selection = null;
+    ed.region = null;
+    ed.fx = null;
+    ed.showAssets = false;
+    followTimeline(before);
+  });
+}
+
+async function importClip(name, at) {
+  const open = ed.name;
+  setStatus(`Adding ${name}...`);
+  try {
+    const asset = await api("api/asset-clip", { name });
+    ed.library[asset.id] = asset;
+    if (ed.name !== open) return;
+    if (asset.kind !== "video") throw new Error("it has no picture");
+    placeClip(asset, at);
+    setStatus("");
+  } catch (err) {
+    setStatus(`Couldn't add ${name}: ${err.message}`, true);
+  }
+}
+
+function draggingClip(e) {
+  return e.dataTransfer.types.includes(CLIP_DRAG_TYPE);
+}
+
+// Files dropped on the tracks go where they're dropped - and so do clips
+// dragged in from the list. Dropped on the video (or anywhere else): at the playhead.
+$("main").addEventListener("dragover", (e) => {
+  if (!ed.info) return;
+  if (draggingClip(e)) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  } else if (e.dataTransfer.types.includes("Files")) {
+    e.preventDefault();
+  }
 });
-$("editor").addEventListener("drop", (e) => {
-  if (!ed.info || !e.dataTransfer.files.length) return;
+$("main").addEventListener("drop", (e) => {
+  if (!ed.info) return;
+  const clip = draggingClip(e) ? e.dataTransfer.getData(CLIP_DRAG_TYPE) : "";
+  if (!clip && !e.dataTransfer.files.length) return;
   e.preventDefault();
+  if (clip && clip === ed.name) {
+    setStatus("That's the clip being edited - drag in another one.", true);
+    return;
+  }
   if (ed.mode !== "multi") setMode("multi");
-  importFiles([...e.dataTransfer.files], laneTime(e.clientX));
+  const onTimeline = e.target instanceof Element && !!e.target.closest("#timeline");
+  const at = onTimeline ? laneTime(e.clientX) : position();
+  if (clip) importClip(clip, at);
+  else importFiles([...e.dataTransfer.files], at);
 });
 
 // --- Moving the clip -------------------------------------------------------------
@@ -801,7 +869,7 @@ function renderItemPanel(panel, found) {
     panel.append(rangeField("Volume", dbToSlider(item.volume_db), MIN_SLIDER_DB, MAX_DB, 0.5,
       (v) => formatDb(sliderToDb(v)), (v) => { item.volume_db = sliderToDb(v); }, 0));
   }
-  if (asset && asset.kind !== "audio") {
+  if (asset && asset.kind !== "audio" && layer.kind === "video") {
     panel.append(
       rangeField("Size", item.scale, 0.05, 2, 0.01, percent, (v) => { item.scale = v; }, 1),
       rangeField("Left–right", item.x, -0.5, 1.5, 0.005, percent, (v) => { item.x = v; }, 0.5),
@@ -1043,7 +1111,8 @@ function syncLayers(t, playing) {
   const box = $("item-box");
   const selected = ed.item && ed.mode === "multi" ? findItem(ed.item) : null;
   const framed = selected && assetOf(selected.item);
-  box.hidden = !(framed && framed.kind !== "audio" && !selected.layer.hidden && !ed.cropping
+  box.hidden = !(framed && framed.kind !== "audio" && selected.layer.kind === "video" && !selected.layer.hidden
+    && !ed.cropping
     && t >= selected.item.start && t < itemEnd(selected.item));
   if (!box.hidden) placeBox(box, pictureBox(selected.item, framed, t));
   ed.layers.forEach((layer, order) => {
@@ -1054,7 +1123,7 @@ function syncLayers(t, playing) {
       let entry = layerPreview.get(item.id);
       if (!entry) {
         entry = { node: null, sound: null };
-        if (asset.kind !== "audio") {
+        if (asset.kind !== "audio" && layer.kind === "video") { // not a video's sound on an audio track
           entry.node = itemPicture(asset);
           overlay.append(entry.node);
         }

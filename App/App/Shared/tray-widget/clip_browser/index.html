@@ -12,6 +12,7 @@
     <header class="sidebar-head">
       <h1>Clips</h1>
       <span id="clip-count" class="muted"></span>
+      <button id="toggle-filters" class="icon-btn" title="Show or hide the filters" aria-label="Filters" aria-pressed="true" aria-controls="clip-filters"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12L9.5 8.5v4.25L6.5 14V8.5z"/></svg></button>
       <input id="folder-path" type="text" readonly aria-label="Clip folder" title="The folder these clips are in">
       <button id="change-folder" class="icon-btn" title="Choose another folder to view clips from" aria-label="Change folder" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M1.75 4.25v8a1 1 0 0 0 1 1h10.5a1 1 0 0 0 1-1v-6.5a1 1 0 0 0-1-1H8L6.5 3.25H2.75a1 1 0 0 0-1 1z"/></svg></button>
     </header>
@@ -122,7 +123,7 @@
         <div id="layer-tools" hidden>
           <button id="import" title="Add a video, picture or sound file at the playhead - or drop files here">Import...</button>
           <button id="show-assets" class="toggle" title="Everything you've imported">Assets</button>
-          <input id="import-file" type="file" multiple hidden accept="video/*,audio/*,image/*,.mkv,.flv">
+          <input id="import-file" type="file" multiple hidden accept="video/*,audio/*,image/*,.mkv,.flv,.ts">
         </div>
         <div class="spacer"></div>
         <span class="muted hint" title="Hold Alt while dragging on a stereo track to select just its left (top) or right (bottom) channel - a volume change there only affects that side.">Drag on the timeline to select &middot; drag the handles to trim &middot; Alt-drag a stereo track for one channel</span>

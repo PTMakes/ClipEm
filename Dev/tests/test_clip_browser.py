@@ -716,6 +716,26 @@ def test_importing_a_file_keeps_it_for_the_editor(tmp_path):
         server.server_close()
 
 
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_clip_in_the_folder_can_be_imported_by_name(tmp_path):
+    clip = tmp_path / "Replay 1.ts"  # OBS can record MPEG-TS
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "color=blue:s=64x32:d=1", "-f", "lavfi",
+                    "-i", "sine=d=1", "-shortest", "-c:v", "libx264", "-c:a", "aac", str(clip)], check=True)
+    editor = clip_browser.Editor(assets_dir=str(tmp_path / "assets"))
+    server = clip_browser.ClipBrowserServer(lambda: str(tmp_path), token="tok", editor=editor)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        status, _h, body = _post(server, "api/asset-clip", {"name": "Replay 1.ts"})
+        asset = json.loads(body)
+        assert status == 200 and asset["kind"] == "video" and asset["has_audio"] and asset["name"] == "Replay 1.ts"
+        assert (tmp_path / "assets" / asset["id"]).read_bytes() == clip.read_bytes()
+        assert _post(server, "api/asset-clip", {"name": "../Replay 1.ts"})[0] == 404
+        assert _post(server, "api/asset-clip", {"name": "gone.mp4"})[0] == 404
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 @pytest.mark.parametrize("name, data", [("notes.txt", b"hello"), ("fake.png", b"not a picture")])
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 def test_a_file_that_cant_be_used_is_refused_and_not_kept(tmp_path, name, data):

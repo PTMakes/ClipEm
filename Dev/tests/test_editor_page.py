@@ -279,6 +279,15 @@ def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
     assert tools.js("$('filter-status').value") == "todo"
     assert tools.js("$('filter-search').value") == ""
     assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4", "Replay-2026-10-25-21-00-00-Deadlock.mp4"]
+    # The filter button tucks them away (still applied), and that's remembered too.
+    assert tools.js("$('toggle-filters').getAttribute('aria-pressed')") == "true"
+    tools.js("$('toggle-filters').click()")
+    assert tools.js("[$('clip-filters').offsetHeight, $('toggle-filters').getAttribute('aria-pressed')]") == [0, "false"]
+    assert len(tools.js(shown)) == 2
+    reload(tools)
+    assert tools.js("$('clip-filters').hidden") is True
+    tools.js("$('toggle-filters').click()")
+    assert tools.js("$('clip-filters').offsetHeight") > 0
 
 
 def test_a_clip_is_no_longer_edited_after_reset_or_undoing_every_change(tmp_path, page, monkeypatch):
@@ -344,6 +353,50 @@ def test_the_sidebar_resizes_and_its_clips_fit(tmp_path, page, monkeypatch):
     assert tools.js(f"{clip_row}.querySelector('.thumb .size').textContent").endswith("MB")
     tools.js("$('sidebar-resizer').dispatchEvent(new MouseEvent('dblclick'))")
     assert tools.js(width) == 390
+
+
+def test_another_clip_dragged_in_gets_a_video_and_an_audio_track(tmp_path, page, monkeypatch):
+    now = time.time()
+    for name, color, hours in (("Replay-2026-10-25-22-00-00.mp4", "red", 1), ("Replay-2026-10-25-21-00-00.mp4", "blue", 2)):
+        subprocess.run([FFMPEG, "-v", "error", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=160x90:r=30:d=4",
+                        "-f", "lavfi", "-i", "sine=d=4", "-shortest", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", str(tmp_path / name)], check=True)
+        os.utime(tmp_path / name, (now - hours * 3600, now - hours * 3600))
+    editor_class = clip_browser.Editor
+    monkeypatch.setattr(clip_browser, "Editor", lambda: editor_class(
+        edits_dir=str(tmp_path / "cache" / "edits"), assets_dir=str(tmp_path / "cache" / "assets"),
+        exports_path=str(tmp_path / "cache" / "exports.json")))
+    tools = page(tmp_path)
+    tools.call("Emulation.setDeviceMetricsOverride", width=1600, height=900, deviceScaleFactor=1, mobile=False)
+    assert tools.wait_for("ed.info && state.selected === 'Replay-2026-10-25-22-00-00.mp4'")
+    if not tools.js("ed.canLayer"):
+        pytest.skip("this ffmpeg can't do video tracks")
+    # What the list puts on a drag.
+    dragged = ("(() => { const dt = new DataTransfer(); const li = document.querySelector("
+               "'[data-name=\"Replay-2026-10-25-21-00-00.mp4\"]');"
+               " li.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));"
+               " return [li.draggable, dt.getData(CLIP_DRAG_TYPE)]; })()")
+    assert tools.js(dragged) == [True, "Replay-2026-10-25-21-00-00.mp4"]
+    drop = ("((name) => { const dt = new DataTransfer(); dt.setData(CLIP_DRAG_TYPE, name);"
+            " const r = $('timeline').getBoundingClientRect();"
+            " $('timeline').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt,"
+            " clientX: r.left + r.width * 0.75, clientY: r.top + 10 })); })(%s)")
+    tools.js(drop % json.dumps("Replay-2026-10-25-22-00-00.mp4"))
+    assert "being edited" in tools.js("$('status').textContent") and not tools.js("ed.layers.length")
+    tools.js(drop % json.dumps("Replay-2026-10-25-21-00-00.mp4"))
+    assert tools.wait_for("ed.layers.length === 2", seconds=30), tools.js("$('status').textContent")
+    layers = tools.js("ed.layers.map((l) => [l.kind, l.title, l.muted, l.items.length, l.items[0].asset, l.items[0].start,"
+                      " l.items[0].out])")
+    assert [row[:4] for row in layers] == [["video", "Replay-2026-10-25-21-00-00", True, 1],
+                                           ["audio", "Replay-2026-10-25-21-00-00", False, 1]]
+    assert layers[0][4] == layers[1][4] and layers[0][5] == layers[1][5] > 0 and abs(layers[0][6] - 4) < 0.1
+    assert tools.js("ed.mode") == "multi"
+    # Saved like that: the server keeps a video's sound on the audio track.
+    assert tools.js("(async () => { await flushSave(); const data = await api('api/project?name=' +"
+                    " encodeURIComponent(ed.name)); return data.project.layers.map((l) => l.items.length); })()") == [1, 1]
+    # In the preview: one picture - the video track's, not the audio track's.
+    tools.js("syncLayers(ed.layers[0].items[0].start + 0.5, false)")
+    assert tools.js("$('layers').querySelectorAll('video.layer-item').length") == 1
 
 
 def test_typing_a_new_name_renames_the_clip_and_its_copies(tmp_path, page):

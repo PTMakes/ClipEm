@@ -1452,6 +1452,9 @@ class Handler(BaseHTTPRequestHandler):
         if route == "api/asset":  # the body is the file, not JSON
             self._import_asset()
             return
+        if route == "api/asset-clip":  # another clip, dragged in from the list
+            self._import_clip(folder, self._read_json())
+            return
         body = self._read_json()
         try:
             if route == "api/folder":
@@ -1578,6 +1581,24 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             log.exception("Importing a file failed")
             self.close_connection = True
+            self._json({"error": str(exc)}, 500)
+            return
+        self._json(public_asset(asset))
+
+    def _import_clip(self, folder, body):
+        """Imports a clip in the folder as _import_asset() does an upload."""
+        path = resolve_clip(folder, body.get("name"))
+        if not path:
+            self._json({"error": "That clip isn't there any more."}, 404)
+            return
+        try:
+            with open(path, "rb") as f:
+                asset = self.server.editor.import_asset(f, os.fstat(f.fileno()).st_size, os.path.basename(path))
+        except ValueError as exc:
+            self._json({"error": str(exc)}, 422)
+            return
+        except Exception as exc:
+            log.exception("Importing a clip failed")
             self._json({"error": str(exc)}, 500)
             return
         self._json(public_asset(asset))

@@ -861,6 +861,36 @@ def test_a_layered_project_exports_with_real_ffmpeg(tmp_path):
     assert near(_pixel(ffmpeg, mkv, 4.5), (0, 0, 0))  # black after the clip, while the sound plays on
 
 
+def test_a_videos_sound_can_go_on_an_audio_track():
+    project = layered(layer("video", item("movie"), muted=True),
+                      {**layer("audio", item("movie"), item("pic", start=3)), "id": "audio1"})
+    video, audio = project["layers"]
+    assert [i["asset"] for i in audio["items"]] == ["movie"]  # a picture has no sound to put there
+    assert clip_edit.sound_layers(project) == [audio]  # the muted video track's own sound isn't exported
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_clip_dragged_in_exports_its_picture_and_its_sound_once(tmp_path):
+    ffmpeg = shutil.which("ffmpeg")
+    clip, other = tmp_path / "clip.mp4", tmp_path / "other.mp4"
+    for path, color, freq in ((clip, "red", 300), (other, "blue", 800)):
+        subprocess.run([ffmpeg, "-loglevel", "error", "-y", "-f", "lavfi", "-i", f"color=c={color}:s=320x180:r=30:d=3",
+                        "-f", "lavfi", "-i", f"sine=f={freq}:d=3", "-c:v", "libx264", "-c:a", "aac", "-shortest",
+                        str(path)], check=True)
+    assets = {"other": clip_edit.probe_asset(ffmpeg, str(other), "other.mp4") | {"path": str(other)}}
+    info = clip_edit.probe(ffmpeg, str(clip))
+    project = clip_edit.normalize_project({"layers": [
+        {**layer("video", item("other", start=1, last=1)), "muted": True},
+        {**layer("audio", item("other", start=1, last=1)), "id": "audio1", "title": "Other"},
+    ]}, info, assets)
+    mkv, mp4 = tmp_path / "out.mkv", tmp_path / "out.mp4"
+    for cmd, _label, _weight in clip_edit.full_quality_commands(ffmpeg, str(clip), project, info, str(mkv), str(mp4)):
+        subprocess.run(cmd, check=True, capture_output=True)
+    out = clip_edit.probe(ffmpeg, str(mkv))
+    assert [track["title"] for track in out["audio"]][1:] == ["Other"]  # the clip's own, then the dragged one's
+    assert all(abs(a - b) < 40 for a, b in zip(_pixel(ffmpeg, mkv, 1.5), (0, 0, 254), strict=True))
+
+
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
 def test_an_export_of_added_tracks_without_recorded_sound(tmp_path):
     ffmpeg = shutil.which("ffmpeg")
