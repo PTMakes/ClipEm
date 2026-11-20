@@ -1156,28 +1156,48 @@ wav_at_volume = clip_post.wav_at_volume
 play_wav_windows = clip_post.play_wav_windows
 
 
+_players = []  # preview players (Linux/macOS) still running, for stop_clip_sound
+
+
 def play_clip_sound(volume, wav_path=None):
     """Plays the clip sound (or wav_path) now, the way
     replay_buffer_save_sound.py does inside OBS - it can't be called from
-    here, since it imports obspython. Raises OSError if nothing can play it."""
+    here, since it imports obspython - stopping any preview still playing.
+    Raises OSError if nothing can play it."""
     import platform
     import subprocess
 
     path = wav_path or CLIP_SOUND_WAV_PATH
     if not os.path.exists(path):
         raise FileNotFoundError(f"Sound file not found: {path}")
+    stop_clip_sound()
     system = platform.system()
     if system == "Windows":
         play_wav_windows(path, volume)
     elif system == "Darwin":
-        subprocess.Popen(["afplay", "-v", str(volume), path])
+        _players.append(subprocess.Popen(["afplay", "-v", str(volume), path]))
     else:
         quiet = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
         try:
             pa_volume = str(int(max(0.0, min(1.0, volume)) * 65536))
-            subprocess.Popen(["paplay", f"--volume={pa_volume}", path], **quiet)
+            _players.append(subprocess.Popen(["paplay", f"--volume={pa_volume}", path], **quiet))
         except FileNotFoundError:
-            subprocess.Popen(["aplay", path], **quiet)
+            _players.append(subprocess.Popen(["aplay", path], **quiet))
+
+
+def stop_clip_sound():
+    """Stops a play_clip_sound preview (not the clip sound OBS plays)."""
+    if sys.platform == "win32":
+        import winsound
+
+        winsound.PlaySound(None, 0)  # stops this process's sound, async or from memory
+    while _players:
+        player = _players.pop()
+        if player.poll() is None:
+            try:
+                player.terminate()
+            except OSError:
+                pass
 
 
 def apply_obs_settings(settings):

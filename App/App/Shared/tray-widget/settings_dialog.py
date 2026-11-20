@@ -662,8 +662,7 @@ def open_dialog(start_tab=None, highlight=()):
     sound_name_var = tk.StringVar(value=sound_in_use["name"] or "Custom sound")
     sound_combo = ttk.Combobox(sound_row, textvariable=sound_name_var, state="readonly", width=16)
     sound_combo.pack(side="left")
-    sound_trim = sound_picker.SoundTrim(sound_row, px)
-    sound_trim.pack(side="left", padx=(px(6), 0))
+    sound_trim = sound_picker.SoundTrim(sound_row, px)  # packed after the buttons
     sound_trim.show(sound_name_var.get())
 
     sound_combo.bind("<<ComboboxSelected>>", lambda _event: sound_trim.show(sound_name_var.get()))
@@ -703,11 +702,14 @@ def open_dialog(start_tab=None, highlight=()):
     choose_button.pack(side="left", padx=(px(4), 0))
     play_button = tk.Button(sound_row, text="Play", command=on_play_sound)
     play_button.pack(side="left", padx=(px(4), 0))
+    stop_button = tk.Button(sound_row, text="Stop", command=obs_config.stop_clip_sound)
+    stop_button.pack(side="left", padx=(px(4), 0))
+    sound_trim.pack(side="left", padx=(px(8), 0))
     next_row += 1
 
     def on_sound_toggle():
         state = "normal" if sound_enabled_var.get() else "disabled"
-        for widget in (volume_scale, choose_button, play_button):
+        for widget in (volume_scale, choose_button, play_button, stop_button):
             widget.config(state=state)
         sound_combo.config(state="readonly" if sound_enabled_var.get() else "disabled")
         sound_trim.set_enabled(sound_enabled_var.get())

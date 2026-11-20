@@ -1400,8 +1400,6 @@ class Wizard(tk.Tk):
         )
         scale.pack(side="left", fill="x", expand=True)
         self.sound_volume_label.pack(side="left", padx=(self.px(PAD // 2), 0))
-        play_btn = ttk.Button(volume_row, text="Play", command=self._play_sound)
-        play_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
         self._update_volume_label()
 
         obs_config.ensure_clip_sound_wav()
@@ -1414,16 +1412,20 @@ class Wizard(tk.Tk):
         self.sound_in_use = obs_config.active_clip_sound_name()
         self.sound_name_var = tk.StringVar(value=self.sound_in_use or "Custom sound")
         self.sound_file_label = ttk.Combobox(
-            file_row, textvariable=self.sound_name_var, state="readonly", width=24,
+            file_row, textvariable=self.sound_name_var, state="readonly", width=16,
         )
         self.sound_dropdown = sound_picker.SoundDropdown(self.sound_file_label, self._sound_removed, px=self.px)
         self.sound_file_label.bind("<<ComboboxSelected>>", self._pick_sound_preset)
         self.sound_file_label.pack(side="left")
-        self.sound_trim = sound_picker.SoundTrim(file_row, self.px)
-        self.sound_trim.pack(side="left", padx=(self.px(PAD // 2), 0))
+        self.sound_trim = sound_picker.SoundTrim(file_row, self.px)  # packed after the buttons
         self.sound_trim.show(self.sound_name_var.get())
         replace_btn = ttk.Button(file_row, text="Add sound...", command=self._browse_sound_file)
         replace_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
+        play_btn = ttk.Button(file_row, text="Play", command=self._play_sound)
+        play_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
+        stop_btn = ttk.Button(file_row, text="Stop", command=self._stop_sound)
+        stop_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
+        self.sound_trim.pack(side="left", padx=(self.px(PAD // 2), 0))
 
         def set_sound_section_state(enabled):
             state = "normal" if enabled else "disabled"
@@ -1434,6 +1436,7 @@ class Wizard(tk.Tk):
             self.sound_file_label.configure(state="readonly" if enabled else "disabled")
             scale.configure(state=state)
             play_btn.configure(state=state)
+            stop_btn.configure(state=state)
             replace_btn.configure(state=state)
             self.sound_trim.set_enabled(enabled)
 
@@ -1458,6 +1461,12 @@ class Wizard(tk.Tk):
                 self.controller["play_clip_sound"](self.sound_volume_var.get(), None)
         except Exception as exc:
             popups.showerror("Setup", f"Could not play the clip sound:\n{exc}")
+
+    def _stop_sound(self):
+        try:
+            obs_config.stop_clip_sound()
+        except Exception as exc:
+            popups.showerror("Setup", f"Could not stop the clip sound:\n{exc}")
 
     def _pick_sound_preset(self, _event=None):
         self.sound_trim.show(self.sound_name_var.get())

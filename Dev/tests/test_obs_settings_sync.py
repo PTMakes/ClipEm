@@ -2,6 +2,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 
 import obs_config
 import obs_process
@@ -283,6 +284,32 @@ def test_a_preview_plays_the_trim_without_changing_anything(sound_library, monke
     assert played == [(0.3, 250), (0.3, 1000)]
     assert obs_config.clip_sound_trim(name) == (0.0, None)
     assert not (sound_library / "replay_buffer_save_sound.wav").exists()
+
+
+def test_stop_ends_the_preview_and_a_new_play_replaces_it(sound_library, monkeypatch):
+    if sys.platform == "win32":
+        pytest.skip("winsound has no process to stop")
+
+    class Player:
+        def __init__(self, cmd, **_kwargs):
+            self.cmd, self.stopped = cmd, False
+
+        def poll(self):
+            return 0 if self.stopped else None
+
+        def terminate(self):
+            self.stopped = True
+
+    monkeypatch.setattr(subprocess, "Popen", Player)
+    monkeypatch.setattr(obs_config.platform, "system", lambda: "Linux")
+    wav = str(_pcm_wav(sound_library / "ding.wav"))
+    obs_config.play_clip_sound(0.5, wav)
+    first = obs_config._players[0]
+    obs_config.play_clip_sound(0.5, wav)  # a second Play doesn't talk over the first
+    second = obs_config._players[0]
+    assert first.stopped and not second.stopped
+    obs_config.stop_clip_sound()
+    assert second.stopped and obs_config._players == []
 
 
 def test_an_unreadable_trims_file_means_untrimmed(sound_library):
