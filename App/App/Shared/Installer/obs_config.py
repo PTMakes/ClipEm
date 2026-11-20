@@ -1219,7 +1219,7 @@ def play_clip_sound(volume, wav_path=None):
     stop_clip_sound()
     system = platform.system()
     if system == "Windows":
-        play_wav_windows(path, volume)
+        play_wav_windows(path, volume, stoppable=True)
     elif system == "Darwin":
         _players.append(subprocess.Popen(["afplay", "-v", str(volume), path]))
     else:
@@ -1234,9 +1234,7 @@ def play_clip_sound(volume, wav_path=None):
 def stop_clip_sound():
     """Stops a play_clip_sound preview (not the clip sound OBS plays)."""
     if sys.platform == "win32":
-        import winsound
-
-        winsound.PlaySound(None, 0)  # stops this process's sound, async or from memory
+        clip_post.stop_wav_windows()
     while _players:
         player = _players.pop()
         if player.poll() is None:

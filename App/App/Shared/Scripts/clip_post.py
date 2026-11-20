@@ -308,10 +308,23 @@ def wav_at_volume(path, volume):
     return buf.getvalue()
 
 
-def play_wav_windows(path, volume, log=None):
-    """Plays path at volume without blocking. winsound can't play from
-    memory asynchronously, so the scaled copy plays on its own thread; a
-    WAV it can't scale plays as-is (at the system volume), and log is told."""
+def _stoppable_wav_path():
+    import tempfile
+
+    return os.path.join(tempfile.gettempdir(), f"clipem-sound-{os.getpid()}.wav")
+
+
+def play_wav_windows(path, volume, log=None, stoppable=False):
+    """Plays path at volume without blocking; a WAV it can't scale plays
+    as-is (at the system volume), and log is told.
+
+    winsound can't play from memory asynchronously, so by default the scaled
+    copy plays synchronously on its own thread, and sounds played meanwhile
+    wait their turn - OBS's clip sound, which nothing stops. That kind can't
+    be stopped: PlaySound(None, 0) waits for it to end (unless the thread
+    calling it has set up COM), holding up a window that calls it. stoppable
+    plays the scaled copy from a file instead, which stop_wav_windows stops
+    at once; each such sound cuts off the one before."""
     import threading
     import winsound
 
@@ -322,7 +335,27 @@ def play_wav_windows(path, volume, log=None):
             log(f"can't set the volume of {path} ({exc}) - playing it at full volume")
         winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
         return
-    threading.Thread(target=winsound.PlaySound, args=(data, winsound.SND_MEMORY), daemon=True).start()
+    if not stoppable:
+        threading.Thread(target=winsound.PlaySound, args=(data, winsound.SND_MEMORY), daemon=True).start()
+        return
+    # Windows reads the file in whole, so the next play can replace it.
+    scaled = _stoppable_wav_path()
+    with open(scaled + ".tmp", "wb") as f:
+        f.write(data)
+    os.replace(scaled + ".tmp", scaled)
+    winsound.PlaySound(scaled, winsound.SND_FILENAME | winsound.SND_ASYNC)
+
+
+def stop_wav_windows():
+    """Stops this process's stoppable play_wav_windows sound (or a full
+    volume one) and removes its scaled copy."""
+    import winsound
+
+    winsound.PlaySound(None, 0)
+    try:
+        os.remove(_stoppable_wav_path())
+    except OSError:
+        pass
 
 
 def read_wav(path):
