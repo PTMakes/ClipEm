@@ -655,21 +655,26 @@ def open_dialog(start_tab=None, highlight=()):
     tk.Label(frame, text="Sound:").grid(row=next_row, column=0, sticky="w")
     sound_row = tk.Frame(frame)
     sound_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
-    chosen_sound = {"path": None}  # a preset's or saved sound's .wav, copied into place on Save
     obs_config.ensure_clip_sound_wav()
-    sound_name_var = tk.StringVar(value=obs_config.active_clip_sound_name() or "Custom sound")
+    # The sound in the list the clip sound is now (None: one that isn't);
+    # the one picked, and any trim changes, are written on Save.
+    sound_in_use = {"name": obs_config.active_clip_sound_name()}
+    sound_name_var = tk.StringVar(value=sound_in_use["name"] or "Custom sound")
     sound_combo = ttk.Combobox(sound_row, textvariable=sound_name_var, state="readonly", width=16)
     sound_combo.pack(side="left")
+    sound_trim = sound_picker.SoundTrim(sound_row, px)
+    sound_trim.pack(side="left", padx=(px(6), 0))
+    sound_trim.show(sound_name_var.get())
 
-    def on_pick_preset(_event=None):
-        chosen_sound["path"] = obs_config.clip_sound_path(sound_name_var.get())
-
-    sound_combo.bind("<<ComboboxSelected>>", on_pick_preset)
+    sound_combo.bind("<<ComboboxSelected>>", lambda _event: sound_trim.show(sound_name_var.get()))
 
     def on_sound_removed(name):
+        sound_trim.forget(name)
+        if sound_in_use["name"] == name:
+            sound_in_use["name"] = None
         if sound_name_var.get() == name:  # its file is gone - back to the sound in use
-            chosen_sound["path"] = None
             sound_name_var.set(obs_config.active_clip_sound_name() or "Custom sound")
+        sound_trim.show(sound_name_var.get())
 
     sound_dropdown = sound_picker.SoundDropdown(sound_combo, on_sound_removed, px=px)
 
@@ -677,16 +682,20 @@ def open_dialog(start_tab=None, highlight=()):
         path = file_dialogs.askopenfilename(
             parent=root, title="Add a clip sound", filetypes=obs_config.CLIP_SOUND_FILETYPES,
         )
-        name = path and sound_picker.add_sound_file(root, path, lambda: sound_volume_var.get() / 100)
+        name = path and sound_picker.add_sound_file(root, path)
         if not name:
             return
         sound_dropdown.refresh()
         sound_name_var.set(name)
-        chosen_sound["path"] = obs_config.clip_sound_path(name)
+        sound_trim.show(name)
 
     def on_play_sound():
         try:
-            obs_config.play_clip_sound(sound_volume_var.get() / 100, chosen_sound["path"])
+            name = sound_name_var.get()
+            if name in obs_config.clip_sound_names():
+                sound_trim.play(sound_volume_var.get() / 100)
+            else:
+                obs_config.play_clip_sound(sound_volume_var.get() / 100)
         except Exception as exc:
             popups.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=root)
 
@@ -701,6 +710,7 @@ def open_dialog(start_tab=None, highlight=()):
         for widget in (volume_scale, choose_button, play_button):
             widget.config(state=state)
         sound_combo.config(state="readonly" if sound_enabled_var.get() else "disabled")
+        sound_trim.set_enabled(sound_enabled_var.get())
 
     on_sound_toggle()
 
@@ -2097,15 +2107,14 @@ def open_dialog(start_tab=None, highlight=()):
             clip_transfer = ask_clip_transfer(initial_obs_settings["clip_folder"], obs_settings["clip_folder"])
             if clip_transfer == "cancel":
                 return
-        if chosen_sound["path"]:
-            # A plain file OBS's script reads on every clip - takes effect
-            # straight away, OBS running or not.
-            try:
-                obs_config.replace_clip_sound_wav(chosen_sound["path"])
-            except Exception as exc:
-                popups.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=root)
-                return
-            chosen_sound["path"] = None
+        # The clip sound is a plain file OBS's script reads on every clip -
+        # takes effect straight away, OBS running or not.
+        try:
+            sound_picker.save_sound_choice(sound_name_var.get(), sound_in_use["name"], sound_trim)
+        except Exception as exc:
+            popups.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=root)
+            return
+        sound_in_use["name"] = obs_config.active_clip_sound_name()
 
         try:
             # Fresh copy: the tray widget writes to this file too (see

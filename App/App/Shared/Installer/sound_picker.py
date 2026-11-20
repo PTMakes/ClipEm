@@ -2,10 +2,10 @@
 drop-down is swapped for one with a small X next to each sound the user has
 added (obs_config.saved_clip_sounds), which takes it off the list. The
 presets have no X. Picking a sound sets the combobox and fires its
-<<ComboboxSelected>>, as the stock drop-down would. Also "Add sound...":
-add_sound_file, which asks how much of the file to keep."""
+<<ComboboxSelected>>, as the stock drop-down would. Also "Add sound..."
+(add_sound_file) and SoundTrim, the start and end handles shown to the
+right of the list."""
 
-import os
 import tkinter as tk
 
 import dark_theme
@@ -13,96 +13,118 @@ import obs_config
 import popups
 
 
-def add_sound_file(parent, path, volume):
-    """Adds the sound file at path to the sound list, first asking how much
-    of it to play (ask_sound_length), and returns its name - or None if it
-    couldn't be used (after saying why) or the user cancelled. volume() is
-    the 0-1 volume previews play at."""
+def add_sound_file(parent, path):
+    """Adds the sound file at path to the sound list and returns its name,
+    or None if it couldn't be used (after saying why)."""
     toplevel = parent.winfo_toplevel()
     toplevel.configure(cursor="watch")
     toplevel.update_idletasks()
     try:
-        temp, seconds = obs_config.prepare_clip_sound(path)
+        return obs_config.add_clip_sound(path)
     except (OSError, ValueError) as exc:
         popups.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=parent)
         return None
     finally:
         toplevel.configure(cursor="")
-    try:
-        def preview(cut):
-            try:
-                obs_config.preview_prepared_clip_sound(temp, cut, volume())
-            except Exception as exc:
-                popups.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=parent)
-
-        cut = ask_sound_length(parent, os.path.basename(path), seconds, preview)
-        if cut is None:
-            return None
-        return obs_config.save_prepared_clip_sound(path, temp, cut)
-    except (OSError, ValueError) as exc:
-        popups.showerror("Clip Sound", f"Couldn't use that sound: {exc}", parent=parent)
-        return None
-    finally:
-        obs_config.discard_prepared_clip_sound(temp)
 
 
-def ask_sound_length(parent, name, seconds, preview):
-    """A modal popup with a slider from MIN_CLIP_SOUND_SECONDS to the whole
-    sound (where it starts); returns the length chosen, or None if
-    cancelled. preview(length) plays it cut there."""
-    shortest = obs_config.MIN_CLIP_SOUND_SECONDS
-    if seconds <= shortest:
-        return seconds
-    owner = parent.winfo_toplevel()
-    px = getattr(owner, "px", None) or (lambda n: n)
-    dialog = tk.Toplevel(owner)
-    dialog.title("Clip Sound")
-    dialog.resizable(False, False)
-    if owner.winfo_viewable():
-        dialog.transient(owner)
-    body = tk.Frame(dialog, padx=px(popups.PAD), pady=px(popups.PAD))
-    body.pack(fill="both", expand=True)
-    tk.Label(body, text=f"How much of {name} plays when a clip is saved:", anchor="w", justify="left",
-             wraplength=popups.size(parent)[0] - 2 * px(popups.PAD)).pack(fill="x")
+def save_sound_choice(chosen, in_use, trim):
+    """Saves the sound list's state on Save/Continue: every changed trim,
+    and the chosen sound as the clip sound when it isn't already (as now
+    trimmed). in_use: the listed sound the clip sound was, or None."""
+    names = obs_config.clip_sound_names()
+    for name in list(trim.edits):
+        if name != chosen and name in names and trim.edited(name):
+            obs_config.save_clip_sound_trim(name, *trim.trim(name))
+    if chosen in names and (chosen != in_use or trim.edited(chosen)):
+        obs_config.use_clip_sound(chosen, *trim.trim(chosen))
+    trim.forget()
 
-    length = tk.DoubleVar(dialog, value=seconds)
-    slider_row = tk.Frame(body)
-    slider_row.pack(fill="x", pady=(px(10), 0))
-    label = tk.Label(slider_row, width=14, anchor="e")
 
-    def snap(value):
-        # Tenths of a second, but the very end is the whole sound.
-        value = seconds if value >= seconds - 0.05 else max(shortest, round(value, 1))
-        length.set(value)
-        label.config(text=f"{value:.1f} s of {seconds:.1f} s")
+class SoundTrim(tk.Frame):
+    """Start and end handles over the selected saved sound, with the span
+    they keep - for cutting dead air off its start or a tail off its end.
+    Disabled for the presets. Changes are held (edits) until the dialog
+    saves them with use_clip_sound(name, *trim(name))."""
 
-    slider = dark_theme.RedSlider(slider_row, from_=shortest, to=seconds, variable=length, default=seconds,
-                                  command=snap, height=px(24))
-    slider.pack(side="left", fill="x", expand=True)
-    label.pack(side="left", padx=(px(6), 0))
-    snap(seconds)
+    def __init__(self, master, px, width=180):
+        super().__init__(master)
+        self.edits = {}  # name: (start, end) as moved, not yet saved
+        self.name = None
+        self._seconds = 0.0
+        self.slider = dark_theme.RangeSlider(
+            self, width=px(width), height=px(24), min_gap=obs_config.MIN_CLIP_SOUND_SECONDS, command=self._moved,
+        )
+        self.slider.pack(side="left")
+        self.label = tk.Label(self, width=11, anchor="w")
+        self.label.pack(side="left", padx=(px(4), 0))
+        self._enabled = True
 
-    state = {"result": None}
+    def show(self, name):
+        """Shows name's trim - its edit, else what's saved - or a disabled
+        slider for a preset (or anything not in the list)."""
+        self.name = name
+        path = obs_config.saved_clip_sounds().get(name)
+        try:
+            self._seconds = obs_config.wav_seconds(path) if path else 0.0
+        except (OSError, EOFError, ValueError):
+            self._seconds = 0.0
+        if not self._seconds:
+            self.slider.set_range(0, 1, 0, 1)
+            self.label.config(text="")
+            self._apply_state()
+            return
+        start, end = self.edits.get(name) or obs_config.clip_sound_trim(name)
+        self.slider.set_range(0, self._seconds, start, self._seconds if end is None else end)
+        self._apply_state()
+        self._show_label()
 
-    def finish(result):
-        state["result"] = result
-        dialog.destroy()
+    def set_enabled(self, enabled):
+        self._enabled = enabled
+        self._apply_state()
 
-    row = tk.Frame(body)
-    row.pack(side="bottom", anchor="e", pady=(px(12), 0))
-    tk.Button(row, text="Play", width=10, command=lambda: preview(length.get())).pack(side="left")
-    tk.Button(row, text="Cancel", width=10, command=lambda: finish(None)).pack(side="left", padx=(px(8), 0))
-    add = tk.Button(row, text="Add", width=10, command=lambda: finish(length.get()))
-    add.pack(side="left", padx=(px(8), 0))
-    dialog.bind("<Return>", lambda _e: finish(length.get()))
-    dialog.bind("<Escape>", lambda _e: finish(None))
-    dialog.protocol("WM_DELETE_WINDOW", lambda: finish(None))
+    def _apply_state(self):
+        usable = self._enabled and self._seconds > obs_config.MIN_CLIP_SOUND_SECONDS
+        self.slider.configure(state="normal" if usable else "disabled")
+        self.label.config(foreground=dark_theme.TEXT if usable else dark_theme.MUTED)
 
-    popups.place(dialog, parent)
-    dialog.grab_set()
-    add.focus_set()
-    dialog.wait_window()
-    return state["result"]
+    def _moved(self, start, end):
+        if self.name is not None and self._seconds:
+            self.edits[self.name] = (round(start, 2), round(end, 2))
+            self._show_label()
+
+    def _show_label(self):
+        start, end = self.slider.get()
+        self.label.config(text=f"{start:.2f}\u2013{end:.2f} s")
+
+    def trim(self, name):
+        """(start, end) for use_clip_sound - end None where it's the end of
+        the sound - or (None, None) when name's trim wasn't changed."""
+        if name not in self.edits:
+            return None, None
+        start, end = self.edits[name]
+        try:
+            seconds = obs_config.wav_seconds(obs_config.saved_clip_sounds()[name])
+        except (KeyError, OSError, EOFError, ValueError):
+            return None, None
+        return start, (None if end >= seconds - 0.005 else end)
+
+    def edited(self, name):
+        if name not in self.edits:
+            return False
+        return self.trim(name) != obs_config.clip_sound_trim(name)
+
+    def forget(self, name=None):
+        """Drops name's held edit (or all of them, once saved)."""
+        if name is None:
+            self.edits.clear()
+        else:
+            self.edits.pop(name, None)
+
+    def play(self, volume):
+        """Plays the selected sound as it would be saved."""
+        start, end = self.trim(self.name) if self.name in self.edits else (None, None)
+        obs_config.preview_clip_sound(self.name, volume, start, end)
 
 
 class SoundDropdown:

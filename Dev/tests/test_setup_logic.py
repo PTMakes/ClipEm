@@ -376,7 +376,7 @@ def test_a_missing_sound_file_isnt_copied(monkeypatch, capsys):
     assert capsys.readouterr().err.count("File not found") == 2
 
 
-def test_the_command_line_asks_how_much_of_a_sound_to_keep(tmp_path, monkeypatch):
+def test_the_command_line_asks_where_a_sound_starts_and_ends(tmp_path, monkeypatch):
     import array
     import wave
 
@@ -388,10 +388,12 @@ def test_the_command_line_asks_how_much_of_a_sound_to_keep(tmp_path, monkeypatch
     with wave.open(str(source), "wb") as f:
         f.setnchannels(1), f.setsampwidth(2), f.setframerate(1000)
         f.writeframes(array.array("h", [500] * 2000).tobytes())
-    monkeypatch.setattr("builtins.input", lambda _prompt: "0.5")
+    answers = iter(["0.25", "1.5"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     setup.replace_clip_sound_wav(str(source))
     with wave.open(str(tmp_path / "replay_buffer_save_sound.wav"), "rb") as f:
-        assert f.getnframes() == 500
+        assert f.getnframes() == 1250
+    assert setup.obs_config.clip_sound_trim("horn") == (0.25, 1.5)
 
 
 def test_a_sound_that_wont_play_is_only_reported(monkeypatch, capsys):

@@ -277,7 +277,6 @@ class Wizard(tk.Tk):
 
         self.sound_enabled_var = tk.BooleanVar(value=controller["load_clip_sound_enabled"]())
         self.sound_volume_var = tk.DoubleVar(value=controller["load_clip_sound_volume"]())
-        self.sound_file_var = tk.StringVar(value="")
 
         ws_settings = controller["load_obs_websocket_settings"]()
         self.ws_port_var = tk.StringVar(value=str(ws_settings["port"]))
@@ -1410,16 +1409,19 @@ class Wizard(tk.Tk):
         file_heading.pack(anchor="w", pady=(self.px(PAD // 2), 0))
         file_row = ttk.Frame(self.container)
         file_row.pack(fill="x", pady=(0, self.px(PAD)))
-        self.sound_name_var = tk.StringVar(
-            value=os.path.basename(self.sound_file_var.get())
-            or obs_config.active_clip_sound_name() or "Custom sound"
-        )
+        # The listed sound the clip sound is now (None: one that isn't); the
+        # one picked, and any trim changes, are written on Continue.
+        self.sound_in_use = obs_config.active_clip_sound_name()
+        self.sound_name_var = tk.StringVar(value=self.sound_in_use or "Custom sound")
         self.sound_file_label = ttk.Combobox(
             file_row, textvariable=self.sound_name_var, state="readonly", width=24,
         )
         self.sound_dropdown = sound_picker.SoundDropdown(self.sound_file_label, self._sound_removed, px=self.px)
         self.sound_file_label.bind("<<ComboboxSelected>>", self._pick_sound_preset)
         self.sound_file_label.pack(side="left")
+        self.sound_trim = sound_picker.SoundTrim(file_row, self.px)
+        self.sound_trim.pack(side="left", padx=(self.px(PAD // 2), 0))
+        self.sound_trim.show(self.sound_name_var.get())
         replace_btn = ttk.Button(file_row, text="Add sound...", command=self._browse_sound_file)
         replace_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
 
@@ -1433,6 +1435,7 @@ class Wizard(tk.Tk):
             scale.configure(state=state)
             play_btn.configure(state=state)
             replace_btn.configure(state=state)
+            self.sound_trim.set_enabled(enabled)
 
         set_sound_section_state(self.sound_enabled_var.get())
 
@@ -1449,19 +1452,23 @@ class Wizard(tk.Tk):
 
     def _play_sound(self):
         try:
-            self.controller["play_clip_sound"](
-                self.sound_volume_var.get(), self.sound_file_var.get() or None
-            )
+            if self.sound_name_var.get() in obs_config.clip_sound_names():
+                self.sound_trim.play(self.sound_volume_var.get())
+            else:
+                self.controller["play_clip_sound"](self.sound_volume_var.get(), None)
         except Exception as exc:
             popups.showerror("Setup", f"Could not play the clip sound:\n{exc}")
 
     def _pick_sound_preset(self, _event=None):
-        self.sound_file_var.set(obs_config.clip_sound_path(self.sound_name_var.get()))
+        self.sound_trim.show(self.sound_name_var.get())
 
     def _sound_removed(self, name):
+        self.sound_trim.forget(name)
+        if self.sound_in_use == name:
+            self.sound_in_use = None
         if self.sound_name_var.get() == name:  # its file is gone - back to the sound in use
-            self.sound_file_var.set("")
             self.sound_name_var.set(obs_config.active_clip_sound_name() or "Custom sound")
+        self.sound_trim.show(self.sound_name_var.get())
 
     def _browse_sound_file(self):
         chosen = file_dialogs.askopenfilename(
@@ -1469,19 +1476,20 @@ class Wizard(tk.Tk):
             title="Add a clip sound",
             filetypes=obs_config.CLIP_SOUND_FILETYPES,
         )
-        name = chosen and sound_picker.add_sound_file(self, chosen, self.sound_volume_var.get)
+        name = chosen and sound_picker.add_sound_file(self, chosen)
         if not name:
             return
         self.sound_dropdown.refresh()
         self.sound_name_var.set(name)
-        self.sound_file_var.set(obs_config.clip_sound_path(name))
+        self.sound_trim.show(name)
 
     def _apply_sound(self):
         try:
             self._call_logged(self.controller["save_clip_sound_enabled"], self.sound_enabled_var.get())
             self._call_logged(self.controller["save_clip_sound_volume"], self.sound_volume_var.get())
-            if self.sound_file_var.get():
-                self._call_logged(self.controller["replace_clip_sound_wav"], self.sound_file_var.get())
+            self._call_logged(sound_picker.save_sound_choice, self.sound_name_var.get(), self.sound_in_use,
+                              self.sound_trim)
+            self.sound_in_use = obs_config.active_clip_sound_name()
         except Exception as exc:
             popups.showerror("Setup", f"Could not save the clip sound settings:\n{exc}")
             return

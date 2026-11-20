@@ -6,12 +6,12 @@ Everything lives in one repo, [PTMakes/ClipEm](https://github.com/PTMakes/ClipEm
 
 | Folder | Contents |
 | --- | --- |
-| `App/` | `App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
+| `App/` | `App/App/Shared/`: everything shipped to users (setup, run, updater, tray widget, OBS config and scripts). |
 | `Dev/` | Build, release and installer tooling. `Dev/obs-src` is a git-ignored clone of upstream OBS, made by `build-obs-from-source-for-linux.sh`. |
 | `Website/` | clipem.app: the landing page and a copy of the signed update manifests for old installs. |
 | `BugReportWorker/` | The Cloudflare Worker behind the tray's Send Bug Report button. See its [README](BugReportWorker/README.md). |
 
-#### How to build/run a release:
+Paths in this README are relative to the repo root.
 
 ## One-time setup
 
@@ -43,7 +43,9 @@ You need `git jq zip tar gzip curl openssl python3 makensis`, plus what the
 builds below use: `x86_64-w64-mingw32-g++`, and for
 [the OBS plugin](#clipem-obs-plugin) `g++ pkg-config clang-cl lld-link
 llvm-dlltool llvm-readobj unzip cargo` and `qt6-base`. `release.sh` stops at
-preflight if a tool is missing.
+preflight if a tool is missing. It also needs `pytest`, `ruff` and Pillow
+(`python3 -m pip install 'pytest==9.1.*' 'ruff==0.16.*' 'Pillow==13.0.0'`, the
+`dev` extra in `App/pyproject.toml`).
 
 ### GitHub CLI
 
@@ -61,11 +63,26 @@ Optional: to sign the Windows installer with Authenticode, install
 `osslsigncode` and set `CLIPEM_CODESIGN_PFX` and `CLIPEM_CODESIGN_PASSWORD`.
 Without this, SmartScreen warns users about an unrecognised app.
 
+### Windows test VM
+
+Preflight also runs the tests on a real Windows machine with
+`Dev/test-windows.sh`: it copies this checkout over SSH (host
+`CLIPEM_WINDOWS_HOST`, default `clipem-win11`) and runs `Dev/tests` as a
+scheduled task in the logged-in user's session, because SSH's session 0 has
+no desktop. A user must be logged in on the VM. Results land in
+`Dev/dist/windows-tests`. `CLIPEM_WINDOWS_TIMEOUT` (default 1200 seconds)
+limits the run. Pass `--skip-windows-tests` to `release.sh` when the VM is
+unavailable.
+
 ## Cutting a release
 
 ```
-Dev/release.sh [--allow-dirty] [--no-upload] [--dev] [patch|minor|major|X.Y.Z]
+Dev/release.sh [--allow-dirty] [--no-upload] [--auto-upload] [--skip-windows-tests] [--dev] [patch|minor|major|X.Y.Z]
 ```
+
+The bump defaults to `patch`. `--auto-upload` answers yes to the upload
+question (the final "push and publish" question is still asked).
+`Dev/release.sh --help` lists every option.
 
 Before you run it, add an entry for the new version at the top of
 `App/App/Shared/release_notes.json`, with `version`, `date` and `sections`:
@@ -83,33 +100,41 @@ working out the old version from `last_version` in `update_config.json`, and
 Settings > Release Notes shows the whole history.
 
 1. **Preflight.** Checks the tools, the signing key, the version bump, the
-   release notes, that
-   the Windows and Linux Pythons share a minor version, and that the release
-   isn't already uploaded. Runs `ruff` and `pytest` for `App` and
-   `Dev/` (the GUI layout test is skipped without a display). If the repo has
-   uncommitted changes, it asks for a commit message and commits them before
-   building (`--allow-dirty` builds from them uncommitted instead).
-2. **Build into `Dev/dist/vX.Y.Z/`.** This produces:
-   - the shared zip (deterministic: sorted entries, fixed mtimes)
+   release notes, that the Windows and Linux Pythons are the same
+   python-build-standalone build (version and PBS tag), and that the release
+   isn't already uploaded. Checks that `Dev/tests/obspython_api.json` is up to
+   date, then runs `ruff` for `App` and `Dev/` and `pytest`, here and on the
+   [Windows test VM](#windows-test-vm) at the same time (the GUI layout test
+   is skipped without a display). For a release (not `--dev`), it retakes the
+   clip editor screenshot if the editor changed (`Dev/screenshot_editor.py
+   --if-changed`). If the repo has uncommitted changes, it asks for a commit
+   message and commits them before building (`--allow-dirty` builds from them
+   uncommitted instead).
+2. **Build into `Dev/dist/vX.Y.Z/`** (`Dev/dist/dev/` for dev builds). This produces:
+   - the shared zip (deterministic: sorted entries, fixed mtimes), including
+     the Windows app-capture helper and ClipEm's OBS plugin
    - the Linux OBS tarball
+   - the ffmpeg Linux and Windows builds and their source tarball
    - the Xft-repacked Linux Python
    - `install-manifest.json` (it also links the ffmpeg source tarball, which
      clipem.app's "Source code & licenses" section shows)
    - the legacy `clipem-latest.json`
    - `ClipEmSetupWindows.exe`
-   - the portable Linux bundle
+   - offline wheelhouses for the tray widget (and, on Windows, the mic filter)
+   - the portable Linux and Windows bundles (offline alternatives to the
+     installers, linked from clipem.app)
    - `build-info.json`, which records the exact commits used
 
-   The only changes to the source tree are `App/Shared/VERSION`,
-   `App/Shared/checksums.json` and any new entries in
-   `Dev/release/upstream-pins.json`.
+   The only changes to the source tree are `App/App/Shared/VERSION`,
+   `App/App/Shared/checksums.json`, any new entries in
+   `Dev/release/upstream-pins.json` and a retaken editor screenshot.
 3. **Sign both manifests.**
 4. **Upload everything**, plus `ClipEmSetupLinux.sh`, to a *draft* GitHub
    release `vX.Y.Z`, after asking you first. The manifests go last.
 5. **Copy to the website.** The signed manifests go into `Website/public`, for installs up to 1.3.5.
-6. **Commit** "Update X.Y.Z", then ask whether to push `main` and publish the
-   draft, which tags the release commit. Answer no to get the commands to
-   run later instead.
+6. **Commit** "Update X.Y.Z" (including `Dev/assets/editor-screenshot.sha256`),
+   then ask whether to push `main` and publish the draft, which tags the
+   release commit. Answer no to get the commands to run later instead.
 
 Then deploy the website. `--no-upload` does a full dry run, stopping after
 step 3.
@@ -121,38 +146,34 @@ Dev/release.sh --dev
 ```
 
 This builds `HEAD` the same way as a release. The version is
-`<next patch>-dev.<UTC timestamp>`, for example `1.3.6-dev.202610142130`. The
-build replaces every asset of the rolling `dev` prerelease, uploading the
-manifests last, and deletes stale assets. It commits nothing, leaves the
+`<next patch>-dev.<UTC timestamp>`, for example `1.3.6-dev.202610142130`
+(`--dev minor` etc. picks a different next version). Releases are immutable,
+so each dev build is published straight away as its own prerelease
+`v<version>`, manifests uploaded last. Only the newest 10 dev prereleases are
+kept; older ones are deleted (`DEV_RELEASES_KEPT` in
+`Dev/release/release_common.py`). A dev build commits nothing, leaves the
 website alone, and refuses to run with uncommitted changes unless you pass
 `--allow-dirty`.
 
 Installs whose Settings > Update channel is **Latest** get the dev build at
-their next update check. A dev version sorts after the release before it and
-before its own release, so `1.3.5 < 1.3.6-dev.* < 1.3.6`. Installs on
-**Releases** never see it, because GitHub's `/releases/latest/` skips
-prereleases. Switching a dev install back to **Releases** offers the current
-release, even though it's older.
+their next update check: the updater asks the GitHub API for the newest
+release, prereleases included, and reads that release's manifest. A dev
+version sorts after the release before it and before its own release, so
+`1.3.5 < 1.3.6-dev.* < 1.3.6`. Installs on **Releases** never see it, because
+GitHub's `/releases/latest/` skips prereleases. Switching a dev install back
+to **Releases** offers the current release, even though it's older.
 
-For a fresh install of the dev build on Linux:
+For a fresh install of a dev build on Linux:
 
 ```
-CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/dev/install-manifest.json ./ClipEmSetupLinux.sh
+CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/v<version>/install-manifest.json ./ClipEmSetupLinux.sh
 ```
-
-
-
-
-
-
-
-
 
 ## How an install works
 
 1. **The installer runs.** Windows users get `ClipEmSetupWindows.exe`
    (NSIS + `installer/windows/bootstrap.ps1`). Linux users run
-   `App/Shared/Installer/Scripts/ClipEmSetupLinux.sh`, uploaded as an asset of
+   `App/App/Shared/Installer/Scripts/ClipEmSetupLinux.sh`, uploaded as an asset of
    each release (`clipem.app/linuxinstall.sh` redirects to the latest one).
 2. **The manifest is checked.** The installer fetches the latest GitHub
    release's `install-manifest.json` and its `.sig`, then
@@ -161,7 +182,7 @@ CLIPEM_MANIFEST_URL=https://github.com/PTMakes/ClipEm/releases/download/dev/inst
 3. **Downloads are checked.** Only after the signature checks out does it
    download what the manifest lists (OBS, a portable Python, the shared
    zip) and check each file's sha256.
-4. **Setup takes over.** `App/Shared/Installer/setup.py` handles everything
+4. **Setup takes over.** `App/App/Shared/Installer/setup.py` handles everything
    from there: the wizard, the OBS config, the tray widget and autostart.
 5. **Launching.** `run.py` only ever starts ClipEm's own OBS build. On
    Windows and Linux, if it's missing, `run.py` downloads it first
@@ -181,7 +202,7 @@ The updater reads `https://github.com/<source repo>/releases/latest/download/ins
 In the tray widget's Settings, users can change:
 
 - **Update channel.** *Releases* (the default) or *Latest*, which reads the
-  rolling `dev` prerelease instead (see [Testing dev builds](#testing-dev-builds)).
+  newest release, dev prereleases included (see [Testing dev builds](#testing-dev-builds)).
 - **Update source.** The GitHub repo, `PTMakes/ClipEm` by default. Settings
   explains and asks before changing it. Another repo only works if its
   manifests are signed with ClipEm's release key.
@@ -193,7 +214,6 @@ new version from GitHub and then update to read the GitHub themselves after that
 Old R2 objects at `downloads.clipem.app` are left alone, so old links keep
 working.
 
-
 ### Where versions come from
 
 | What | Source of truth |
@@ -203,6 +223,13 @@ working.
 | pip (Windows bootstrap) | `WINDOWS_PIP_VERSION` in `release.sh` |
 | Linux OBS | the build in `Dev/obs-install` (`libobsConfigVersion.cmake`) |
 | Linux Python | `LINUX_PYTHON_VERSION` and `LINUX_PYTHON_PBS_TAG` in `release.sh` |
+| Electron (clip editor window) | `ELECTRON_VERSION` in `App/App/Shared/Installer/editor_window.py` |
+| ffmpeg | `FFMPEG_TAG`, `FFMPEG_COMMIT`, `X264_COMMIT` and `BUILD_REV` in `Dev/build/build-ffmpeg.sh` |
+
+The clip editor (`tray-widget/clip_browser.py` and `clip_browser/`) runs in
+ClipEm's own pinned Electron, which Setup installs into
+`App/<platform>/editor-window` and which runs the tiny app in
+`tray-widget/editor-window/`. That way it never depends on the user's browser.
 
 Both platforms run the same python-build-standalone build (release.sh
 checks). Windows' bundled Python is also the one OBS runs ClipEm's scripts
@@ -243,7 +270,7 @@ published as a release asset). Details:
 
 ## ffmpeg (clip re-export)
 
-`App/Shared/Scripts/clip_reexport.py` is an OBS script. When the setup
+`App/App/Shared/Scripts/clip_reexport.py` is an OBS script. When the setup
 wizard's "Also save a smaller copy of each clip" option is on, it writes
 `<clip>-small.mp4` next to every saved clip: the last N seconds, re-encoded
 to fit a target size. The original clip is never changed.
@@ -258,7 +285,10 @@ to fit a target size. The original clip is never changed.
   around 4 MB per platform.
 - **Caching:** builds are cached in `Dev/dist/ffmpeg/`, and `release.sh`
   runs the script automatically.
-- **Requirements:** `sudo pacman -S --needed base-devel git nasm mingw-w64-gcc`.
+- **Requirements:** `sudo pacman -S --needed base-devel git nasm mingw-w64-gcc meson ninja`.
+- **Coverage:** `Dev/ffmpeg_build.py` reads what the build enables, so tests
+  can check that the app never asks ffmpeg for a filter, codec or muxer the
+  build doesn't have.
 - **Installing:** installers put it in `App/Windows/ffmpeg` or
   `App/Linux/ffmpeg`. On macOS, `brew install ffmpeg` is needed.
 
@@ -273,9 +303,11 @@ then strips the clip itself back to the mix. Where the tray can't record
 apps (macOS), `clip_reexport.py` splits the three OBS tracks itself - and it
 does the same, without app tracks, for any clip the tray didn't claim within
 a few seconds of the save (the tray wasn't running or connected; see
-`Scripts/clip_claim.py`), so no clip is left unfinished.
+`Scripts/clip_claim.py`), so no clip is left unfinished. The ffmpeg work
+itself (the smaller copy and `-tracks.mkv`) is in `Scripts/clip_tracks.py`,
+which both the OBS script and the tray use.
 `build/build-app-capture.sh` cross-compiles the Windows helper from
-`Dev/app-capture/` into `App/Shared/Tools/` (`release.sh` runs it).
+`Dev/app-capture/` into `App/App/Shared/Tools/` (`release.sh` runs it).
 
 **Post-clip.** With post-clip on in Setup or Settings > Clip Output, the clip hotkey moves
 from OBS's "Save Replay" to `Scripts/post_clip.py` and the replay buffer is kept
@@ -295,7 +327,7 @@ there's no tray to hide to) and passes OBS's errors and messages on to the tray
 widget (`tray-widget/obs_notices.py`). `run.py` loads it through
 `OBS_PLUGINS_PATH`, so it ships in the shared zip, not inside OBS.
 
-`build/build-obs-plugin.sh` builds it into `App/Shared/OBS-Plugin/` (ignored by
+`build/build-obs-plugin.sh` builds it into `App/App/Shared/OBS-Plugin/` (ignored by
 git), and `release.sh` runs it:
 
 - **Linux:** built against `Dev/obs-install` and this machine's Qt6, so it has
@@ -327,7 +359,7 @@ checks that a 16pt font really renders at 16pt.
 | --- | --- |
 | `App` | `ruff check .` |
 | `Website` | `npm run lint`, `npm run typecheck`, `npm run build`, and that each manifest has a signature. |
-| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; the tests that need a display run under `xvfb-run` in CI). `release.sh` preflight also runs these, and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. On a desktop that doesn't give the test window keyboard focus, the entry shortcut test skips itself. |
+| `Dev` | `ruff check` (`Dev/ruff.toml`), `python3 -m pytest tests` (all tests, App and Dev, live in `Dev/tests/`; `Dev/pytest.ini` holds pytest's settings; the tests that need a display run under `xvfb-run` in CI). `release.sh` preflight also runs these, on Linux and on the [Windows test VM](#windows-test-vm), and checks that the Python hash in `Setup_Windows.bat` matches `upstream-pins.json`. On a desktop that doesn't give the test window keyboard focus, the entry shortcut test skips itself. |
 | `BugReportWorker` | `npm test`: the upload checks against zips from Python's `zipfile`. |
 
 The workflows are in `.github/workflows/`: `app.yml` (App + Dev),
@@ -341,3 +373,20 @@ its lifecycle against a stand-in `obspython` that only has the names the real
 one has. Those names are in `Dev/tests/obspython_api.json`, generated from the
 Linux OBS build by `Dev/generate_obspython_api.py`. Re-run that script after
 rebuilding OBS; `release.sh` stops if the snapshot is out of date.
+
+### Clip editor tests and screenshot
+
+`Dev/devtools.py` drives ClipEm's own Electron editor window over the
+DevTools protocol: headless on Linux, on the desktop on Windows. The editor
+page tests (`tests/test_editor_page.py`) and `Dev/screenshot_editor.py` use
+it. That script retakes the screenshot shown on clipem.app and on Setup's
+Clip Editor page, using generated sample clips. `release.sh` runs it with
+`--if-changed`, keyed on `Dev/assets/editor-screenshot.sha256`.
+
+## Logo and icons
+
+The artwork lives in `Dev/assets/`. After replacing any of it, run
+`python3 Dev/update_logo.py`. It copies the PNGs and the WebP byte for byte
+to where they ship (the tray widget, `Website/public/logo.webp`,
+`Website/app/icon.png`), builds the `.ico` files from them, and re-checksums
+`App/App/Shared`.

@@ -243,6 +243,107 @@ class RedSlider(tk.Canvas):
         self.create_polygon(points, smooth=True, fill=fill, outline=outline)
 
 
+class RangeSlider(tk.Canvas):
+    """RedSlider with two thumbs, a start and an end, and the red line
+    between them. Pressing on the bar moves the nearer thumb there, and
+    dragging moves it, never nearer the other than min_gap. command(start,
+    end) runs on every move; configure(state=...) enables and disables it."""
+
+    THUMB_W = RedSlider.THUMB_W
+    BAR_H = RedSlider.BAR_H
+    _span = RedSlider._span
+    _round = RedSlider._round
+
+    def __init__(self, master, from_=0.0, to=1.0, start=None, end=None, min_gap=0.0, command=None, height=22, **kw):
+        kw.setdefault("background", BG)
+        kw.setdefault("highlightthickness", 0)
+        kw.setdefault("borderwidth", 0)
+        super().__init__(master, height=height, cursor="hand2", **kw)
+        self._command = command
+        self._min_gap = float(min_gap)
+        self._enabled = True
+        self._active = None  # the thumb being dragged: "start" or "end"
+        self.set_range(from_, to, start, end)
+        self.bind("<Configure>", lambda _e: self._draw())
+        self.bind("<Button-1>", self._press)
+        self.bind("<B1-Motion>", self._drag)
+        self.bind("<ButtonRelease-1>", lambda _e: setattr(self, "_active", None))
+
+    def get(self):
+        return self._start, self._end
+
+    def set_range(self, from_, to, start=None, end=None):
+        """New bounds and thumbs (the bounds when None) - no command."""
+        self._from, self._to = float(from_), float(to)
+        self._start = self._from if start is None else min(max(float(start), self._from), self._to)
+        self._end = self._to if end is None else min(max(float(end), self._start), self._to)
+        self._draw()
+
+    def configure(self, cnf=None, **kw):
+        if "state" in kw:
+            self._enabled = kw.pop("state") != "disabled"
+            self.config(cursor="hand2" if self._enabled else "")
+            self._draw()
+        if cnf or kw:
+            return super().configure(cnf, **kw)
+
+    config = configure
+
+    def _value_at(self, x):
+        left, right = self._span()
+        fraction = min(max((x - left) / (right - left), 0.0), 1.0)
+        return self._from + fraction * (self._to - self._from)
+
+    def _press(self, event):
+        if not self._enabled:
+            return
+        value = self._value_at(event.x)
+        # The nearer thumb; past the end (or on top of both) moves the end.
+        self._active = "start" if abs(value - self._start) < abs(value - self._end) else "end"
+        if self._start == self._end and value < self._start:
+            self._active = "start"
+        self._drag(event)
+
+    def _drag(self, event):
+        if not self._enabled or self._active is None:
+            return
+        value = self._value_at(event.x)
+        gap = min(self._min_gap, self._to - self._from)
+        if self._active == "start":
+            self._start = min(value, self._end - gap)
+        else:
+            self._end = max(value, self._start + gap)
+        self._start, self._end = max(self._start, self._from), min(self._end, self._to)
+        self._draw()
+        if self._command:
+            self._command(self._start, self._end)
+
+    def _x(self, value):
+        left, right = self._span()
+        fraction = (value - self._from) / ((self._to - self._from) or 1)
+        return left + (right - left) * min(max(fraction, 0.0), 1.0)
+
+    def _draw(self):
+        self.delete("all")
+        width, height = self.winfo_width(), self.winfo_height()
+        if width < 2 * self.THUMB_W:
+            return
+        left, _right = self._span()
+        top = (height - self.BAR_H) / 2
+        mid = height / 2
+        red = ACCENT if self._enabled else mix(ACCENT, BG, 0.55)
+        red_hi, edge = mix(red, "#ffffff", 0.35), mix(red, "#000000", 0.55)
+        self._round(1, top, width - 1, top + self.BAR_H, 6, TRACK, TRACK_EDGE)
+        for i in range(1, 10):
+            x = left + (width - 2 * left) * i / 10
+            self.create_line(x, mid - 3, x, mid + 3, fill=TICK)
+        x1, x2 = self._x(self._start), self._x(self._end)
+        self.create_line(x1, mid, x2, mid, fill=red, width=2)
+        for x in (x1, x2):
+            self._round(x - left, mid - 6, x + left, mid + 6, 4, red, edge)
+            self.create_line(x - left + 4, mid - 4, x + left - 4, mid - 4, fill=red_hi)
+
+
 class Card(tk.Canvas):
     """A rounded, outlined box (the editor's panels) around its .body frame -
     put the widgets in .body. Sizes itself to the body's requested size."""

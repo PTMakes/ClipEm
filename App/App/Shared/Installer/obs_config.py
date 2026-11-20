@@ -830,8 +830,8 @@ def ensure_clip_sound_wav(scripts_dir=None):
 
 
 def active_clip_sound_name():
-    """The preset or saved sound the clip sound is a copy of, or None (a
-    custom sound that isn't in the list)."""
+    """The preset or saved sound (as trimmed) the clip sound is a copy of,
+    or None (a custom sound that isn't in the list)."""
     try:
         with open(CLIP_SOUND_WAV_PATH, "rb") as f:
             current = f.read()
@@ -839,10 +839,9 @@ def active_clip_sound_name():
         return None
     for name in clip_sound_names():
         try:
-            with open(clip_sound_path(name), "rb") as f:
-                if f.read() == current:
-                    return name
-        except OSError:
+            if clip_sound_bytes(name) == current:
+                return name
+        except (OSError, EOFError, ValueError):
             pass
     return None
 
@@ -921,10 +920,10 @@ def convert_to_wav(source_path, out_path, ffmpeg=None, run=None):
 
 
 def prepare_clip_sound(source_path, ffmpeg=None, run=None):
-    """(temp path, seconds): a copy of source_path as a WAV the clip sound
-    script can scale - integer PCM WAVs as they are, anything else converted
-    by ffmpeg - for save_prepared_clip_sound or discard_prepared_clip_sound.
-    Raises ValueError if the file can't be used."""
+    """A temporary copy of source_path as a WAV the clip sound script can
+    scale - integer PCM WAVs as they are, anything else converted by ffmpeg
+    - for save_prepared_clip_sound. Raises ValueError if the file can't be
+    used."""
     os.makedirs(CLIP_SOUND_LIBRARY_DIR, exist_ok=True)
     temp = os.path.join(CLIP_SOUND_LIBRARY_DIR, f".adding-{secrets.token_hex(4)}.tmp")
     try:
@@ -932,10 +931,17 @@ def prepare_clip_sound(source_path, ffmpeg=None, run=None):
             shutil.copyfile(source_path, temp)
         else:
             convert_to_wav(source_path, temp, ffmpeg=ffmpeg, run=run)
-        return temp, wav_seconds(temp)
+        return temp
     except BaseException:
-        discard_prepared_clip_sound(temp)
+        _remove_quietly(temp)
         raise
+
+
+def _remove_quietly(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def wav_seconds(path):
@@ -945,52 +951,133 @@ def wav_seconds(path):
         return f.getnframes() / f.getframerate()
 
 
-# Long enough not to click where a sound is cut short, too short to hear.
+# Long enough not to click where a sound is cut, too short to hear.
 CLIP_SOUND_CUT_FADE_SECONDS = 0.01
 MIN_CLIP_SOUND_SECONDS = 0.1
+# Where each saved sound starts and ends, {name: [start, end]} in seconds -
+# the saved .wav is always the whole sound, so a trim can be undone.
+CLIP_SOUND_TRIMS_NAME = "trims.json"
 
 
-def trim_wav(source_path, out_path, seconds, fade_seconds=CLIP_SOUND_CUT_FADE_SECONDS):
-    """Writes the first `seconds` of an integer PCM WAV to out_path, fading
-    out over its last fade_seconds."""
+def trimmed_wav_bytes(source_path, start=0.0, end=None, fade_seconds=CLIP_SOUND_CUT_FADE_SECONDS):
+    """An integer PCM WAV from `start` to `end` seconds (the end of it when
+    None), as bytes, fading in/out over fade_seconds where it's cut. The
+    whole sound comes back unchanged."""
+    import io
     import wave
 
     with wave.open(source_path, "rb") as src:
         params = src.getparams()
         frames = src.readframes(params.nframes)
-    keep = max(1, min(params.nframes, round(seconds * params.framerate)))
-    width, channels = params.sampwidth, params.nchannels
-    block = width * channels
-    frames = bytearray(frames[:keep * block])
-    fade = min(keep, round(fade_seconds * params.framerate))
-    for j in range(fade):  # the last `fade` frames, down to silence
-        gain = (fade - 1 - j) / fade
-        start = (keep - fade + j) * block
-        for i in range(start, start + block, width):
-            raw = frames[i:i + width]
+    total, rate = params.nframes, params.framerate
+    first = min(max(0, round(start * rate)), max(0, total - 1))
+    last = total if end is None else min(total, max(first + 1, round(end * rate)))
+    if first == 0 and last == total:
+        with open(source_path, "rb") as f:
+            return f.read()
+    width = params.sampwidth
+    block = width * params.nchannels
+    frames = bytearray(frames[first * block:last * block])
+    count = last - first
+    fade = min(count // 2, round(fade_seconds * rate))
+
+    def scale(frame, gain):
+        for i in range(frame * block, frame * block + block, width):
             if width == 1:  # unsigned, centred on 128
-                frames[i] = 128 + int((raw[0] - 128) * gain)
+                frames[i] = 128 + int((frames[i] - 128) * gain)
             else:
-                value = int(int.from_bytes(raw, "little", signed=True) * gain)
+                value = int(int.from_bytes(frames[i:i + width], "little", signed=True) * gain)
                 frames[i:i + width] = value.to_bytes(width, "little", signed=True)
-    with wave.open(out_path, "wb") as dst:
+
+    for j in range(fade):
+        if first > 0:
+            scale(j, j / fade)  # up from silence
+        if last < total:
+            scale(count - 1 - j, j / fade)  # down to silence
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as dst:
         dst.setparams(params)
         dst.writeframes(bytes(frames))
+    return buf.getvalue()
 
 
-def save_prepared_clip_sound(source_path, temp, seconds=None):
-    """Adds a prepare_clip_sound copy to the sound list - its first
-    `seconds`, or all of it - named after source_path, and returns its name.
-    Adding the same sound again returns the existing entry."""
+def _trims_path():
+    return os.path.join(CLIP_SOUND_LIBRARY_DIR, CLIP_SOUND_TRIMS_NAME)
+
+
+def _load_trims():
+    trims = load_json(_trims_path(), {})
+    return trims if isinstance(trims, dict) else {}
+
+
+def clip_sound_trim(name):
+    """(start, end) in seconds of a saved sound - (0, None) when untrimmed
+    (None: its end)."""
+    trim = _load_trims().get(name)
     try:
-        if seconds is not None and seconds < wav_seconds(temp) - 0.001:
-            trimmed = temp + ".trim"
-            try:
-                trim_wav(temp, trimmed, max(MIN_CLIP_SOUND_SECONDS, seconds))
-                os.replace(trimmed, temp)
-            finally:
-                if os.path.exists(trimmed):
-                    os.remove(trimmed)
+        start, end = float(trim[0]), (None if trim[1] is None else float(trim[1]))
+    except (TypeError, ValueError, IndexError, KeyError):
+        return 0.0, None
+    return max(0.0, start), end
+
+
+def save_clip_sound_trim(name, start, end):
+    """Stores where a saved sound starts and ends (end None: its end)."""
+    trims = _load_trims()
+    if start <= 0 and end is None:
+        trims.pop(name, None)
+    else:
+        trims[name] = [round(max(0.0, start), 3), None if end is None else round(end, 3)]
+    write_json_atomic(_trims_path(), trims, indent=2)
+
+
+def clip_sound_bytes(name, start=None, end=None):
+    """The clip sound a preset or saved sound makes, as bytes - a saved one
+    trimmed as stored, or to start/end when given."""
+    path = clip_sound_path(name)
+    if name in CLIP_SOUND_PRESETS:
+        with open(path, "rb") as f:
+            return f.read()
+    if start is None and end is None:
+        start, end = clip_sound_trim(name)
+    return trimmed_wav_bytes(path, start or 0.0, end)
+
+
+def use_clip_sound(name, start=None, end=None):
+    """Makes a preset or saved sound the clip sound. For a saved one,
+    start/end (seconds; end None for its end) are stored as its trim first
+    when given."""
+    if name not in CLIP_SOUND_PRESETS and (start is not None or end is not None):
+        save_clip_sound_trim(name, start or 0.0, end)
+    write_bytes_atomic(CLIP_SOUND_WAV_PATH, clip_sound_bytes(name))
+
+
+def write_bytes_atomic(path, data):
+    temp = f"{path}.{secrets.token_hex(4)}.tmp"
+    try:
+        with open(temp, "wb") as f:
+            f.write(data)
+        os.replace(temp, path)
+    finally:
+        _remove_quietly(temp)
+
+
+def preview_clip_sound(name, volume, start=None, end=None):
+    """Plays a preset or saved sound as clip sound would (trimmed to
+    start/end when given), without changing anything."""
+    if name in CLIP_SOUND_PRESETS:
+        play_clip_sound(volume, clip_sound_path(name))
+        return
+    preview = os.path.join(CLIP_SOUND_LIBRARY_DIR, ".preview.tmp")
+    write_bytes_atomic(preview, clip_sound_bytes(name, start, end))
+    play_clip_sound(volume, preview)
+
+
+def save_prepared_clip_sound(source_path, temp):
+    """Adds a prepare_clip_sound copy to the sound list, named after
+    source_path, and returns its name. Adding the same sound again returns
+    the existing entry."""
+    try:
         stem = os.path.splitext(os.path.basename(source_path))[0].strip() or "Sound"
         stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem)[:60]
         with open(temp, "rb") as f:
@@ -1008,42 +1095,25 @@ def save_prepared_clip_sound(source_path, temp, seconds=None):
         os.replace(temp, os.path.join(CLIP_SOUND_LIBRARY_DIR, name + ".wav"))
         return name
     finally:
-        discard_prepared_clip_sound(temp)
+        _remove_quietly(temp)
 
 
-def _preview_path(temp):
-    return temp + ".preview"
-
-
-def preview_prepared_clip_sound(temp, seconds, volume):
-    """Plays a prepare_clip_sound copy cut at `seconds`, as it would be saved."""
-    preview = _preview_path(temp)
-    trim_wav(temp, preview, max(MIN_CLIP_SOUND_SECONDS, seconds))
-    play_clip_sound(volume, preview)
-
-
-def discard_prepared_clip_sound(temp):
-    for path in (temp, _preview_path(temp)):
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-
-
-def add_clip_sound(source_path, seconds=None, ffmpeg=None, run=None):
-    """Saves a sound file to the sound list - its first `seconds`, or all
-    of it - converting it to a WAV if it isn't one the clip sound script can
-    scale, and returns its name. Raises ValueError if it can't be used."""
-    temp, _length = prepare_clip_sound(source_path, ffmpeg=ffmpeg, run=run)
-    return save_prepared_clip_sound(source_path, temp, seconds)
+def add_clip_sound(source_path, ffmpeg=None, run=None):
+    """Saves a sound file to the sound list - converted to a WAV if it isn't
+    one the clip sound script can scale - and returns its name. Raises
+    ValueError if it can't be used."""
+    return save_prepared_clip_sound(source_path, prepare_clip_sound(source_path, ffmpeg=ffmpeg, run=run))
 
 
 def remove_clip_sound(name):
-    """Takes a saved sound off the sound list. The clip sound itself is a
-    copy, so one in use keeps playing until another is chosen."""
+    """Takes a saved sound (and its trim) off the sound list. The clip sound
+    itself is a copy, so one in use keeps playing until another is chosen."""
     path = saved_clip_sounds().get(name)
     if path:
         os.remove(path)
+        trims = _load_trims()
+        if trims.pop(name, None) is not None:
+            write_json_atomic(_trims_path(), trims, indent=2)
 
 
 def load_clip_sound():

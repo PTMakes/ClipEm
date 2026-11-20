@@ -1,5 +1,5 @@
 """Post-clip: the clip hotkey keeps recording for a few more seconds (Settings >
-Recording, run_config.json "post_clip") so what's said right after it isn't
+Clip Output, run_config.json "post_clip") so what's said right after it isn't
 lost. Shared by Scripts/post_clip.py (the hotkey, inside OBS),
 Scripts/clip_reexport.py and the tray widget (tray-widget/tray_tracks.py),
 which finish the save - so no OBS imports here.

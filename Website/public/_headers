@@ -1,4 +1,4 @@
-# Cloudflare Pages response headers (applied to the static export).
+# Cloudflare response headers (applied to the static export by the Workers static assets deploy - see wrangler.jsonc).
 /*
   Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
   X-Content-Type-Options: nosniff

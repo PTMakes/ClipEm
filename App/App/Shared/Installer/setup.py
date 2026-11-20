@@ -1418,19 +1418,23 @@ def replace_clip_sound_wav(source_path):
         print(f"File not found: {source_path}", file=sys.stderr)
         return
     try:
-        temp, length = obs_config.prepare_clip_sound(source_path)
-    except (OSError, ValueError) as exc:
+        name = obs_config.add_clip_sound(source_path)
+        length = obs_config.wav_seconds(obs_config.clip_sound_path(name))
+    except (OSError, EOFError, ValueError) as exc:
         print(exc, file=sys.stderr)
         return
-    seconds = None
+    start, end = obs_config.clip_sound_trim(name)
     if length > obs_config.MIN_CLIP_SOUND_SECONDS:
-        raw = input(f"Play only the first how many seconds? [all {length:.1f}]: ").strip()
         try:
-            seconds = min(length, max(obs_config.MIN_CLIP_SOUND_SECONDS, float(raw))) if raw else None
+            raw = input(f"Start at how many seconds in? [{start:.2f}]: ").strip()
+            start = min(max(0.0, float(raw)), length - obs_config.MIN_CLIP_SOUND_SECONDS) if raw else start
+            raw = input(f"End at how many seconds in? [{length if end is None else end:.2f}]: ").strip()
+            if raw:
+                end = max(start + obs_config.MIN_CLIP_SOUND_SECONDS, float(raw))
+                end = None if end >= length else end
         except ValueError:
-            print("Not a number - keeping all of it.", file=sys.stderr)
-    name = obs_config.save_prepared_clip_sound(source_path, temp, seconds)
-    obs_config.replace_clip_sound_wav(obs_config.clip_sound_path(name))
+            print("Not a number - keeping the rest as it was.", file=sys.stderr)
+    obs_config.use_clip_sound(name, start, end)
     print(f"Clip sound file replaced with: {source_path}")
 
 
@@ -1900,9 +1904,10 @@ def ensure_windows_tkinter():
             sys.path.append(lib_dir)
         return True
 
-    # Only an embeddable Python (from an older ClipEmSetupWindows.exe) gets
-    # here. The manifest's tcltk.msi is python.org's last 3.12 one - its
-    # _tkinter.pyd won't load into any other minor version.
+    # Legacy path: only an embeddable python.org Python (from an older
+    # ClipEmSetupWindows.exe) gets here - current installs run PBS's Python,
+    # which bundles Tk. The manifest's tcltk.msi is python.org's last 3.12
+    # one - its _tkinter.pyd won't load into any other minor version.
     wanted = tuple(int(part) for part in WINDOWS_PYTHON_VERSION.split(".")[:2])
     if sys.version_info[:2] != wanted:
         _tcltk_log(

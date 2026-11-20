@@ -228,37 +228,69 @@ def _samples(path):
         return f.getframerate(), list(array.array("h", f.readframes(f.getnframes())))
 
 
-def test_a_sound_can_be_cut_short_with_a_fade_at_the_cut(sound_library):
+def _ramp_wav(path):
+    """1 s at 1 kHz of a constant level."""
     import array
     import wave
 
-    long = sound_library / "long.wav"
-    with wave.open(str(long), "wb") as f:  # 1 s of a constant level at 1 kHz
+    with wave.open(str(path), "wb") as f:
         f.setnchannels(1), f.setsampwidth(2), f.setframerate(1000)
         f.writeframes(array.array("h", [1000] * 1000).tobytes())
-    name = obs_config.add_clip_sound(str(long), seconds=0.25)
-    _rate, samples = _samples(obs_config.clip_sound_path(name))
+    return path
+
+
+def test_a_saved_sound_is_trimmed_at_both_ends_with_fades_and_kept_whole(sound_library):
+    name = obs_config.add_clip_sound(str(_ramp_wav(sound_library / "long.wav")))
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
+    obs_config.use_clip_sound(name, 0.2, 0.45)
+    assert obs_config.clip_sound_trim(name) == (0.2, 0.45)
+    rate, samples = _samples(sound_library / "replay_buffer_save_sound.wav")
     assert len(samples) == 250
-    assert samples[:240] == [1000] * 240  # untouched up to the 10 ms fade
-    assert samples[240] == 1000 * 9 // 10 and samples[-1] == 0
-    assert obs_config.add_clip_sound(str(long), seconds=0.25) == name  # the same cut is the same sound
-    assert obs_config.add_clip_sound(str(long)) == "long (2)"  # the whole of it isn't
-    assert len(_samples(obs_config.clip_sound_path("long (2)"))[1]) == 1000
-    assert obs_config.add_clip_sound(str(long), seconds=0.001) == "long (3)"  # never under the minimum
-    assert len(_samples(obs_config.clip_sound_path("long (3)"))[1]) == 100
-    assert sorted(os.listdir(sound_library / "clip-sounds")) == ["long (2).wav", "long (3).wav", "long.wav"]
+    assert samples[0] == 0 and samples[9] == 900  # 10 ms fade in where the dead air was cut
+    assert samples[10:240] == [1000] * 230
+    assert samples[240] == 900 and samples[-1] == 0  # and out at the end
+    assert len(_samples(obs_config.clip_sound_path(name))[1]) == 1000  # the saved sound stays whole
+    assert obs_config.active_clip_sound_name() == name  # recognised as trimmed
+
+    obs_config.use_clip_sound(name, 0.0, None)  # back to all of it
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
+    assert len(_samples(sound_library / "replay_buffer_save_sound.wav")[1]) == 1000
+    assert obs_config.active_clip_sound_name() == name
 
 
-def test_a_prepared_sound_is_previewed_cut_and_cleaned_up_when_dropped(sound_library, monkeypatch):
+def test_only_the_cut_ends_fade(sound_library):
+    name = obs_config.add_clip_sound(str(_ramp_wav(sound_library / "long.wav")))
+    obs_config.use_clip_sound(name, 0.5, None)  # the start trimmed, the end left
+    _rate, samples = _samples(sound_library / "replay_buffer_save_sound.wav")
+    assert len(samples) == 500 and samples[0] == 0 and samples[-1] == 1000
+
+
+def test_a_removed_sound_takes_its_trim_with_it(sound_library):
+    name = obs_config.add_clip_sound(str(_ramp_wav(sound_library / "long.wav")))
+    obs_config.save_clip_sound_trim(name, 0.1, 0.5)
+    obs_config.remove_clip_sound(name)
+    assert obs_config.add_clip_sound(str(sound_library / "long.wav")) == name
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
+
+
+def test_a_preview_plays_the_trim_without_changing_anything(sound_library, monkeypatch):
     played = []
     monkeypatch.setattr(obs_config, "play_clip_sound", lambda volume, path: played.append(
         (volume, len(_samples(path)[1]))))
-    temp, seconds = obs_config.prepare_clip_sound(str(_pcm_wav(sound_library / "ding.wav")))
-    assert seconds == pytest.approx(10 / 48000)
-    obs_config.preview_prepared_clip_sound(temp, 0.5, 0.3)
-    assert played == [(0.3, 10)]
-    obs_config.discard_prepared_clip_sound(temp)  # cancelled
-    assert os.listdir(sound_library / "clip-sounds") == []
+    name = obs_config.add_clip_sound(str(_ramp_wav(sound_library / "long.wav")))
+    obs_config.preview_clip_sound(name, 0.3, 0.25, 0.5)
+    obs_config.preview_clip_sound(name, 0.3)  # as saved: all of it
+    assert played == [(0.3, 250), (0.3, 1000)]
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
+    assert not (sound_library / "replay_buffer_save_sound.wav").exists()
+
+
+def test_an_unreadable_trims_file_means_untrimmed(sound_library):
+    name = obs_config.add_clip_sound(str(_ramp_wav(sound_library / "long.wav")))
+    (sound_library / "clip-sounds" / "trims.json").write_text("[1, 2]")
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
+    (sound_library / "clip-sounds" / "trims.json").write_text('{"long": ["x", 1]}')
+    assert obs_config.clip_sound_trim(name) == (0.0, None)
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
