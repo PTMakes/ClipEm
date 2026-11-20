@@ -17,6 +17,7 @@ import clip_browser  # noqa: E402
 import clip_edit  # noqa: E402
 import clip_post  # noqa: E402
 import clip_tracks  # noqa: E402
+import obs_config  # noqa: E402
 import tray_tracks  # noqa: E402
 
 TITLES = ["Mix", "Mic", "Desktop", "Game"]
@@ -43,6 +44,8 @@ def _commands(tmp_path):
             clip_edit.track_audio_command("ffmpeg", clip, 1, "opus", "t.m4a", level=True, gate_db=-48),
             clip_edit.peaks_command("ffmpeg", clip, 1, level=True, gate_db=-48),
         ]
+    # Settings' and Setup's "Add sound..." (any sound file into the clip sound list).
+    commands.append(obs_config.clip_sound_convert_command("ffmpeg", "horn.mp3", "horn.raw"))
     ran = []
 
     def run(cmd, **_kwargs):

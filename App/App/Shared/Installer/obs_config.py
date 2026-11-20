@@ -852,9 +852,11 @@ def active_clip_sound_name():
 # as they are, anything else is converted by ffmpeg. Preserved by updates
 # (updater.CLIPEM_SETTINGS_PATHS).
 CLIP_SOUND_LIBRARY_DIR = os.path.join(SHARED_DIR, "Scripts", "clip-sounds")
-# What the file picker offers - anything else ffmpeg reads works too.
-CLIP_SOUND_EXTENSIONS = (".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".wma",
-                         ".aif", ".aiff", ".webm", ".mka", ".mp4")
+# What the file picker offers: what ClipEm's own ffmpeg reads (its demuxers
+# and decoders - Dev/build/build-ffmpeg.sh). A system ffmpeg may read more,
+# under "All files".
+CLIP_SOUND_EXTENSIONS = (".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".webm", ".mka",
+                         ".mp4", ".mkv", ".mov")
 CLIP_SOUND_FILETYPES = [("Sound files", " ".join("*" + ext for ext in CLIP_SOUND_EXTENSIONS)), ("All files", "*")]
 
 
@@ -896,27 +898,71 @@ def _find_ffmpeg():
     return encoders.bundled_ffmpeg(clipem_common.APP_DIR) or shutil.which("ffmpeg")
 
 
+CLIP_SOUND_RATE = 48000
+CLIP_SOUND_CHANNELS = 2
+
+
+def clip_sound_convert_command(ffmpeg, source_path, raw_path):
+    """ffmpeg decoding a sound's first audio stream to raw 16-bit 48 kHz
+    stereo PCM - ClipEm's own ffmpeg has no WAV muxer (Dev/build/
+    build-ffmpeg.sh), so convert_to_wav adds the header itself."""
+    return [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", source_path,
+            "-map", "0:a:0", "-vn", "-ac", str(CLIP_SOUND_CHANNELS), "-ar", str(CLIP_SOUND_RATE),
+            "-c:a", "pcm_s16le", "-f", "s16le", raw_path]
+
+
 def convert_to_wav(source_path, out_path, ffmpeg=None, run=None):
-    """Converts any sound ffmpeg reads (MP3, OGG, FLAC, float WAV...) to a
-    16-bit 48 kHz stereo WAV at out_path. Raises ValueError if it can't."""
+    """Converts any sound ffmpeg reads (MP3, OGG, FLAC...) to a 16-bit
+    48 kHz stereo WAV at out_path. Raises ValueError if it can't."""
     import subprocess
+    import wave
 
     run = run or subprocess.run
     ffmpeg = ffmpeg or _find_ffmpeg()
     name = os.path.basename(source_path)
     if not ffmpeg:
         raise ValueError(f"Converting {name} needs ffmpeg, which isn't installed - choose a .wav file instead.")
-    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", source_path,
-           "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:a", "+bitexact",
-           "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", out_path]
+    raw_path = out_path + ".raw"
     try:
-        result = run(cmd, capture_output=True, text=True, errors="replace", timeout=60,
-                     **({"creationflags": 0x08000000} if os.name == "nt" else {}))  # CREATE_NO_WINDOW
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise ValueError(f"Couldn't convert {name}: {exc}") from exc
-    if result.returncode != 0 or not _is_integer_pcm_wav(out_path):
-        detail = (result.stderr or "").strip().splitlines()
-        raise ValueError(f"{name} isn't a sound file ffmpeg can read" + (f": {detail[-1]}" if detail else "."))
+        try:
+            result = run(clip_sound_convert_command(ffmpeg, source_path, raw_path), capture_output=True, text=True,
+                         errors="replace", timeout=60,
+                         **({"creationflags": 0x08000000} if os.name == "nt" else {}))  # CREATE_NO_WINDOW
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ValueError(f"Couldn't convert {name}: {exc}") from exc
+        frame_bytes = 2 * CLIP_SOUND_CHANNELS
+        size = os.path.getsize(raw_path) if os.path.exists(raw_path) else 0
+        if result.returncode != 0 or size < frame_bytes:
+            # The first line says why; later ones are what failed because of it.
+            detail = [line for line in (result.stderr or "").strip().splitlines() if line.strip()]
+            raise ValueError(f"{name} isn't a sound file ffmpeg can read" + (f": {detail[0]}" if detail else "."))
+        with open(raw_path, "rb") as raw, wave.open(out_path, "wb") as dst:
+            dst.setnchannels(CLIP_SOUND_CHANNELS)
+            dst.setsampwidth(2)
+            dst.setframerate(CLIP_SOUND_RATE)
+            left = size - size % frame_bytes
+            while left:
+                chunk = raw.read(min(left, 1 << 20))
+                if not chunk:
+                    break
+                dst.writeframes(chunk)
+                left -= len(chunk)
+    finally:
+        _remove_quietly(raw_path)
+
+
+def _float_wav_to_pcm(source_path, out_path):
+    """A float WAV (which ClipEm's ffmpeg only partly reads) as 16-bit PCM,
+    or False if source_path isn't one."""
+    import wave
+
+    try:
+        data = clip_post.wav_at_volume(source_path, 1.0)
+    except (wave.Error, EOFError, OSError):
+        return False
+    with open(out_path, "wb") as f:
+        f.write(data)
+    return _is_integer_pcm_wav(out_path)
 
 
 def prepare_clip_sound(source_path, ffmpeg=None, run=None):
@@ -929,7 +975,7 @@ def prepare_clip_sound(source_path, ffmpeg=None, run=None):
     try:
         if _is_integer_pcm_wav(source_path):
             shutil.copyfile(source_path, temp)
-        else:
+        elif not _float_wav_to_pcm(source_path, temp):
             convert_to_wav(source_path, temp, ffmpeg=ffmpeg, run=run)
         return temp
     except BaseException:

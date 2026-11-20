@@ -1,3 +1,4 @@
+import array
 import json
 import os
 import shutil
@@ -192,12 +193,15 @@ def test_other_sound_files_are_converted_by_ffmpeg(sound_library):
 
     def run(cmd, **_kwargs):
         calls.append(cmd)
-        _pcm_wav(cmd[-1])
+        with open(cmd[-1], "wb") as f:  # raw PCM: 3 stereo frames and a stray byte
+            f.write(array.array("h", [1, -1, 2, -2, 3, -3]).tobytes() + b"x")
         return subprocess.CompletedProcess(cmd, 0, "", "")
 
     assert obs_config.add_clip_sound(str(mp3), ffmpeg="ffmpeg", run=run) == "horn"
     assert calls[0][calls[0].index("-i") + 1] == str(mp3)
-    assert calls[0][calls[0].index("-c:a") + 1] == "pcm_s16le"
+    assert calls[0][calls[0].index("-f") + 1] == "s16le"  # ClipEm's ffmpeg has no WAV muxer
+    rate, samples = _samples(obs_config.clip_sound_path("horn"))
+    assert (rate, samples) == (48000, [1, -1, 2, -2, 3, -3])
     assert os.listdir(sound_library / "clip-sounds") == ["horn.wav"]  # no temp file left behind
 
 
@@ -206,9 +210,10 @@ def test_a_sound_ffmpeg_cant_read_isnt_added(sound_library):
     bad.write_text("hello")
 
     def run(cmd, **_kwargs):
-        return subprocess.CompletedProcess(cmd, 1, "", "notes.txt: Invalid data found when processing input\n")
+        return subprocess.CompletedProcess(cmd, 1, "", "notes.txt: Invalid data found when processing input\n"
+                                                    "Error opening output files: Invalid argument\n")
 
-    with pytest.raises(ValueError, match="Invalid data"):
+    with pytest.raises(ValueError, match="Invalid data found"):  # the cause, not what failed after it
         obs_config.add_clip_sound(str(bad), ffmpeg="ffmpeg", run=run)
     assert os.listdir(sound_library / "clip-sounds") == []
 
@@ -318,6 +323,16 @@ def test_an_unreadable_trims_file_means_untrimmed(sound_library):
     assert obs_config.clip_sound_trim(name) == (0.0, None)
     (sound_library / "clip-sounds" / "trims.json").write_text('{"long": ["x", 1]}')
     assert obs_config.clip_sound_trim(name) == (0.0, None)
+
+
+def test_a_float_wav_is_converted_without_ffmpeg(sound_library, monkeypatch):
+    from conftest import float_wav_bytes
+
+    monkeypatch.setattr(obs_config, "_find_ffmpeg", lambda: None)
+    path = sound_library / "f64.wav"
+    path.write_bytes(float_wav_bytes(3, "d", 64, [0.5, -0.5]))  # ClipEm's ffmpeg can't decode 64-bit float
+    name = obs_config.add_clip_sound(str(path))
+    assert _samples(obs_config.clip_sound_path(name)) == (8000, [16383, -16383])
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
