@@ -1,5 +1,30 @@
 [
   {
+    "version": "1.5.2",
+    "date": "2026-11-20",
+    "sections": {
+      "New Features": [
+        "Clip sounds: add .mp3, .ogg, .flac, .m4a and more. Added sounds stay in the list (X removes one), can be trimmed with the new slider, and Stop ends a preview.",
+        "Rename a clip by typing in the editor's title. Its copies, exports and saved edit follow.",
+        "Copy puts a clip or export on the clipboard, ready to paste into Discord.",
+        "Drag a clip from the list into the Full Editor to add its picture and sound as new tracks.",
+        "Clip list: search by name or game, and a Status filter (Not Exported, Edited, Exported, Exported Video), with a status tag on each clip.",
+        "Clip list: Game filter has Not Detected, Show Exports hides exported videos, filters are remembered, the filter button hides them, and the list can be resized by dragging its edge."
+      ],
+      "Improvements": [
+        "A clip's size sits on its thumbnail beside its length.",
+        "Export As suggests the clip's name with its size (e.g. -1080p60).",
+        "The Full Editor imports .ts videos.",
+        "Float .wav clip sounds play at your volume on Windows, not full volume.",
+        "Uninstall also checks OBS's own recording paths before deleting anything."
+      ],
+      "Fixes": [
+        "A clip stays marked as exported after its export is deleted, and one reset to how it came isn't marked as edited.",
+        "Bug reports sent from an error popup include the error, and show on GitHub exactly as typed."
+      ]
+    }
+  },
+  {
     "version": "1.5.1",
     "date": "2026-11-15",
     "sections": {
