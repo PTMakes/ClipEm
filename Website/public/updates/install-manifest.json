@@ -1,5 +1,5 @@
 {
-  "version": "1.5.1",
+  "version": "1.5.2",
   "windows": {
     "obs": {
       "url": "https://github.com/obsproject/obs-studio/releases/download/32.2.2/OBS-Studio-32.2.2-Windows-x64.zip",
@@ -22,7 +22,7 @@
       "sha256": "71138adf1f4ca900cdb7d289c21b7494329f2332b6d85f0e1c42108c0384ed3e"
     },
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/ffmpeg-9.0.2-r6-windows-x86_64.zip",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/ffmpeg-9.0.2-r6-windows-x86_64.zip",
       "sha256": "a359c5c1c1513a4ddb83893601a58e8a523bdaa1da7c1ede8db390ede3a22658"
     },
     "editor_window": {
@@ -30,25 +30,25 @@
       "sha256": "41a1ffa0541cb0f2c9b9fe920dd2cef1793ad0ea2ada1a9582958880f4d1b23c"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/clipem-shared-1.5.1.zip",
-      "sha256": "e3a6d96f713d22f3767c4497f74d665b357db0d9a18346904796174b0404ae43"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/clipem-shared-1.5.2.zip",
+      "sha256": "7f97e7e59cc29211e69d6fbe197c6721543e039065b0d545c11cfe3aeb4c5aba"
     }
   },
   "linux": {
     "obs": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/linux-obs-install-32.2.2.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/linux-obs-install-32.2.2.tar.gz",
       "sha256": "59744e2685988032568185a73028b22e426c40fccb670f7c08119e5a5c868358"
     },
     "python": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/cpython-3.12.16+20261026-x86_64-unknown-linux-gnu-install_only-xft.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/cpython-3.12.16+20261026-x86_64-unknown-linux-gnu-install_only-xft.tar.gz",
       "sha256": "e7d25fc822d673599b9e3f5a0ccf16fc13ea022a83c2ea193c367ef598c7958d"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/clipem-shared-1.5.1.zip",
-      "sha256": "e3a6d96f713d22f3767c4497f74d665b357db0d9a18346904796174b0404ae43"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/clipem-shared-1.5.2.zip",
+      "sha256": "7f97e7e59cc29211e69d6fbe197c6721543e039065b0d545c11cfe3aeb4c5aba"
     },
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/ffmpeg-9.0.2-r6-linux-x86_64.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/ffmpeg-9.0.2-r6-linux-x86_64.tar.gz",
       "sha256": "d3f0be2921e361f0eb49d8c521c6dffbc7796a6a36162e0ee57727c7d70173e1"
     },
     "editor_window": {
@@ -74,27 +74,27 @@
       "sha256": "451363b59bb7d2c1c9e0c4baa99106004eaabe724aa21a0c6b4c87469293531a"
     },
     "shared": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/clipem-shared-1.5.1.zip",
-      "sha256": "e3a6d96f713d22f3767c4497f74d665b357db0d9a18346904796174b0404ae43"
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/clipem-shared-1.5.2.zip",
+      "sha256": "7f97e7e59cc29211e69d6fbe197c6721543e039065b0d545c11cfe3aeb4c5aba"
     }
   },
   "sources": {
     "ffmpeg": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/ffmpeg-9.0.2-r6-source.tar.gz",
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/ffmpeg-9.0.2-r6-source.tar.gz",
       "sha256": "bd3475f60375f3b72438a17509f68cb94caf829a74d3cdadd9a88181bf2a79f4"
     }
   },
-  "release_notes": "New Features\n- Missing-audio detection now watches desktop audio too: if OBS hears nothing while an app is playing sound, ClipEm reopens it and tells you if that doesn't help.\n- The audio peak guard now turns a volume it lowered back up. A volume you change by hand is left alone.\n- Full Clip Editor Filters - open the sidebar and filter down to any detected games, days, or clip types.\n- Error popups and clip editor errors have Copy and Send Bug Report buttons.\n\nImprovements\n- A silent mic is noticed after 1 minute instead of 2. ClipEm tries up to three fixes, including switching to your default device, then reminds you every 5 minutes until it's working, and tells you when it is.\n- A mic with a noise gate is no longer taken for missing when the room is just quiet.\n- The bundled Python on Windows goes back from 3.12.16 to 3.12.10, the last version signed by python.org, because 3.12.16 set off Windows security errors. Updating moves Windows installs back to it.\n\nFixes\n- Export for Discord works again on clips above 30 fps.\n- Clips saved while the tray was closed/restarting/not connected to OBS are now still named and get their copies, without app tracks.\n- A post-clip save that OBS never finishes is no longer mixed up with a later clip, and you're told it failed.\n- The clip sound now plays or stays quiet correctly when a post-clip save and another save happen close together.\n- Windows: a clip opened in the editor just after saving is still finished",
+  "release_notes": "New Features\n- Clip sounds: add .mp3, .ogg, .flac, .m4a and more. Added sounds stay in the list (X removes one), can be trimmed with the new slider, and Stop ends a preview.\n- Rename a clip by typing in the editor's title. Its copies, exports and saved edit follow.\n- Copy puts a clip or export on the clipboard, ready to paste into Discord.\n- Drag a clip from the list into the Full Editor to add its picture and sound as new tracks.\n- Clip list: search by name or game, and a Status filter (Not Exported, Edited, Exported, Exported Video), with a status tag on each clip.\n- Clip list: Game filter has Not Detected, Show Exports hides exported videos, filters are remembered, the filter button hides them, and the list can be resized by dragging its edge.\n\nImprovements\n- A clip's size sits on its thumbnail beside its length.\n- Export As suggests the clip's name with its size (e.g. -1080p60).\n- The Full Editor imports .ts videos.\n- Float .wav clip sounds play at your volume on Windows, not full volume.\n- Uninstall also checks OBS's own recording paths before deleting anything.\n\nFixes\n- A clip stays marked as exported after its export is deleted, and one reset to how it came isn't marked as edited.\n- Bug reports sent from an error popup include the error, and show on GitHub exactly as typed.",
   "offline": {
     "linux": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/clipem-linux-portable-1.5.1.zip",
-      "sha256": "d1ecf61c2a1f98259c682c5adbe34beeea1a130449b0dc77479182900344bce5",
-      "size": 179205247
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/clipem-linux-portable-1.5.2.zip",
+      "sha256": "655617646428644705025fb7a4cd5df8d958e97b01f3c0d6f403fef57150ac36",
+      "size": 179205455
     },
     "windows": {
-      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.1/clipem-windows-portable-1.5.1.zip",
-      "sha256": "2a8a2135b5d28fe613ad2285d0c3f7eacfa4ffc09b35817b808e7d13f7db6933",
-      "size": 232263819
+      "url": "https://github.com/PTMakes/ClipEm/releases/download/v1.5.2/clipem-windows-portable-1.5.2.zip",
+      "sha256": "2ce78b3524507fe6e25b60d27da44da358ebac7c4e94b9bcf00cb2286a88bf84",
+      "size": 232264027
     }
   }
 }
