@@ -162,3 +162,18 @@ def fake_obs_config(tmp_path, monkeypatch):
     monkeypatch.setattr(obs_config, "PENDING_OBS_SETTINGS_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setattr(obs_config.clipem_common, "RUN_CONFIG_PATH", str(tmp_path / "run_config.json"))
     return tmp_path
+
+
+def float_wav_bytes(tag, typecode, bits, samples, channels=1):
+    """A float WAV (tag 3, or 0xFFFE with a float SubFormat), which the
+    wave module can't write."""
+    import array
+    import struct
+
+    block = channels * bits // 8
+    fmt = struct.pack("<HHIIHH", tag, channels, 8000, 8000 * block, block, bits)
+    if tag == 0xFFFE:
+        fmt += struct.pack("<HHI", 22, bits, 0) + struct.pack("<H", 3) + bytes(14)
+    data = array.array(typecode, samples).tobytes()
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt)) + fmt + b"data" + struct.pack("<I", len(data)) + data
+    return b"RIFF" + struct.pack("<I", len(body)) + body

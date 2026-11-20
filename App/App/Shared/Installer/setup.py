@@ -1412,10 +1412,25 @@ def save_clip_sound_volume(volume):
 
 
 def replace_clip_sound_wav(source_path):
+    """Makes source_path (a .wav, or any sound ffmpeg reads - see
+    obs_config.add_clip_sound) the clip sound."""
     if not source_path or not os.path.exists(source_path):
         print(f"File not found: {source_path}", file=sys.stderr)
         return
-    obs_config.replace_clip_sound_wav(source_path)
+    try:
+        temp, length = obs_config.prepare_clip_sound(source_path)
+    except (OSError, ValueError) as exc:
+        print(exc, file=sys.stderr)
+        return
+    seconds = None
+    if length > obs_config.MIN_CLIP_SOUND_SECONDS:
+        raw = input(f"Play only the first how many seconds? [all {length:.1f}]: ").strip()
+        try:
+            seconds = min(length, max(obs_config.MIN_CLIP_SOUND_SECONDS, float(raw))) if raw else None
+        except ValueError:
+            print("Not a number - keeping all of it.", file=sys.stderr)
+    name = obs_config.save_prepared_clip_sound(source_path, temp, seconds)
+    obs_config.replace_clip_sound_wav(obs_config.clip_sound_path(name))
     print(f"Clip sound file replaced with: {source_path}")
 
 
@@ -1447,8 +1462,8 @@ def configure_clip_sound():
             print("Not a number - keeping the current volume.", file=sys.stderr)
         save_clip_sound_volume(volume)
 
-    if ask_yes_no("Replace the clip sound .wav file?", default=False):
-        path = input("Path to .wav file: ").strip()
+    if ask_yes_no("Replace the clip sound?", default=False):
+        path = input("Path to a sound file (.wav, .mp3, .ogg...): ").strip()
         if path:
             replace_clip_sound_wav(path)
 

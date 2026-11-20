@@ -11,10 +11,12 @@ const CENTRAL_SIZE = 46;
 const END_SIZE = 22;
 
 const INFO_NAME = "system-info.txt";
+// The error popup a report was sent from, when it was (bug_report.create_bug_report).
+const ERROR_NAME = "error.txt";
 // One folder deep: every file is a log, named after its file on disk.
 const LOG_NAME = /^(clipem-logs|obs-logs|obs-crashes)\/[^/\\]+$/;
-// system-info.txt, up to 1000 ClipEm logs, 10 OBS logs and 5 crash reports.
-const MAX_ENTRIES = 1016;
+// system-info.txt, error.txt, up to 1000 ClipEm logs, 10 OBS logs and 5 crash reports.
+const MAX_ENTRIES = 1017;
 // Sizes as declared - a lie here only fools this limit, not the CRC on opening.
 const MAX_UNPACKED_BYTES = 1024 * 1024 * 1024;
 
@@ -48,12 +50,15 @@ function checkZip(buffer) {
   let nextData = 0; // entries sit back to back, which also rules out overlapping ones
   let unpacked = 0;
   let hasInfo = false;
+  let hasError = false;
   for (let i = 0; i < count; i++) {
     if (zip.getUint32(at, true) !== CENTRAL_SIGNATURE) return false;
     const nameLength = zip.getUint16(at + 28, true);
     const name = names.decode(new Uint8Array(buffer, at + CENTRAL_SIZE, nameLength));
-    if (name === INFO_NAME) {
+    if (name === INFO_NAME && !hasInfo) {
       hasInfo = true;
+    } else if (name === ERROR_NAME && !hasError) {
+      hasError = true;
     } else if (!LOG_NAME.test(name) || name.endsWith("/..") || name.endsWith("/.")) {
       return false;
     }

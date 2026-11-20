@@ -35,6 +35,8 @@ __pycache__/
 /App/App/Windows/obs-plugins/
 /App/App/Linux/python/
 /App/App/Linux/obs-install/
+# Clip sounds added in Setup/Settings (obs_config.CLIP_SOUND_LIBRARY_DIR).
+/App/App/Shared/Scripts/clip-sounds/
 # The clip editor's window (Electron - Installer/editor_window.py), same deal.
 /App/App/Windows/editor-window/
 /App/App/Linux/editor-window/

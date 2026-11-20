@@ -830,17 +830,220 @@ def ensure_clip_sound_wav(scripts_dir=None):
 
 
 def active_clip_sound_name():
-    """The preset the clip sound is a copy of, or None (a custom sound)."""
+    """The preset or saved sound the clip sound is a copy of, or None (a
+    custom sound that isn't in the list)."""
     try:
         with open(CLIP_SOUND_WAV_PATH, "rb") as f:
             current = f.read()
-        for name in CLIP_SOUND_PRESETS:
-            with open(clip_sound_preset_path(name), "rb") as f:
+    except OSError:
+        return None
+    for name in clip_sound_names():
+        try:
+            with open(clip_sound_path(name), "rb") as f:
                 if f.read() == current:
                     return name
-    except OSError:
-        pass
+        except OSError:
+            pass
     return None
+
+
+# Sounds the user has added (Setup's and Settings' "Add sound..."), kept so
+# they stay in the sound list next to the presets until removed. Each is a
+# WAV the clip sound script can play and scale: integer PCM ones are copied
+# as they are, anything else is converted by ffmpeg. Preserved by updates
+# (updater.CLIPEM_SETTINGS_PATHS).
+CLIP_SOUND_LIBRARY_DIR = os.path.join(SHARED_DIR, "Scripts", "clip-sounds")
+# What the file picker offers - anything else ffmpeg reads works too.
+CLIP_SOUND_EXTENSIONS = (".wav", ".mp3", ".ogg", ".oga", ".opus", ".flac", ".m4a", ".aac", ".wma",
+                         ".aif", ".aiff", ".webm", ".mka", ".mp4")
+CLIP_SOUND_FILETYPES = [("Sound files", " ".join("*" + ext for ext in CLIP_SOUND_EXTENSIONS)), ("All files", "*")]
+
+
+def saved_clip_sounds():
+    """{name: path} of the sounds the user has added, by name."""
+    try:
+        files = os.listdir(CLIP_SOUND_LIBRARY_DIR)
+    except OSError:
+        return {}
+    names = sorted((f[:-4] for f in files if f.lower().endswith(".wav")), key=str.casefold)
+    return {name: os.path.join(CLIP_SOUND_LIBRARY_DIR, name + ".wav") for name in names}
+
+
+def clip_sound_names():
+    """The presets, then the saved sounds - what the sound list shows."""
+    return list(CLIP_SOUND_PRESETS) + list(saved_clip_sounds())
+
+
+def clip_sound_path(name):
+    """The WAV for a preset or saved sound's name."""
+    if name in CLIP_SOUND_PRESETS:
+        return clip_sound_preset_path(name)
+    return saved_clip_sounds()[name]
+
+
+def _is_integer_pcm_wav(path):
+    import wave
+
+    try:
+        with wave.open(path, "rb") as f:
+            return 1 <= f.getsampwidth() <= 4 and f.getnframes() > 0
+    except (wave.Error, EOFError, OSError):
+        return False
+
+
+def _find_ffmpeg():
+    import encoders
+
+    return encoders.bundled_ffmpeg(clipem_common.APP_DIR) or shutil.which("ffmpeg")
+
+
+def convert_to_wav(source_path, out_path, ffmpeg=None, run=None):
+    """Converts any sound ffmpeg reads (MP3, OGG, FLAC, float WAV...) to a
+    16-bit 48 kHz stereo WAV at out_path. Raises ValueError if it can't."""
+    import subprocess
+
+    run = run or subprocess.run
+    ffmpeg = ffmpeg or _find_ffmpeg()
+    name = os.path.basename(source_path)
+    if not ffmpeg:
+        raise ValueError(f"Converting {name} needs ffmpeg, which isn't installed - choose a .wav file instead.")
+    cmd = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y", "-i", source_path,
+           "-map", "0:a:0", "-vn", "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:a", "+bitexact",
+           "-ac", "2", "-ar", "48000", "-c:a", "pcm_s16le", "-f", "wav", out_path]
+    try:
+        result = run(cmd, capture_output=True, text=True, errors="replace", timeout=60,
+                     **({"creationflags": 0x08000000} if os.name == "nt" else {}))  # CREATE_NO_WINDOW
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"Couldn't convert {name}: {exc}") from exc
+    if result.returncode != 0 or not _is_integer_pcm_wav(out_path):
+        detail = (result.stderr or "").strip().splitlines()
+        raise ValueError(f"{name} isn't a sound file ffmpeg can read" + (f": {detail[-1]}" if detail else "."))
+
+
+def prepare_clip_sound(source_path, ffmpeg=None, run=None):
+    """(temp path, seconds): a copy of source_path as a WAV the clip sound
+    script can scale - integer PCM WAVs as they are, anything else converted
+    by ffmpeg - for save_prepared_clip_sound or discard_prepared_clip_sound.
+    Raises ValueError if the file can't be used."""
+    os.makedirs(CLIP_SOUND_LIBRARY_DIR, exist_ok=True)
+    temp = os.path.join(CLIP_SOUND_LIBRARY_DIR, f".adding-{secrets.token_hex(4)}.tmp")
+    try:
+        if _is_integer_pcm_wav(source_path):
+            shutil.copyfile(source_path, temp)
+        else:
+            convert_to_wav(source_path, temp, ffmpeg=ffmpeg, run=run)
+        return temp, wav_seconds(temp)
+    except BaseException:
+        discard_prepared_clip_sound(temp)
+        raise
+
+
+def wav_seconds(path):
+    import wave
+
+    with wave.open(path, "rb") as f:
+        return f.getnframes() / f.getframerate()
+
+
+# Long enough not to click where a sound is cut short, too short to hear.
+CLIP_SOUND_CUT_FADE_SECONDS = 0.01
+MIN_CLIP_SOUND_SECONDS = 0.1
+
+
+def trim_wav(source_path, out_path, seconds, fade_seconds=CLIP_SOUND_CUT_FADE_SECONDS):
+    """Writes the first `seconds` of an integer PCM WAV to out_path, fading
+    out over its last fade_seconds."""
+    import wave
+
+    with wave.open(source_path, "rb") as src:
+        params = src.getparams()
+        frames = src.readframes(params.nframes)
+    keep = max(1, min(params.nframes, round(seconds * params.framerate)))
+    width, channels = params.sampwidth, params.nchannels
+    block = width * channels
+    frames = bytearray(frames[:keep * block])
+    fade = min(keep, round(fade_seconds * params.framerate))
+    for j in range(fade):  # the last `fade` frames, down to silence
+        gain = (fade - 1 - j) / fade
+        start = (keep - fade + j) * block
+        for i in range(start, start + block, width):
+            raw = frames[i:i + width]
+            if width == 1:  # unsigned, centred on 128
+                frames[i] = 128 + int((raw[0] - 128) * gain)
+            else:
+                value = int(int.from_bytes(raw, "little", signed=True) * gain)
+                frames[i:i + width] = value.to_bytes(width, "little", signed=True)
+    with wave.open(out_path, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(bytes(frames))
+
+
+def save_prepared_clip_sound(source_path, temp, seconds=None):
+    """Adds a prepare_clip_sound copy to the sound list - its first
+    `seconds`, or all of it - named after source_path, and returns its name.
+    Adding the same sound again returns the existing entry."""
+    try:
+        if seconds is not None and seconds < wav_seconds(temp) - 0.001:
+            trimmed = temp + ".trim"
+            try:
+                trim_wav(temp, trimmed, max(MIN_CLIP_SOUND_SECONDS, seconds))
+                os.replace(trimmed, temp)
+            finally:
+                if os.path.exists(trimmed):
+                    os.remove(trimmed)
+        stem = os.path.splitext(os.path.basename(source_path))[0].strip() or "Sound"
+        stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", stem)[:60]
+        with open(temp, "rb") as f:
+            added = f.read()
+        saved = saved_clip_sounds()
+        taken = {n.casefold() for n in list(CLIP_SOUND_PRESETS) + list(saved)}
+        name, number = stem, 2
+        while name.casefold() in taken:
+            existing = saved.get(name)
+            if existing:
+                with open(existing, "rb") as f:
+                    if f.read() == added:
+                        return name
+            name, number = f"{stem} ({number})", number + 1
+        os.replace(temp, os.path.join(CLIP_SOUND_LIBRARY_DIR, name + ".wav"))
+        return name
+    finally:
+        discard_prepared_clip_sound(temp)
+
+
+def _preview_path(temp):
+    return temp + ".preview"
+
+
+def preview_prepared_clip_sound(temp, seconds, volume):
+    """Plays a prepare_clip_sound copy cut at `seconds`, as it would be saved."""
+    preview = _preview_path(temp)
+    trim_wav(temp, preview, max(MIN_CLIP_SOUND_SECONDS, seconds))
+    play_clip_sound(volume, preview)
+
+
+def discard_prepared_clip_sound(temp):
+    for path in (temp, _preview_path(temp)):
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def add_clip_sound(source_path, seconds=None, ffmpeg=None, run=None):
+    """Saves a sound file to the sound list - its first `seconds`, or all
+    of it - converting it to a WAV if it isn't one the clip sound script can
+    scale, and returns its name. Raises ValueError if it can't be used."""
+    temp, _length = prepare_clip_sound(source_path, ffmpeg=ffmpeg, run=run)
+    return save_prepared_clip_sound(source_path, temp, seconds)
+
+
+def remove_clip_sound(name):
+    """Takes a saved sound off the sound list. The clip sound itself is a
+    copy, so one in use keeps playing until another is chosen."""
+    path = saved_clip_sounds().get(name)
+    if path:
+        os.remove(path)
 
 
 def load_clip_sound():
@@ -877,55 +1080,10 @@ def replace_clip_sound_wav(source_path):
     shutil.copyfile(source_path, CLIP_SOUND_WAV_PATH)
 
 
-# Kept in step with the copy in Scripts/replay_buffer_save_sound.py, which
-# runs inside OBS and can't import this module.
-def wav_at_volume(path, volume):
-    """The WAV file at path, as bytes, with its samples scaled by volume
-    (0-1) - winsound has no volume control of its own. Integer PCM only;
-    raises wave.Error for anything else (e.g. float samples)."""
-    import array
-    import io
-    import wave
-
-    volume = max(0.0, min(1.0, volume))
-    with wave.open(path, "rb") as src:
-        params = src.getparams()
-        frames = src.readframes(params.nframes)
-    width = params.sampwidth
-    if width == 1:  # unsigned, centred on 128
-        frames = bytes(128 + int((b - 128) * volume) for b in frames)
-    elif width in (2, 4):
-        samples = array.array("h" if width == 2 else "i", frames)
-        frames = array.array(samples.typecode, (int(s * volume) for s in samples)).tobytes()
-    elif width == 3:
-        scaled = bytearray(len(frames))
-        for i in range(0, len(frames) - 2, 3):
-            sample = int.from_bytes(frames[i:i + 3], "little", signed=True)
-            scaled[i:i + 3] = int(sample * volume).to_bytes(3, "little", signed=True)
-        frames = bytes(scaled)
-    else:
-        raise wave.Error(f"unsupported sample width {width}")
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as dst:
-        dst.setparams(params)
-        dst.writeframes(frames)
-    return buf.getvalue()
-
-
-def play_wav_windows(path, volume):
-    """Plays path at volume without blocking. winsound can't play from
-    memory asynchronously, so the scaled copy plays on its own thread; a
-    WAV it can't scale plays as-is (at the system volume)."""
-    import threading
-    import wave
-    import winsound
-
-    try:
-        data = wav_at_volume(path, volume)
-    except (wave.Error, EOFError):
-        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
-        return
-    threading.Thread(target=winsound.PlaySound, args=(data, winsound.SND_MEMORY), daemon=True).start()
+# The Windows volume scaling lives in Scripts/clip_post.py, shared with the
+# clip sound script that plays it inside OBS.
+wav_at_volume = clip_post.wav_at_volume
+play_wav_windows = clip_post.play_wav_windows
 
 
 def play_clip_sound(volume, wav_path=None):

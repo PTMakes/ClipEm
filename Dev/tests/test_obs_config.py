@@ -2,6 +2,7 @@ import json
 
 import obs_config
 import pytest
+from conftest import float_wav_bytes
 
 
 def test_update_ini_section_updates_and_appends(tmp_path):
@@ -94,6 +95,19 @@ def test_wav_at_volume_scales_every_integer_pcm_width(tmp_path):
             assert f.readframes(3) == samples  # clamped to full volume
 
 
+@pytest.mark.parametrize("tag, typecode, bits", [(3, "f", 32), (3, "d", 64), (0xFFFE, "f", 32)])
+def test_wav_at_volume_scales_float_wavs_to_16_bit_pcm(tmp_path, tag, typecode, bits):
+    import array
+    import io
+    import wave
+
+    path = tmp_path / "float.wav"
+    path.write_bytes(float_wav_bytes(tag, typecode, bits, [-1.0, 0.0, 0.5, 2.0], channels=2))
+    with wave.open(io.BytesIO(obs_config.wav_at_volume(str(path), 0.5)), "rb") as f:
+        assert (f.getnchannels(), f.getsampwidth(), f.getframerate()) == (2, 2, 8000)
+        assert list(array.array("h", f.readframes(2))) == [-16383, 0, 8191, 32767]  # 2.0 clipped
+
+
 def test_wav_at_volume_rejects_what_it_cant_scale(tmp_path):
     import wave
 
@@ -103,6 +117,10 @@ def test_wav_at_volume_rejects_what_it_cant_scale(tmp_path):
     bad.write_bytes(b"RIFF")
     with pytest.raises((wave.Error, EOFError)):
         obs_config.wav_at_volume(str(bad), 0.5)
+    adpcm = tmp_path / "adpcm.wav"
+    adpcm.write_bytes(float_wav_bytes(2, "h", 16, [0, 0]))  # tag 2 is MS ADPCM
+    with pytest.raises(wave.Error):
+        obs_config.wav_at_volume(str(adpcm), 0.5)
 
 
 def _scene_with_reexport(tmp_path, monkeypatch, settings):

@@ -143,12 +143,13 @@ def test_local_http_relay_is_allowed():
     (413, b"{}", "too large"),
     (502, b'{"id": "20261017-abcd1234"}', "20261017-abcd1234"),
     (500, b"not json", "500"),
+    (502, b'["a proxy error page"]', "502"),  # JSON, but not an object
 ])
 def test_send_http_errors_are_readable(temp_zips, monkeypatch, code, body, message):
     def fake_urlopen(request, timeout):
         raise urllib.error.HTTPError(request.full_url, code, "error", {}, io.BytesIO(body))
 
-    monkeypatch.setattr(bug_report.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(bug_report._opener, "open", fake_urlopen)
 
     with pytest.raises(bug_report.BugReportError, match=message):
         bug_report.send_bug_report("broken")
@@ -159,10 +160,17 @@ def test_send_network_failure_is_readable(temp_zips, monkeypatch):
     def fake_urlopen(request, timeout):
         raise urllib.error.URLError("no route to host")
 
-    monkeypatch.setattr(bug_report.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(bug_report._opener, "open", fake_urlopen)
 
     with pytest.raises(bug_report.BugReportError, match="Couldn't reach"):
         bug_report.send_bug_report("broken")
+
+
+def test_send_refuses_a_redirect_down_to_plain_http():
+    handler = bug_report._CheckedRedirectHandler()
+    request = urllib.request.Request("https://bugs.clipem.app/report", data=b"x", method="POST")
+    with pytest.raises(bug_report.BugReportError, match="non-HTTPS"):
+        handler.redirect_request(request, None, 307, "moved", {}, "http://evil.example/report")
 
 
 def test_log_files_lists_every_log_by_group(install):

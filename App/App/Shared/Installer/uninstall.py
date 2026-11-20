@@ -86,10 +86,34 @@ def refusal(root_dir=ROOT_DIR, clip_folder=None):
         return f"{root_dir} is in a development checkout of ClipEm ({checkout}) - not uninstalling that."
     if not os.path.isdir(os.path.join(root_dir, "App")):
         return f"{root_dir} has no App folder - it doesn't look like a ClipEm install."
-    if clip_folder and _inside(clip_folder, os.path.join(root_dir, "App")):
-        return (f"Your clip folder ({clip_folder}) is inside ClipEm's App folder, which uninstalling deletes. "
-                "Move your clips elsewhere first (Settings > Basic Settings > Clip folder).")
+    for folder in [clip_folder, *output_folders(root_dir)]:
+        if folder and _inside(folder, os.path.join(root_dir, "App")):
+            return (f"Your clip folder ({folder}) is inside ClipEm's App folder, which uninstalling deletes. "
+                    "Move your clips elsewhere first (Settings > Basic Settings > Clip folder).")
     return None
+
+
+# Every OBS output path in the install's basic.ini: Setup points them all at
+# the clip folder, but OBS's own Settings can change one alone (Advanced
+# output mode's recording path, say) - and clips there would go with App/.
+OUTPUT_PATH_KEYS = ("FilePath", "RecFilePath", "FFFilePath")
+BASIC_INI_PARTS = ("App", "Shared", "OBS-Config", "basic", "profiles", "DefaultPTM", "basic.ini")
+
+
+def output_folders(root_dir=ROOT_DIR):
+    """The folders root_dir's OBS saves to, as basic.ini has them (Setup's
+    {{placeholders}} left out)."""
+    folders = []
+    try:
+        with open(os.path.join(root_dir, *BASIC_INI_PARTS), "r", encoding="utf-8-sig", errors="replace") as f:
+            for line in f:
+                key, sep, value = line.partition("=")
+                value = value.strip().replace("\\\\", "\\")
+                if sep and key.strip() in OUTPUT_PATH_KEYS and value and "{{" not in value:
+                    folders.append(value)
+    except OSError:
+        pass
+    return folders
 
 
 def windows_uninstaller(root_dir=ROOT_DIR):

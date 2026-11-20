@@ -2,7 +2,7 @@
 
 A Cloudflare Worker behind the tray's **Send Bug Report** button. It lets users file GitHub issues without a GitHub account:
 
-- The user's description, the ClipEm version and the platform go into a **public** issue on `PTMakes/ClipEm`, labelled `bug-report` and `from-app`.
+- The user's description, the ClipEm version and the platform go into a **public** issue on `PTMakes/ClipEm`, labelled `bug-report` and `from-app`. The description is plain text in a code block (`src/issue_text.js`), so a report can't mention anyone, link or cross-reference other issues (in any repo), or render Markdown or HTML.
 - The log zip (ClipEm/OBS logs and the install summary, with the websocket password removed) goes to the **private** R2 bucket `clipem-bug-reports` as `reports/<id>.zip`. The issue shows only the report ID.
 
 Each IP may send 2 reports a minute, each zip may be up to 20 MB, and descriptions up to 5000 characters. The relay takes 100 reports a UTC day from everyone together, counted from the bucket's `reports/<date>-` keys.

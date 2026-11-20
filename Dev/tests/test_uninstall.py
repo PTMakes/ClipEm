@@ -46,6 +46,39 @@ def test_what_stops_an_uninstall(tmp_path):
     assert "development checkout" in uninstall.refusal(str(root))
 
 
+def _basic_ini(root, text):
+    ini = root.joinpath(*uninstall.BASIC_INI_PARTS)
+    ini.parent.mkdir(parents=True, exist_ok=True)
+    ini.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("key", ["FilePath", "RecFilePath", "FFFilePath"])
+def test_any_obs_output_path_inside_app_stops_an_uninstall(tmp_path, key):
+    """OBS's own Settings can move one output path alone - Advanced output's
+    recording path, say - away from the clip folder Setup set."""
+    root = _install(tmp_path / "ClipEm")
+    inside = str(root / "App" / "Recordings")
+    _basic_ini(root, f"[Output]\nFilePath={root / 'Clips'}\n[AdvOut]\n{key}={inside}\n")
+    reason = uninstall.refusal(str(root), str(root / "Clips"))
+    assert reason and inside in reason
+
+
+def test_output_paths_read_from_basic_ini(tmp_path):
+    root = tmp_path / "ClipEm"
+    assert uninstall.output_folders(str(root)) == []  # no basic.ini yet
+    _basic_ini(root, "\ufeff[SimpleOutput]\nFilePath={{CLIPS_DIR}}\nRecFilePath=\n"
+                     "[AdvOut]\nRecFilePath=D:\\\\Clips\nFFFilePath = /home/me/Videos \nRecFormat2=mkv\n")
+    assert uninstall.output_folders(str(root)) == ["D:\\Clips", "/home/me/Videos"]
+
+
+def test_output_paths_in_a_badly_encoded_basic_ini_are_still_checked(tmp_path):
+    root = _install(tmp_path / "ClipEm")
+    ini = root.joinpath(*uninstall.BASIC_INI_PARTS)
+    ini.parent.mkdir(parents=True)
+    ini.write_bytes(b"[AdvOut]\nRecFilePath=" + str(root / "App" / "x").encode() + b"\nName=\xff\xfe\n")
+    assert "inside ClipEm's App folder" in uninstall.refusal(str(root))
+
+
 def test_clipems_files_go_and_the_clips_stay(tmp_path):
     root = _install(tmp_path / "ClipEm")
     (root / "notes.txt").write_text("mine")

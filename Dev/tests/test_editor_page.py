@@ -255,7 +255,7 @@ def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
                                "Replay-2026-10-25-22-00-00-Sober.mp4": "Edited Not Exported",
                                "Replay-2026-10-25-21-00-00-Deadlock.mp4": None}
     assert tools.js("[...$('filter-status').options].map((o) => o.text)") == [
-        "All", "Not Exported (2)", "Edited, Not Exported (1)", "Exported (2)"]
+        "All", "Not Exported (2)", "Edited Not Exported (1)", "Edited And Exported (1)", "Exported Video (1)"]
 
     def pick(value):
         tools.js(f"(() => {{ const c = $('filter-status'); c.value = {json.dumps(value)};"
@@ -266,8 +266,9 @@ def test_the_status_filter_search_and_marks(tmp_path, page, monkeypatch):
     pick("edited")
     assert tools.js(shown) == ["Replay-2026-10-25-22-00-00-Sober.mp4"]
     pick("exported")
-    assert tools.js(shown) == ["Replay-2026-10-25-23-00-00-Deadlock-discord.mp4",
-                               "Replay-2026-10-25-23-00-00-Deadlock.mp4"]
+    assert tools.js(shown) == ["Replay-2026-10-25-23-00-00-Deadlock.mp4"]
+    pick("video")
+    assert tools.js(shown) == ["Replay-2026-10-25-23-00-00-Deadlock-discord.mp4"]
     pick("todo")
     search = ("(() => { const box = $('filter-search'); box.value = %s;"
               " box.dispatchEvent(new Event('input')); })()")

@@ -376,6 +376,24 @@ def test_a_missing_sound_file_isnt_copied(monkeypatch, capsys):
     assert capsys.readouterr().err.count("File not found") == 2
 
 
+def test_the_command_line_asks_how_much_of_a_sound_to_keep(tmp_path, monkeypatch):
+    import array
+    import wave
+
+    import setup
+
+    monkeypatch.setattr(setup.obs_config, "CLIP_SOUND_LIBRARY_DIR", str(tmp_path / "clip-sounds"))
+    monkeypatch.setattr(setup.obs_config, "CLIP_SOUND_WAV_PATH", str(tmp_path / "replay_buffer_save_sound.wav"))
+    source = tmp_path / "horn.wav"
+    with wave.open(str(source), "wb") as f:
+        f.setnchannels(1), f.setsampwidth(2), f.setframerate(1000)
+        f.writeframes(array.array("h", [500] * 2000).tobytes())
+    monkeypatch.setattr("builtins.input", lambda _prompt: "0.5")
+    setup.replace_clip_sound_wav(str(source))
+    with wave.open(str(tmp_path / "replay_buffer_save_sound.wav"), "rb") as f:
+        assert f.getnframes() == 500
+
+
 def test_a_sound_that_wont_play_is_only_reported(monkeypatch, capsys):
     def fail(_volume, _wav):
         raise OSError("no audio device")

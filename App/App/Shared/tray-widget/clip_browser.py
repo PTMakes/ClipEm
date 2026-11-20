@@ -1228,12 +1228,23 @@ class Handler(BaseHTTPRequestHandler):
         values = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query).get(key)
         return values[0] if values else None
 
-    def _read_json(self):
-        length = int(self.headers.get("Content-Length") or 0)
+    def _content_length(self):
+        """The request's Content-Length, or 0 when it's missing, not a
+        number or negative - rfile.read(-1) would wait for the client to
+        hang up."""
         try:
-            return json.loads(self.rfile.read(min(length, 1024 * 1024)) or b"{}")
+            return max(0, int(self.headers.get("Content-Length") or 0))
+        except ValueError:
+            return 0
+
+    def _read_json(self):
+        """The JSON object posted, or {} for anything else - every route
+        reads its fields with .get()."""
+        try:
+            body = json.loads(self.rfile.read(min(self._content_length(), 1024 * 1024)) or b"{}")
         except ValueError:
             return {}
+        return body if isinstance(body, dict) else {}
 
     def _clip_and_source(self, folder, name):
         """(clip path, file to edit) - the "-tracks.mkv" copy when there is
@@ -1574,7 +1585,7 @@ class Handler(BaseHTTPRequestHandler):
         self._json(payload)
 
     def _import_asset(self):
-        length = int(self.headers.get("Content-Length") or 0)
+        length = self._content_length()
         try:
             asset = self.server.editor.import_asset(self.rfile, length, self._query("name"))
         except ValueError as exc:

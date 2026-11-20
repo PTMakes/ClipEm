@@ -362,7 +362,9 @@ const NO_GAME = "none:"; // the Game filter's "Not Detected" - no game name has 
 const filterControls = {
   game: $("filter-game"), date: $("filter-date"), status: $("filter-status"), exports: $("filter-exports"),
 };
-const STATUSES = [["todo", "Not Exported"], ["edited", "Edited, Not Exported"], ["exported", "Exported"]];
+// The same names as the list's status tags (updateItem).
+const STATUSES = [["todo", "Not Exported"], ["edited", "Edited Not Exported"], ["exported", "Edited And Exported"],
+  ["video", "Exported Video"]];
 // Remembered for next time: not the search or date (an hour or day that's
 // gone by would hide everything new).
 const SAVED_FILTERS = ["game", "status", "exports"];
@@ -384,16 +386,18 @@ function saveFilters() {
   } catch (err) { /* storage unavailable - just not remembered */ }
 }
 
-// "exported" for an export (the finished video) or a clip exported (even if
-// that export's since deleted), "edited" for a clip with a saved edit, else "todo".
+// "video" for an export (the finished video), "exported" for a clip exported
+// (even if that export's since deleted), "edited" for a clip with a saved
+// edit, else "todo".
 function clipStatus(clip) {
-  if (clip.exported_from || clip.exported != null) return "exported";
+  if (clip.exported_from) return "video";
+  if (clip.exported != null) return "exported";
   return clip.edited ? "edited" : "todo";
 }
 
 function inStatus(clip, value) {
   const status = clipStatus(clip);
-  return value === "todo" ? status !== "exported" : status === value;
+  return value === "todo" ? status === "todo" || status === "edited" : status === value;
 }
 
 function searchTerms() {

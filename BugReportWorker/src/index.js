@@ -3,6 +3,7 @@
 // only the description, version and platform go in the public issue, since
 // the logs hold usernames and folder paths.
 
+import { noReferences, plainText } from "./issue_text.js";
 import { isReportZip } from "./report_zip.js";
 
 const MAX_DESCRIPTION = 5000;
@@ -58,7 +59,8 @@ export default {
     }
 
     const day = reportDay();
-    const { truncated } = await env.REPORTS.list({ prefix: `reports/${day}-`, limit: MAX_REPORTS_PER_DAY });
+    // truncated: more than `limit` stored - so MAX_REPORTS_PER_DAY already are.
+  const { truncated } = await env.REPORTS.list({ prefix: `reports/${day}-`, limit: MAX_REPORTS_PER_DAY - 1 });
     if (truncated) {
       return json({ error: "Too many reports were sent today - try again tomorrow." }, 429);
     }
@@ -82,13 +84,9 @@ export default {
 
 async function createIssue(env, id, description, version, platform) {
   const firstLine = description.split("\n").find((line) => line.trim()) || "Bug report";
-  const title = `[App report] ${noMentions(truncate(firstLine.trim(), TITLE_LENGTH))}`;
-  const quoted = noMentions(description)
-    .split("\n")
-    .map((line) => `> ${line}`)
-    .join("\n");
+  const title = `[App report] ${noReferences(truncate(firstLine.trim(), TITLE_LENGTH))}`;
   const body = [
-    quoted,
+    plainText(description),
     "",
     `**ClipEm version:** ${version || "unknown"}`,
     `**Platform:** ${platform || "unknown"}`,
@@ -117,11 +115,6 @@ async function createIssue(env, id, description, version, platform) {
 // Version and platform are one-line labels: no newlines or Markdown.
 function shortField(value) {
   return truncate(String(value || "").replace(/[\r\n`*<>[\]]/g, " ").trim(), MAX_SHORT_FIELD);
-}
-
-// A zero-width space after "@" so a report can't ping anyone.
-function noMentions(text) {
-  return text.replace(/@/g, "@​");
 }
 
 function truncate(text, length) {

@@ -65,6 +65,7 @@ import popups  # noqa: E402
 import reinstall  # noqa: E402
 import release_notes  # noqa: E402
 import setup  # noqa: E402 - Setup's own load/save for the settings it shares with this dialog
+import sound_picker  # noqa: E402
 import ui_colors  # noqa: E402
 import uninstall  # noqa: E402
 from app_window import ICON_DIR, SETTINGS_ICON, style_app_window, use_windows_app_id  # noqa: E402
@@ -654,26 +655,34 @@ def open_dialog(start_tab=None, highlight=()):
     tk.Label(frame, text="Sound:").grid(row=next_row, column=0, sticky="w")
     sound_row = tk.Frame(frame)
     sound_row.grid(row=next_row, column=1, sticky="w", padx=(px(6), 0), pady=px(4))
-    chosen_sound = {"path": None}  # a new .wav, copied into place on Save
+    chosen_sound = {"path": None}  # a preset's or saved sound's .wav, copied into place on Save
     obs_config.ensure_clip_sound_wav()
     sound_name_var = tk.StringVar(value=obs_config.active_clip_sound_name() or "Custom sound")
-    sound_combo = ttk.Combobox(sound_row, textvariable=sound_name_var, state="readonly", width=16,
-                               values=list(obs_config.CLIP_SOUND_PRESETS))
+    sound_combo = ttk.Combobox(sound_row, textvariable=sound_name_var, state="readonly", width=16)
     sound_combo.pack(side="left")
 
     def on_pick_preset(_event=None):
-        chosen_sound["path"] = obs_config.clip_sound_preset_path(sound_name_var.get())
+        chosen_sound["path"] = obs_config.clip_sound_path(sound_name_var.get())
 
     sound_combo.bind("<<ComboboxSelected>>", on_pick_preset)
 
+    def on_sound_removed(name):
+        if sound_name_var.get() == name:  # its file is gone - back to the sound in use
+            chosen_sound["path"] = None
+            sound_name_var.set(obs_config.active_clip_sound_name() or "Custom sound")
+
+    sound_dropdown = sound_picker.SoundDropdown(sound_combo, on_sound_removed, px=px)
+
     def on_choose_sound():
         path = file_dialogs.askopenfilename(
-            parent=root, title="Choose the clip sound", filetypes=[("WAV files", "*.wav"), ("All files", "*")],
+            parent=root, title="Add a clip sound", filetypes=obs_config.CLIP_SOUND_FILETYPES,
         )
-        if path:
-            chosen_sound["path"] = path
-            name = os.path.basename(path)
-            sound_name_var.set(name if len(name) <= 16 else name[:15] + "\u2026")
+        name = path and sound_picker.add_sound_file(root, path, lambda: sound_volume_var.get() / 100)
+        if not name:
+            return
+        sound_dropdown.refresh()
+        sound_name_var.set(name)
+        chosen_sound["path"] = obs_config.clip_sound_path(name)
 
     def on_play_sound():
         try:
@@ -681,7 +690,7 @@ def open_dialog(start_tab=None, highlight=()):
         except Exception as exc:
             popups.showerror("Clip Sound", f"Couldn't play the sound: {exc}", parent=root)
 
-    choose_button = tk.Button(sound_row, text="Choose...", command=on_choose_sound)
+    choose_button = tk.Button(sound_row, text="Add sound...", command=on_choose_sound)
     choose_button.pack(side="left", padx=(px(4), 0))
     play_button = tk.Button(sound_row, text="Play", command=on_play_sound)
     play_button.pack(side="left", padx=(px(4), 0))

@@ -229,13 +229,23 @@ def _multipart(fields, file_field, file_name, file_data):
     return b"".join(parts), f"multipart/form-data; boundary={boundary}"
 
 
+class _CheckedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # A redirect is held to _check_url too - never down to plain http.
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        _check_url(newurl)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+_opener = urllib.request.build_opener(_CheckedRedirectHandler)
+
+
 def _post(url, body, content_type):
     # Some CDNs answer urllib's default User-Agent with 403, as updater.py notes.
     request = urllib.request.Request(
         _check_url(url), data=body, method="POST",
         headers={"User-Agent": "ClipEm", "Content-Type": content_type},
     )
-    with urllib.request.urlopen(request, timeout=SEND_TIMEOUT_SECONDS) as res:
+    with _opener.open(request, timeout=SEND_TIMEOUT_SECONDS) as res:
         return json.loads(res.read(64 * 1024))
 
 
@@ -243,6 +253,8 @@ def _http_error_message(exc):
     try:
         detail = json.loads(exc.read(64 * 1024))
     except Exception:
+        detail = {}
+    if not isinstance(detail, dict):  # a proxy's error page, say
         detail = {}
     if exc.code == 429:
         return detail.get("error") or "Too many reports were sent from this network recently - try again in a minute."

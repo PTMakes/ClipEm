@@ -36,6 +36,19 @@ test("a report of just the install summary passes", () => {
   assert.equal(isReportZip(pythonZip(REPORT.slice(0, 1))), true);
 });
 
+test("a report sent from an error popup (with error.txt) passes", () => {
+  assert.equal(isReportZip(pythonZip([REPORT[0], ["error.txt", "OBS crashed\n"], ...REPORT.slice(1)])), true);
+});
+
+test("a second error.txt or system-info.txt is refused", () => {
+  assert.equal(isReportZip(pythonZip([...REPORT, ["error.txt", "a"], ["error.txt", "b"]])), false);
+  assert.equal(isReportZip(pythonZip([...REPORT, ["system-info.txt", "again"]])), false);
+});
+
+test("error.txt alone, without the install summary, is refused", () => {
+  assert.equal(isReportZip(pythonZip([["error.txt", "x"]])), false);
+});
+
 test("a non-ASCII log name passes", () => {
   assert.equal(isReportZip(pythonZip([...REPORT, ["obs-logs/journée.txt", "x"]])), true);
 });

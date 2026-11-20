@@ -25,6 +25,7 @@ import key_picker
 import naming_form
 import obs_config
 import popups
+import sound_picker
 import updater
 from app_window import style_app_window, use_windows_app_id
 from mic_filter_gui import MicFilterWizard
@@ -1415,11 +1416,11 @@ class Wizard(tk.Tk):
         )
         self.sound_file_label = ttk.Combobox(
             file_row, textvariable=self.sound_name_var, state="readonly", width=24,
-            values=list(obs_config.CLIP_SOUND_PRESETS),
         )
+        self.sound_dropdown = sound_picker.SoundDropdown(self.sound_file_label, self._sound_removed, px=self.px)
         self.sound_file_label.bind("<<ComboboxSelected>>", self._pick_sound_preset)
         self.sound_file_label.pack(side="left")
-        replace_btn = ttk.Button(file_row, text="Replace .wav...", command=self._browse_sound_file)
+        replace_btn = ttk.Button(file_row, text="Add sound...", command=self._browse_sound_file)
         replace_btn.pack(side="left", padx=(self.px(PAD // 2), 0))
 
         def set_sound_section_state(enabled):
@@ -1455,17 +1456,25 @@ class Wizard(tk.Tk):
             popups.showerror("Setup", f"Could not play the clip sound:\n{exc}")
 
     def _pick_sound_preset(self, _event=None):
-        self.sound_file_var.set(obs_config.clip_sound_preset_path(self.sound_name_var.get()))
+        self.sound_file_var.set(obs_config.clip_sound_path(self.sound_name_var.get()))
+
+    def _sound_removed(self, name):
+        if self.sound_name_var.get() == name:  # its file is gone - back to the sound in use
+            self.sound_file_var.set("")
+            self.sound_name_var.set(obs_config.active_clip_sound_name() or "Custom sound")
 
     def _browse_sound_file(self):
         chosen = file_dialogs.askopenfilename(
             parent=self,
-            title="Select a replacement .wav file for the clip sound",
-            filetypes=[("WAV files", "*.wav")],
+            title="Add a clip sound",
+            filetypes=obs_config.CLIP_SOUND_FILETYPES,
         )
-        if chosen:
-            self.sound_file_var.set(chosen)
-            self.sound_name_var.set(os.path.basename(chosen))
+        name = chosen and sound_picker.add_sound_file(self, chosen, self.sound_volume_var.get)
+        if not name:
+            return
+        self.sound_dropdown.refresh()
+        self.sound_name_var.set(name)
+        self.sound_file_var.set(obs_config.clip_sound_path(name))
 
     def _apply_sound(self):
         try:

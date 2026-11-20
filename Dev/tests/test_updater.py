@@ -505,6 +505,17 @@ def test_carrying_over_skips_what_the_update_doesnt_have(tmp_path):
     assert not os.path.exists(os.path.join(staged, "run_config.json"))  # top-level: never swapped anyway
 
 
+def test_carrying_over_keeps_a_preserved_folder_whole(tmp_path):
+    live, staged = str(tmp_path / "live"), str(tmp_path / "staged")
+    _tree(live, {"Scripts/clip-sounds/ding.wav": "mine", "Scripts/clip-sounds/horn.wav": "also mine"})
+    _tree(staged, {"Scripts/new.py": "new", "Scripts/clip-sounds/shipped.wav": "shipped"})
+    updater.carry_over_preserved(live, staged)  # "Scripts/clip-sounds" is in the defaults
+    assert _read(staged, "Scripts/clip-sounds/ding.wav") == "mine"
+    assert _read(staged, "Scripts/clip-sounds/horn.wav") == "also mine"
+    assert not os.path.exists(os.path.join(staged, "Scripts", "clip-sounds", "shipped.wav"))
+    assert _read(staged, "Scripts/new.py") == "new"
+
+
 def test_carrying_over_defaults_to_every_preserved_path(tmp_path):
     live, staged = str(tmp_path / "live"), str(tmp_path / "staged")
     _tree(live, {"tray-widget/.settings.lock": "9"})

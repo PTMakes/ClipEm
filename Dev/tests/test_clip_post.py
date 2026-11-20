@@ -380,11 +380,6 @@ def test_32_bit_wavs_are_scaled_to_16(tmp_path):
     assert left == [1, -2]
 
 
-def test_24_bit_wavs_are_refused(tmp_path):
-    with pytest.raises(wave.Error, match="unsupported sample width 3"):
-        clip_post.read_wav(_wav(tmp_path / "24.wav", bytes(6), channels=1, width=3))
-
-
 def test_other_rates_are_resampled(tmp_path):
     frames = array.array("h", [0, 1000, 2000, 3000]).tobytes()
     left, right = clip_post.read_wav(_wav(tmp_path / "r.wav", frames, channels=1, rate=RATE // 2))
@@ -521,6 +516,29 @@ def _cancels(tmp_path, run, tracks=(0, 2)):
     _write_wav(wav, sound)
     logs = []
     return clip_post.cancels_for("ffmpeg", "c.mkv", list(tracks), str(wav), 1.0, str(tmp_path), logs.append, run=run), logs
+
+
+def test_a_float_clip_sound_is_read_like_a_16_bit_one(tmp_path):
+    from conftest import float_wav_bytes
+
+    floats, ints = tmp_path / "f.wav", tmp_path / "i.wav"
+    floats.write_bytes(float_wav_bytes(3, "f", 32, [0.5, -0.25, 0.0, 1.0], channels=2))
+    with wave.open(str(ints), "wb") as f:
+        f.setnchannels(2), f.setsampwidth(2), f.setframerate(8000)
+        f.writeframes(array.array("h", [16384, -8192, 0, 32767]).tobytes())
+    left, right = clip_post.read_wav(str(floats))
+    expected_left, expected_right = clip_post.read_wav(str(ints))
+    assert [round(s) for s in left] == [round(s) for s in expected_left]
+    assert max(abs(a - b) for a, b in zip(right, expected_right, strict=True)) <= 1
+
+
+def test_a_24_bit_clip_sound_is_read(tmp_path):
+    path = tmp_path / "s24.wav"
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1), f.setsampwidth(3), f.setframerate(RATE)
+        f.writeframes(b"".join(v.to_bytes(3, "little", signed=True) for v in (256 * 1000, -256 * 2000)))
+    left, right = clip_post.read_wav(str(path))
+    assert list(left) == list(right) == [1000, -2000]
 
 
 def test_a_clip_sound_that_cant_be_read_is_left_in(tmp_path):

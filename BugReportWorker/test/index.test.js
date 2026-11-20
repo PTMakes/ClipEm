@@ -73,6 +73,15 @@ test("logs that aren't a report zip go nowhere", async () => {
   assert.equal(issues.length, 0);
 });
 
+test("the daily cap allows exactly 100 reports a day", async () => {
+  assert.equal((await worker.fetch(report(), fakeEnv({ alreadyToday: 99 }))).status, 200);
+  issues.length = 0;
+  const env = fakeEnv({ alreadyToday: 100 });
+  assert.equal((await worker.fetch(report(), env)).status, 429);
+  assert.equal(env.stored.length, 0);
+  assert.equal(issues.length, 0);
+});
+
 test("the daily cap stops reports from everyone", async () => {
   const env = fakeEnv({ alreadyToday: 101 });
   const res = await worker.fetch(report(), env);
@@ -167,7 +176,7 @@ test("the logs stay private: only the description, version and platform are publ
   assert.deepEqual(stored[0].options.customMetadata, { version: "1.4.8", platform: "Linux" });
   const [{ title, body, labels }] = issues;
   assert.equal(title, "[App report] It crashed");
-  assert.match(body, /^> It crashed\n/);
+  assert.match(body, /^```text\nIt crashed\n```\n/);
   assert.match(body, /\*\*ClipEm version:\*\* 1\.4\.8/);
   assert.match(body, /\*\*Platform:\*\* Linux/);
   assert.ok(body.includes(`private report \`${id}\``));
@@ -175,11 +184,21 @@ test("the logs stay private: only the description, version and platform are publ
   assert.deepEqual(labels, ["bug-report", "from-app"]);
 });
 
-test("a report can't ping anyone", async () => {
-  await worker.fetch(reportWith({ description: "cc @someone\nand @other" }), fakeEnv());
+test("a report can't ping anyone or reference other issues", async () => {
+  const description = "cc @someone #12 GH-3 other/repo#4\nsee https://github.com/other/repo/issues/5";
+  await worker.fetch(reportWith({ description }), fakeEnv());
   const [{ title, body }] = issues;
-  assert.ok(!/@[a-z]/.test(title) && !/@[a-z]/.test(body));
-  assert.ok(title.includes("@​someone"));
+  assert.equal(title, "[App report] cc @\u200bsomeone #\u200b12 GH\u200b-3 other/repo#\u200b4");
+  // Literal text in a code block, where GitHub links nothing.
+  assert.ok(body.startsWith(`\`\`\`text\n${description}\n\`\`\`\n`));
+});
+
+test("a description can't break out of its code block", async () => {
+  const description = "```\n# Heading\n````\n<img src=x>";
+  await worker.fetch(reportWith({ description }), fakeEnv());
+  const [{ body }] = issues;
+  assert.ok(body.startsWith(`\`\`\`\`\`text\n${description}\n\`\`\`\`\`\n`));
+  assert.ok(body.includes("**ClipEm version:**")); // the fields after it are still Markdown
 });
 
 test("version and platform can't add Markdown or lines to the issue", async () => {
@@ -202,7 +221,7 @@ test("long fields are cut, and the title comes from the first line with words", 
   await worker.fetch(reportWith({ description: `\n  \n${"y".repeat(100)}\nsecond line`, version: "1".repeat(200) }), env);
   const [{ title, body }] = issues;
   assert.equal(title, `[App report] ${"y".repeat(79)}…`);
-  assert.ok(body.includes("> second line"));
+  assert.ok(body.includes("\nsecond line\n"));
   assert.equal(stored[0].customMetadata.version.length, 100);
 });
 

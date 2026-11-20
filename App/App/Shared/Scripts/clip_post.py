@@ -24,9 +24,11 @@ is mixed in. What the mic hears from the speakers stays.
 
 import array
 import datetime
+import io
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -235,19 +237,116 @@ def track_pcm_command(ffmpeg, src, index):
 # Taking the clip sound back out
 # ---------------------------------------------------------------------------
 
-def read_wav(path):
-    """The .wav as (left, right) lists of samples at RATE, full scale 32768."""
-    with wave.open(path, "rb") as src:
-        channels, width, rate = src.getnchannels(), src.getsampwidth(), src.getframerate()
-        frames = src.readframes(src.getnframes())
-    if width == 2:
-        samples = array.array("h", frames)
-    elif width == 4:
-        samples = [s / 65536 for s in array.array("i", frames)]
-    elif width == 1:
-        samples = [(b - 128) * 256 for b in frames]
+def read_float_wav(path):
+    """(channels, framerate, samples) of a 32- or 64-bit float WAV, which
+    the wave module can't read; samples is an array of floats, nominally
+    -1 to 1. Raises wave.Error for anything else."""
+    with open(path, "rb") as f:
+        data = f.read()
+    if data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        raise wave.Error("not a WAV file")
+    fmt = frames = None
+    pos = 12
+    while pos + 8 <= len(data):
+        chunk_id, size = data[pos:pos + 4], struct.unpack_from("<I", data, pos + 4)[0]
+        body = data[pos + 8:pos + 8 + size]
+        if chunk_id == b"fmt ":
+            fmt = body
+        elif chunk_id == b"data":
+            frames = body
+        pos += 8 + size + (size & 1)
+    if fmt is None or len(fmt) < 16 or frames is None:
+        raise wave.Error("no fmt or data chunk")
+    tag, channels, framerate, _, _, bits = struct.unpack_from("<HHIIHH", fmt)
+    if tag == 0xFFFE and len(fmt) >= 26:  # WAVE_FORMAT_EXTENSIBLE: the tag opens SubFormat
+        tag = struct.unpack_from("<H", fmt, 24)[0]
+    if tag != 3 or bits not in (32, 64) or not channels:
+        raise wave.Error(f"unsupported WAV format {tag} ({bits}-bit)")
+    samples = array.array("f" if bits == 32 else "d")
+    samples.frombytes(frames[:len(frames) - len(frames) % samples.itemsize])
+    return channels, framerate, samples
+
+
+def wav_at_volume(path, volume):
+    """The WAV file at path, as bytes, with its samples scaled by volume
+    (0-1) - winsound has no volume control of its own. Integer PCM keeps
+    its format; float comes back as 16-bit PCM (the wave module only writes
+    PCM). Raises wave.Error for anything else (e.g. ADPCM)."""
+    volume = max(0.0, min(1.0, volume))
+    try:
+        with wave.open(path, "rb") as src:
+            params = src.getparams()
+            frames = src.readframes(params.nframes)
+    except wave.Error:
+        channels, framerate, samples = read_float_wav(path)
+        pcm = array.array("h", (int(max(-1.0, min(1.0, s * volume)) * 32767) for s in samples))
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as dst:
+            dst.setnchannels(channels)
+            dst.setsampwidth(2)
+            dst.setframerate(framerate)
+            dst.writeframes(pcm.tobytes())
+        return buf.getvalue()
+    width = params.sampwidth
+    if width == 1:  # unsigned, centred on 128
+        frames = bytes(128 + int((b - 128) * volume) for b in frames)
+    elif width in (2, 4):
+        samples = array.array("h" if width == 2 else "i", frames)
+        frames = array.array(samples.typecode, (int(s * volume) for s in samples)).tobytes()
+    elif width == 3:
+        scaled = bytearray(len(frames))
+        for i in range(0, len(frames) - 2, 3):
+            sample = int.from_bytes(frames[i:i + 3], "little", signed=True)
+            scaled[i:i + 3] = int(sample * volume).to_bytes(3, "little", signed=True)
+        frames = bytes(scaled)
     else:
         raise wave.Error(f"unsupported sample width {width}")
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as dst:
+        dst.setparams(params)
+        dst.writeframes(frames)
+    return buf.getvalue()
+
+
+def play_wav_windows(path, volume, log=None):
+    """Plays path at volume without blocking. winsound can't play from
+    memory asynchronously, so the scaled copy plays on its own thread; a
+    WAV it can't scale plays as-is (at the system volume), and log is told."""
+    import threading
+    import winsound
+
+    try:
+        data = wav_at_volume(path, volume)
+    except (wave.Error, EOFError) as exc:
+        if log:
+            log(f"can't set the volume of {path} ({exc}) - playing it at full volume")
+        winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+        return
+    threading.Thread(target=winsound.PlaySound, args=(data, winsound.SND_MEMORY), daemon=True).start()
+
+
+def read_wav(path):
+    """The .wav as (left, right) lists of samples at RATE, full scale 32768.
+    Integer PCM or float; raises wave.Error for anything else."""
+    try:
+        with wave.open(path, "rb") as src:
+            channels, width, rate = src.getnchannels(), src.getsampwidth(), src.getframerate()
+            frames = src.readframes(src.getnframes())
+    except wave.Error:
+        channels, rate, floats = read_float_wav(path)
+        samples = [s * 32768 for s in floats]
+    else:
+        if width == 2:
+            samples = array.array("h", frames)
+        elif width == 4:
+            samples = [s / 65536 for s in array.array("i", frames)]
+        elif width == 3:
+            samples = [int.from_bytes(frames[i:i + 3], "little", signed=True) / 256
+                       for i in range(0, len(frames) - 2, 3)]
+        elif width == 1:
+            samples = [(b - 128) * 256 for b in frames]
+        else:
+            raise wave.Error(f"unsupported sample width {width}")
     left = list(samples[0::channels])
     right = list(samples[1::channels]) if channels > 1 else left
     if rate != RATE:

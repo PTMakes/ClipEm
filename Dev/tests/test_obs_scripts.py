@@ -372,16 +372,14 @@ def test_post_clip_gives_up_if_the_buffer_stops_during_the_wait(tmp_path, monkey
     assert any("stopped before" in line for line in fake.logs)
 
 
-def test_clip_sound_volume_scaling_matches_obs_config(tmp_path, monkeypatch):
-    """replay_buffer_save_sound.py can't import obs_config inside OBS, so it
-    carries its own copy of the Windows volume scaling."""
-    import inspect
-
+def test_clip_sound_volume_scaling_is_shared_with_obs_config():
+    """Settings' Play button and the script inside OBS scale the volume with
+    the same code, in Scripts/clip_post.py."""
+    import clip_post
     import obs_config
 
-    script = _load_script(os.path.join(SCRIPTS_DIR, "replay_buffer_save_sound.py"), FakeObspython(tmp_path), monkeypatch)
-    for name in ("wav_at_volume", "play_wav_windows"):
-        assert inspect.getsource(getattr(script, name)) == inspect.getsource(getattr(obs_config, name))
+    assert obs_config.wav_at_volume is clip_post.wav_at_volume
+    assert obs_config.play_wav_windows is clip_post.play_wav_windows
 
 
 def test_a_second_press_saves_straight_away(tmp_path, monkeypatch):

@@ -100,6 +100,8 @@ CLIPEM_SETTINGS_PATHS = {
     # (it isn't shipped - a missing one becomes the default preset, see
     # obs_config.ensure_clip_sound_wav).
     "Scripts/replay_buffer_save_sound.wav",
+    # The sounds added to the clip sound list (obs_config.CLIP_SOUND_LIBRARY_DIR).
+    "Scripts/clip-sounds",
 }
 ALWAYS_PRESERVED_PATHS = {
     # Single-instance locks of the (possibly still running) tray widget and
@@ -435,18 +437,25 @@ def _read_package_version(extracted_shared):
 
 def carry_over_preserved(live_dir, staged_dir, preserved=None):
     """Copies each nested `preserved` (default PRESERVED_RELATIVE_PATHS) file
-    that exists in the live install into the staged tree (over any shipped
-    copy), so swapping in the staged folder keeps it."""
+    or folder that exists in the live install into the staged tree (over any
+    shipped copy), so swapping in the staged folder keeps it."""
     for rel_path in sorted(PRESERVED_RELATIVE_PATHS if preserved is None else preserved):
         if "/" not in rel_path:
             continue
         src = os.path.join(live_dir, *rel_path.split("/"))
-        if not os.path.isfile(src):
+        if not (os.path.isfile(src) or os.path.isdir(src)) or os.path.islink(src):
             continue
         dest = os.path.join(staged_dir, *rel_path.split("/"))
         if not os.path.isdir(os.path.dirname(dest)):
             continue  # that folder isn't part of this update - nothing to carry over into
-        shutil.copy2(src, dest)
+        if os.path.isdir(src):
+            if os.path.isdir(dest) and not os.path.islink(dest):
+                shutil.rmtree(dest)  # the live folder wins whole, not merged with a shipped one
+            elif os.path.lexists(dest):
+                os.remove(dest)
+            shutil.copytree(src, dest, symlinks=True)
+        else:
+            shutil.copy2(src, dest)
 
 
 def swap_in(staged_dir, dest_dir, backup_dir, preserved=None, reset=()):

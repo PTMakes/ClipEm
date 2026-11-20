@@ -1,8 +1,11 @@
 import json
 import os
+import shutil
+import subprocess
 
 import obs_config
 import obs_process
+import pytest
 
 
 def test_clip_hotkey_round_trip(fake_obs_config):
@@ -139,6 +142,131 @@ def test_replacing_the_clip_sound_only_accepts_wav(tmp_path, monkeypatch):
     wav.write_bytes(b"RIFF\x24\x00\x00\x00WAVEfmt ")
     obs_config.replace_clip_sound_wav(str(wav))
     assert target.read_bytes() == wav.read_bytes()
+
+
+@pytest.fixture
+def sound_library(tmp_path, monkeypatch):
+    for name, filename in obs_config.CLIP_SOUND_PRESETS.items():
+        (tmp_path / filename).write_bytes(b"RIFF0000WAVE" + name.encode())
+    monkeypatch.setattr(obs_config, "CLIP_SOUND_WAV_PATH", str(tmp_path / "replay_buffer_save_sound.wav"))
+    monkeypatch.setattr(obs_config, "CLIP_SOUND_LIBRARY_DIR", str(tmp_path / "clip-sounds"))
+    return tmp_path
+
+
+def _pcm_wav(path, value=1000):
+    import array
+    import wave
+
+    with wave.open(str(path), "wb") as f:
+        f.setnchannels(1), f.setsampwidth(2), f.setframerate(48000)
+        f.writeframes(array.array("h", [value] * 10).tobytes())
+    return path
+
+
+def test_added_clip_sounds_are_listed_after_the_presets(sound_library):
+    ding = _pcm_wav(sound_library / "ding.wav")
+    assert obs_config.add_clip_sound(str(ding)) == "ding"
+    assert obs_config.add_clip_sound(str(ding)) == "ding"  # the same sound again isn't a second entry
+    (sound_library / "x").mkdir()
+    other = _pcm_wav(sound_library / "x" / "ding.wav", 5)  # same name, different sound
+    assert obs_config.add_clip_sound(str(other)) == "ding (2)"
+    scissors = _pcm_wav(sound_library / "Scissors.wav", 7)
+    assert obs_config.add_clip_sound(str(scissors)) == "Scissors (2)"  # never shadows a preset
+    assert obs_config.clip_sound_names() == ["Scissors", "Flash", "ding", "ding (2)", "Scissors (2)"]
+    assert (sound_library / "clip-sounds" / "ding.wav").read_bytes() == ding.read_bytes()  # PCM is copied as-is
+
+    obs_config.replace_clip_sound_wav(obs_config.clip_sound_path("ding (2)"))
+    assert obs_config.active_clip_sound_name() == "ding (2)"
+    obs_config.remove_clip_sound("ding (2)")
+    assert obs_config.clip_sound_names() == ["Scissors", "Flash", "ding", "Scissors (2)"]
+    assert obs_config.active_clip_sound_name() is None  # still playing its copy, just not listed
+    obs_config.remove_clip_sound("Flash")  # presets can't be removed
+    assert "Flash" in obs_config.clip_sound_names()
+
+
+def test_other_sound_files_are_converted_by_ffmpeg(sound_library):
+    mp3 = sound_library / "horn.mp3"
+    mp3.write_bytes(b"ID3\x03\x00\x00\x00")
+    calls = []
+
+    def run(cmd, **_kwargs):
+        calls.append(cmd)
+        _pcm_wav(cmd[-1])
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    assert obs_config.add_clip_sound(str(mp3), ffmpeg="ffmpeg", run=run) == "horn"
+    assert calls[0][calls[0].index("-i") + 1] == str(mp3)
+    assert calls[0][calls[0].index("-c:a") + 1] == "pcm_s16le"
+    assert os.listdir(sound_library / "clip-sounds") == ["horn.wav"]  # no temp file left behind
+
+
+def test_a_sound_ffmpeg_cant_read_isnt_added(sound_library):
+    bad = sound_library / "notes.txt"
+    bad.write_text("hello")
+
+    def run(cmd, **_kwargs):
+        return subprocess.CompletedProcess(cmd, 1, "", "notes.txt: Invalid data found when processing input\n")
+
+    with pytest.raises(ValueError, match="Invalid data"):
+        obs_config.add_clip_sound(str(bad), ffmpeg="ffmpeg", run=run)
+    assert os.listdir(sound_library / "clip-sounds") == []
+
+
+def test_without_ffmpeg_only_wavs_can_be_added(sound_library, monkeypatch):
+    monkeypatch.setattr(obs_config, "_find_ffmpeg", lambda: None)
+    mp3 = sound_library / "horn.mp3"
+    mp3.write_bytes(b"ID3")
+    with pytest.raises(ValueError, match="needs ffmpeg"):
+        obs_config.add_clip_sound(str(mp3))
+
+
+def _samples(path):
+    import array
+    import wave
+
+    with wave.open(str(path), "rb") as f:
+        return f.getframerate(), list(array.array("h", f.readframes(f.getnframes())))
+
+
+def test_a_sound_can_be_cut_short_with_a_fade_at_the_cut(sound_library):
+    import array
+    import wave
+
+    long = sound_library / "long.wav"
+    with wave.open(str(long), "wb") as f:  # 1 s of a constant level at 1 kHz
+        f.setnchannels(1), f.setsampwidth(2), f.setframerate(1000)
+        f.writeframes(array.array("h", [1000] * 1000).tobytes())
+    name = obs_config.add_clip_sound(str(long), seconds=0.25)
+    _rate, samples = _samples(obs_config.clip_sound_path(name))
+    assert len(samples) == 250
+    assert samples[:240] == [1000] * 240  # untouched up to the 10 ms fade
+    assert samples[240] == 1000 * 9 // 10 and samples[-1] == 0
+    assert obs_config.add_clip_sound(str(long), seconds=0.25) == name  # the same cut is the same sound
+    assert obs_config.add_clip_sound(str(long)) == "long (2)"  # the whole of it isn't
+    assert len(_samples(obs_config.clip_sound_path("long (2)"))[1]) == 1000
+    assert obs_config.add_clip_sound(str(long), seconds=0.001) == "long (3)"  # never under the minimum
+    assert len(_samples(obs_config.clip_sound_path("long (3)"))[1]) == 100
+    assert sorted(os.listdir(sound_library / "clip-sounds")) == ["long (2).wav", "long (3).wav", "long.wav"]
+
+
+def test_a_prepared_sound_is_previewed_cut_and_cleaned_up_when_dropped(sound_library, monkeypatch):
+    played = []
+    monkeypatch.setattr(obs_config, "play_clip_sound", lambda volume, path: played.append(
+        (volume, len(_samples(path)[1]))))
+    temp, seconds = obs_config.prepare_clip_sound(str(_pcm_wav(sound_library / "ding.wav")))
+    assert seconds == pytest.approx(10 / 48000)
+    obs_config.preview_prepared_clip_sound(temp, 0.5, 0.3)
+    assert played == [(0.3, 10)]
+    obs_config.discard_prepared_clip_sound(temp)  # cancelled
+    assert os.listdir(sound_library / "clip-sounds") == []
+
+
+@pytest.mark.skipif(not shutil.which("ffmpeg"), reason="needs ffmpeg")
+def test_a_real_mp3_becomes_a_wav_the_clip_sound_can_scale(sound_library):
+    mp3 = sound_library / "beep.mp3"
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "lavfi", "-i", "sine=d=0.2", str(mp3)], check=True)
+    name = obs_config.add_clip_sound(str(mp3), ffmpeg="ffmpeg")
+    obs_config.wav_at_volume(obs_config.clip_sound_path(name), 0.5)  # integer PCM - no wave.Error
 
 
 def test_queued_clip_folder_reaches_every_output_path(fake_obs_config):
